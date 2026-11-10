@@ -29,7 +29,7 @@
  * The write order matches the factory firmware and must remain so: driving pins
  * low precedes switching them to outputs.
  *
- * ⚠️ Unverified on hardware. Incorrect parking means a keyboard that never
+ * WARNING: Unverified on hardware. Incorrect parking means a keyboard that never
  * wakes up and must be reflashed.
  */
 
@@ -39,7 +39,7 @@
  *
  * The distinction is not cosmetic. In `USER_SLEEP_USB`, sleep entry is
  * triggered by bus suspend; in `USER_SLEEP_RF`, it is triggered by the
- * inactivity counter in `sleep.c` — and outside RF mode that counter is reset
+ * inactivity counter in `sleep.c` -- and outside RF mode that counter is reset
  * to zero on every pass, making it a no-op. Hardcoding `USB`, as this file
  * previously did, meant having no sleep at all on battery.
  */

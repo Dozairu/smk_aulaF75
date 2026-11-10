@@ -54,7 +54,7 @@ def read_paren(text, open_index):
 
 
 def positions(path):
-    text = strip_comments(open(path).read())
+    text = strip_comments(open(path, encoding="utf-8").read())
 
     definition = re.search(r"#\s*define\s+(LAYOUT_\w+)\s*\(", text)
     if not definition:

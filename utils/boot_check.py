@@ -19,7 +19,7 @@ SYMBOL = re.compile(r"^[A-Z]:\s+([0-9A-Fa-f]+)\s+(\S+)")
 
 def symbols(path):
     found = {}
-    with open(path) as f:
+    with open(path, encoding="utf-8", errors="ignore") as f:
         for line in f:
             m = SYMBOL.match(line)
             if m:

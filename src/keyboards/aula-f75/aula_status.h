@@ -4,7 +4,7 @@
 #include <stdint.h>
 
 /*
- * AULA F75 status indicator — the white LED between Esc and F1.
+ * AULA F75 status indicator -- the white LED between Esc and F1.
  *
  * This is not a key LED. It is wired to the GREEN and BLUE channels of matrix
  * position `[row 0][col 14]`, the encoder click position at the far end of the

@@ -58,7 +58,7 @@ bool      rf_is_wireless(void);
  * This is NOT the factory firmware's connection flag: the status-frame field
  * that carries pairing was not isolated in `euart0_parse`. What is transcribed
  * is its presence probe (`fcn.00003901`, command 0x06 every hundred iterations,
- * three failures and the link is declared dead) — so the indicator drops, but
+ * three failures and the link is declared dead) -- so the indicator drops, but
  * it says "the radio is responding", not "a host is paired".
  *
  * `rf_task()` copies it into `keyboard_state.connected`.

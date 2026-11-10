@@ -144,7 +144,7 @@ static const __code uint8_t present[AULA_FX_COLS] = {
  * The eighty-four present IDs are pairwise distinct: it is a bijection over
  * the physical keys.
  *
- * ⚠️ THE STOCK TABLE HAS 126 ENTRIES, NOT 90. It describes a TWENTY-ONE-column
+ * WARNING: THE STOCK TABLE HAS 126 ENTRIES, NOT 90. It describes a TWENTY-ONE-column
  * grid -- the same width as tables A and B -- and goes up to ID `0xA4`,
  * column 20. This keyboard only has fifteen; the remaining six columns belong
  * to a wider model in the same family. That is what the `< 15` check in the
@@ -191,7 +191,7 @@ uint8_t aula_fx_render_col(uint8_t col, uint8_t row)
 /*
  * "Gaming" preset mask, reduced from CODE 0xCAFC.
  *
- * ⚠️ PROVENANCE CORRECTION. This comment previously said "blue plane, red and
+ * WARNING: PROVENANCE CORRECTION. This comment previously said "blue plane, red and
  * green planes are zero, the stock image is blue". That was wrong: `0xCAFC` is
  * not three color planes, but **a single byte per key**, 126 in total, indexed
  * `col * 6 + row`, equal to `0xFF` on lit keys and zero elsewhere. There is NO

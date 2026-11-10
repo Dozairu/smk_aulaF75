@@ -18,8 +18,8 @@
  * (`^`, `` ` ``, `~`): the keyboard emits the dead key and the host composes.
  *
  * Two require a state machine. The acute accent because fr-FR does not have
- * one -- `é` is a dedicated key there. The DIAERESIS because the host does have
- * one, but its standalone symbol is `¨` rather than `"`: verified on hardware,
+ * one -- `e` is a dedicated key there. The DIAERESIS because the host does have
+ * one, but its standalone symbol is `diaeresis` rather than `"`: verified on hardware,
  * it is the only one of the four whose bare character differs from US
  * International.
  *
@@ -46,7 +46,7 @@ void aula_layout_restore(bool on);
 bool aula_layout_intercept(uint16_t qcode, bool pressed);
 
 /*
- * `€` on `Fn + E`. Targeted at a FRENCH host, where it is AltGr+E -- and
+ * `EUR` on `Fn + E`. Targeted at a FRENCH host, where it is AltGr+E -- and
  * therefore independent of the mode, which does not need to be enabled for this
  * to work.
  */

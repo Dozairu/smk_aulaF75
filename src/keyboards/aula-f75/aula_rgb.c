@@ -56,7 +56,7 @@
  *
  * Conversion costs a multiplication; doing it here when writing a pixel means
  * six conversions per subframe (one effect cell), versus eighteen if done when
- * loading a column — and column loading runs inside the ISR.
+ * loading a column -- and column loading runs inside the ISR.
  */
 static AULA_RGB_XDATA uint16_t duty_cache[AULA_RGB_COLS][AULA_RGB_CHANNELS];
 

@@ -370,7 +370,7 @@ bool aula_layout_intercept(uint16_t qcode, bool pressed)
                 /*
                  * French fr-FR has a REAL diaeresis dead key -- Shift + `KC_LBRC`
                  * -- and the host handles composition. However, its diaeresis
-                 * followed by space outputs `¨`, NOT `"`: it is the only one of
+                 * followed by space outputs `diaeresis`, NOT `"`: it is the only one of
                  * the host's four dead keys whose standalone character differs
                  * from US International, and thus the only one that cannot be a
                  * simple pass-through. Verified on hardware.
@@ -391,14 +391,14 @@ bool aula_layout_intercept(uint16_t qcode, bool pressed)
                 return true;
             }
 
-            /* French fr-FR has NO acute accent dead key: `é` and `ç` are
-             * dedicated keys, and `á í ó ú ý` cannot be produced. For everything
+            /* French fr-FR has NO acute accent dead key: `e` and `c` are
+             * dedicated keys, and `a i o u y` cannot be produced. For everything
              * else, fall back to US International behavior -- apostrophe
              * followed by the character. */
             if (st == 0 && qcode == KC_E) {
-                az_push(0x1Fu, 0); /* é */
+                az_push(0x1Fu, 0); /* e */
             } else if (st == 0 && qcode == KC_C) {
-                az_push(0x26u, 0); /* ç */
+                az_push(0x26u, 0); /* c */
             } else if (qcode == KC_SPACE) {
                 az_push(0x21u, 0); /* ' */
             } else {

@@ -19,7 +19,7 @@
  *
  * ESTABLISHED by disassembly: baud rate and registers, both handshakes, frame
  * format and checksum, command set, and the transport selector state machine
- * (`fcn.000084E9`) — including the fact that command 0x01 with slot 0 is what
+ * (`fcn.000084E9`) -- including the fact that command 0x01 with slot 0 is what
  * switches the module to 2.4 GHz.
  *
  * INFERRED, and flagged as such at every site: the exact byte layout of the
@@ -62,8 +62,8 @@ _Static_assert(FREQ_SYS / 92 > 255000 && FREQ_SYS / 92 < 267000, "FREQ_SYS incom
  * `euart0_parse` dispatches on byte 0 and verifies the checksum AT THE OFFSET
  * SPECIFIC TO EACH TYPE:
  *
- *   0x02  status frame  10 bytes, sum = 0x55 - Σ[0..8],  compared with [9]
- *   0x08  bulk frame    22 bytes, sum = 0x55 - Σ[0..20], compared with [21]
+ *   0x02  status frame  10 bytes, sum = 0x55 - sum[0..8],  compared with [9]
+ *   0x08  bulk frame    22 bytes, sum = 0x55 - sum[0..20], compared with [21]
  *   0x03  announce      NO checksum verified, length not established
  *
  * An initial draft of this file waited for 22 bytes for ALL frames and summed
@@ -82,7 +82,7 @@ _Static_assert(FREQ_SYS / 92 > 255000 && FREQ_SYS / 92 < 267000, "FREQ_SYS incom
  *   02 02 00 00 00 51               SIX: report ACK
  *   03 00 00 00 00 52               SIX: announce
  *
- * All verified by the factory checksum `0x55 - Σ`. This port originally waited
+ * All verified by the factory checksum `0x55 - sum`. This port originally waited
  * for ten bytes on ANY frame of type 0x02: on a six-byte ACK it swallowed the
  * start of the next frame and never regained sync.
  */
@@ -95,7 +95,7 @@ _Static_assert(FREQ_SYS / 92 > 255000 && FREQ_SYS / 92 < 267000, "FREQ_SYS incom
 #define RF_RX_TYPE_BULK     0x08
 
 #define RF_HDR      0x01 /* byte 0, constant in both directions */
-#define RF_SUM_SEED 0x55 /* sum = 0x55 - Σ, same constant in both directions */
+#define RF_SUM_SEED 0x55 /* sum = 0x55 - sum, same constant in both directions */
 
 /* Commands, recorded one by one across their twelve emitters. */
 #define RF_CMD_LINK     0x01 /* slot + pairing flag */
@@ -174,7 +174,7 @@ static volatile __bit          rx_pending;
 
 /*
  * Only tx_len/tx_idx/rx_idx stay in DATA: the ISR touches them on every byte.
- * Everything else goes to XDATA — 8051 internal RAM is the scarce resource, and
+ * Everything else goes to XDATA -- 8051 internal RAM is the scarce resource, and
  * at 260 kbaud a byte takes ~38 us, a thousand times the cost of an XDATA access.
  */
 static __xdata rf_link_t link_state;
@@ -209,7 +209,7 @@ static __bit settings_restored;
  *
  * `user_settings.rf_link` is unused on this keyboard. Elsewhere that field
  * carries the NuPhy Air60's `rf_mode_t` encoding, but its sole consumer,
- * `restore_rf_link()` in `src/main.c`, is guarded by `#ifdef RF_ENABLED` — and
+ * `restore_rf_link()` in `src/main.c`, is guarded by `#ifdef RF_ENABLED` -- and
  * `RF_ENABLED` and `RF_EUART0` are mutually exclusive (`meson.build`). On the
  * F75 the transport comes from the hardware slide switch, never from NVM, so
  * nothing reads that field.
@@ -224,7 +224,7 @@ static __bit settings_restored;
  * Presence probe, transcribed from `fcn.00003901`: command 0x06 goes out every
  * hundred passes and, after THREE unanswered probes, the factory firmware
  * releases the transmit line (`P0CR &= 0xFB ; P0.2 = 1`) and clears bit 0x2C.1
- * — its "link alive" flag.
+ * -- its "link alive" flag.
  *
  * Its counter runs at the cadence of `euart0_parse`, hence on received traffic;
  * here it runs on `rf_task()` passes, whose cadence is uncalibrated. The
@@ -238,7 +238,7 @@ static __xdata uint8_t  probe_misses;
 static __bit            probe_answered;
 
 /*
- * Battery gauge. The SH68F90A has no ADC — verified, no `ADC*` register in
+ * Battery gauge. The SH68F90A has no ADC -- verified, no `ADC*` register in
  * `sh68f90.h`; the BK3632 reports the raw value in bytes 6 and 7 of the status
  * frame, and the factory firmware converts it in `fcn.0000801F`, once every six
  * status frames.
@@ -254,7 +254,7 @@ static __bit            probe_answered;
  * by ten. A deceleration curve: the closer to the target, the slower it steps.
  *
  * All twelve bytes were re-read FROM THE DUMP, because the disassembly notes
- * list them as `20 10 05 02 ...` — a notation that looks hexadecimal when it is
+ * list them as `20 10 05 02 ...` -- a notation that looks hexadecimal when it is
  * actually decimal. The actual bytes are
  * `14 0a 05 02 02 02 02 02 02 02 02 02`, i.e. 20, 10, 5, then 2 ticks: the
  * PROSE in the disassembly notes was right, not the hexadecimal reading of its
@@ -299,7 +299,7 @@ static __xdata uint8_t q_count;
  * Selector debounce counters, one per position (0x08BD/0x02DF/0x0960).
  *
  * The factory firmware requires ten consecutive passes of its slow tick. SMK
- * has no equivalent timebase here — `rf_task()` is called from the main loop,
+ * has no equivalent timebase here -- `rf_task()` is called from the main loop,
  * whose cadence is uncalibrated. The threshold is therefore expressed in LOOP
  * PASSES, not milliseconds, and chosen generously: the counter's job is to
  * absorb contact bounce, and sliding a mode switch does not demand low latency.
@@ -347,7 +347,7 @@ void rf_euart0_interrupt_handler(void) __interrupt(_INT_EUART0)
     if (RI) {
         RI = 0;
         /*
-         * Push and flag, nothing else — just like the factory ISR, which
+         * Push and flag, nothing else -- just like the factory ISR, which
          * silently drops anything beyond its buffer. Frame slicing belongs in
          * `rf_rx_consume()`, the only place that knows the per-type formats.
          */
@@ -433,7 +433,7 @@ static bool rf_send_frame(uint8_t len, uint8_t gate)
 
     /*
      * Transmit request: P0.2 is pulled low BEFORE switching it to output, then
-     * pulled low again — the exact order of the factory firmware (0xAB13),
+     * pulled low again -- the exact order of the factory firmware (0xAB13),
      * avoiding a spurious high glitch when changing direction.
      */
     P0_2 = 0;
@@ -461,15 +461,15 @@ static bool rf_send_short(uint8_t cmd, uint8_t p0, uint8_t p1, uint8_t gate)
 
 /*
  * Command 0x01: radio selector. THIS is what puts the module into 2.4 GHz mode
- * — `fcn.0000ED89`, called via `fcn.0000EF5A`.
+ * -- `fcn.0000ED89`, called via `fcn.0000EF5A`.
  *
  *   01 01 <flag> <slot> 00 <sum>
  *
  * Slot 0 is the 2.4 GHz dongle, 1 to 3 are the three Bluetooth slots.
  * Established by `fcn.0000870C`, which picks `slot = (transport == 2) ? bt_slot : 0`
- * — so the only possible slot in mode 1 is 0.
+ * -- so the only possible slot in mode 1 is 0.
  *
- * ⚠️ THE ORDER OF THOSE TWO BYTES REALLY IS THIS ONE, and this file had it
+ * WARNING: THE ORDER OF THOSE TWO BYTES REALLY IS THIS ONE, and this file had it
  * swapped for a long time. `fcn.0000ED89` writes `IDATA[0x35] = R7` then
  * `IDATA[0x36] = R5`: byte 2 comes from R7, byte 3 from R5. And R5 is what
  * receives `bt_slot` across all four call sites that send it (`0x85D7`,
@@ -479,7 +479,7 @@ static bool rf_send_short(uint8_t cmd, uint8_t p0, uint8_t p1, uint8_t gate)
  * The clincher is the link supervisor at `0x06E6`: in Bluetooth mode, when the
  * received state does not match, it re-requests with R5 = `bt_slot` and R7 = 0.
  * If R7 carried the slot, the keyboard would request the 2.4 GHz dongle on
- * every Bluetooth link failure — switching radios because of a wrong radio.
+ * every Bluetooth link failure -- switching radios because of a wrong radio.
  */
 static bool rf_send_link(rf_slot_t slot, uint8_t flag)
 {
@@ -487,7 +487,7 @@ static bool rf_send_link(rf_slot_t slot, uint8_t flag)
 }
 
 /*
- * Bluetooth name — command 0x09, transcribed from `fcn.0000A307`, sent with
+ * Bluetooth name -- command 0x09, transcribed from `fcn.0000A307`, sent with
  * `r5 = 32` at `0xA376`. Established format:
  *
  *   [0] 0x01   [1] 0x09   [2] profile   [3] 0x10 = 16 (length)
@@ -653,7 +653,7 @@ void rf_send_extra(__xdata report_extra_t *report)
 
 /* --------------------------------------------------------------- reception */
 
-/* Factory checksum: 0x55 - Σ of the first `len` bytes, compared to byte `len`. */
+/* Factory checksum: 0x55 - sum of the first `len` bytes, compared to byte `len`. */
 static bool rf_rx_checksum_ok(uint8_t len)
 {
     uint8_t sum = RF_SUM_SEED;
@@ -708,17 +708,17 @@ static void rf_rx_drop(void)
 }
 
 /*
- * Battery gauge, transcribed from `fcn.0000801F` — called on one status frame
+ * Battery gauge, transcribed from `fcn.0000801F` -- called on one status frame
  * out of six, just like in the factory firmware.
  *
- * ESTABLISHED: the source (bytes 6 and 7 of the frame, little-endian — byte 6
+ * ESTABLISHED: the source (bytes 6 and 7 of the frame, little-endian -- byte 6
  * is the low byte), the floor at 715, the ceiling at 100%, the one-in-six frame
  * cadence, and the damping curve.
  *
  * INFERRED: the SLOPE. The factory firmware clamps to the floor and ceiling,
  * but the disassembly notes do not give the scaling factor. We anchor it on the
- * only two established constants of the same quantity — the 715 floor and the
- * 912 upper threshold of the hysteresis in `fcn.00001DC3` — yielding a straight
+ * only two established constants of the same quantity -- the 715 floor and the
+ * 912 upper threshold of the hysteresis in `fcn.00001DC3` -- yielding a straight
  * line between the two. A 10-bit conversion across a voltage divider makes the
  * hypothesis plausible, not certain.
  */
@@ -966,7 +966,7 @@ static void rf_uart_init(void)
      * HIGHEST PRIORITY FOR EUART0. This is the root fix.
      *
      * `tick.c` runs the FULL matrix scan and LED sub-frames INSIDE the Timer2
-     * ISR. A scan takes ~320 µs; at 260,870 baud a byte arrives every 38 µs,
+     * ISR. A scan takes ~320 us; at 260,870 baud a byte arrives every 38 us,
      * and the SH68F90 has no FIFO behind `SBUF`. At equal priority the serial
      * ISR cannot preempt: every matrix scan COSTS EIGHT BYTES.
      *
@@ -1020,7 +1020,7 @@ static void rf_tx_drain(void)
 }
 
 /*
- * Radio arming, transcribed from factory thunk 0xEF40 — four instructions,
+ * Radio arming, transcribed from factory thunk 0xEF40 -- four instructions,
  * called by `fcn.000084E9` at 0x8581 and 0x85D5:
  *
  *   ef40  ORL  IEN1,#0x40      IEN1 |= _ES0      -- EUART0 IRQ is armed
@@ -1035,7 +1035,7 @@ static void rf_tx_drain(void)
  *
  * We call `usb_hw_deinit()` and NOT `usb_deinit()`. Both clear
  * `_ENUSB | _SW1CON | _SW2CON` and disarm the USB interrupt, but `usb_deinit()`
- * also resets the entire software state machine to zero — including
+ * also resets the entire software state machine to zero -- including
  * `interface0_protocol`. Yet `host_nkro_active()` (`src/smk/host.c:12`) requires
  * `USB_PROTOCOL_REPORT`: zeroing it makes the keyboard fall back to 6KRO for
  * the entire duration of wireless mode, even though `NKRO_REPORT_BITS` is 20
@@ -1043,7 +1043,7 @@ static void rf_tx_drain(void)
  * (`report.h:10`).
  *
  * Shutting down only the hardware is therefore both more faithful to the
- * factory firmware — which only executes `anl USBCON,#0x7F` — and the only way
+ * factory firmware -- which only executes `anl USBCON,#0x7F` -- and the only way
  * to keep NKRO working over the radio. Software state is rebuilt by
  * `usb_init()` when returning to wired mode.
  */
@@ -1127,7 +1127,7 @@ static void rf_enter_wired(void)
 #endif
     /*
      * 200 ms blocking delay, just like the factory firmware. `delay_us` kicks
-     * the watchdog on every microsecond, so the WDT will not bite — but matrix
+     * the watchdog on every microsecond, so the WDT will not bite -- but matrix
      * scanning and USB stop during that time. This is a mode switch, so it does
      * not happen while typing.
      */
@@ -1228,7 +1228,7 @@ void rf_init(void)
      *
      * The ordering in `main()` allows it: `rf_init()` is called by `kb_init()`,
      * i.e. after `usb_init()` and before `usb_wait_for_enumeration()`. Shutting
-     * down USB here does not hang anything — that wait returns after 500 ms
+     * down USB here does not hang anything -- that wait returns after 500 ms
      * (`ENUM_NO_HOST_MS`) when no SETUP packet arrives.
      */
     switch (rf_read_selector()) {
@@ -1403,7 +1403,7 @@ void rf_task(void)
 
     /*
      * `paired` is not populated: NO field in the status frame carries pairing
-     * state — the concept appears nowhere in the disassembly notes, and
+     * state -- the concept appears nowhere in the disassembly notes, and
      * inferring it from `connected` would be a fabrication. `keyboard.c` leaves
      * it at zero.
      *
@@ -1506,7 +1506,7 @@ void rf_sleep_wake(void)
 
     /*
      * Pre-sleep link state is no longer valid. We apply the factory
-     * supervisor's rule — "not connected, so re-request the transport" —
+     * supervisor's rule -- "not connected, so re-request the transport" --
      * without waiting for the next probe, which is slow.
      */
     link_connected = 0;

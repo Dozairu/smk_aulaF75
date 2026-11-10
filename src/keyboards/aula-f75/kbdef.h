@@ -162,8 +162,8 @@ uint8_t user_matrix_pressed(uint8_t col);
  *
  * STATUS: transcribed from disassembly, then CONFIRMED ON DEVICE -- typing via
  * the 2.4 GHz dongle and Bluetooth pairing. The initial failure was not in the
- * driver: `tick.c` scans the entire matrix inside the Timer2 ISR (~320 µs) and,
- * at 260,870 baud, a byte arrives every 38 µs with no FIFO on SBUF. At equal
+ * driver: `tick.c` scans the entire matrix inside the Timer2 ISR (~320 us) and,
+ * at 260,870 baud, a byte arrives every 38 us with no FIFO on SBUF. At equal
  * priority EUART0 could not preempt and dropped eight bytes per scan.
  * `rf_uart_init()` therefore sets `IPH1/IPL1 |= _ES0`, like the factory
  * firmware (IPH1=0x42, IPL1=0x41). The RF_DIAG keycode stays: it is the tool
@@ -212,7 +212,7 @@ enum custom_keycodes {
 
     /*
      * "Auto-typing" mode, on `Fn + Space` AND `Fn + encoder press`.
-     * Types a random letter then deletes it with Backspace, every 1 s ± 500 ms,
+     * Types a random letter then deletes it with Backspace, every 1 s +/- 500 ms,
      * until any key stops it. No factory equivalent. See `aula_macro.c`.
      */
     MACRO_TG,
@@ -226,8 +226,8 @@ enum custom_keycodes {
     LAYOUT_AZ,
 
     /*
-     * `€` on `Fn + E`. Targeted at a FRENCH host, where it is AltGr+E -- thus
-     * independent of LAYOUT_AZ. On a US International host, `€` is AltGr+5 and
+     * `EUR` on `Fn + E`. Targeted at a FRENCH host, where it is AltGr+E -- thus
+     * independent of LAYOUT_AZ. On a US International host, `EUR` is AltGr+5 and
      * this shortcut would output an `e`.
      */
     EURO,

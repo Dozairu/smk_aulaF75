@@ -18,7 +18,7 @@
  * not 80. Position [row 0][col 14] is the **encoder press** -- a real matrix
  * position, with no LED under its cap.
  *
- * ⚠️ That position actually does have an LED, and even three useful channels:
+ * WARNING: That position actually does have an LED, and even three useful channels:
  * its RGB channels drive the STATUS INDICATORS wired elsewhere on the board
  * (red = Caps Lock, green and blue = the indicator between Esc and F1).
  * Measured on the device. See `indicators.c`. That is why OpenRGB only maps 80

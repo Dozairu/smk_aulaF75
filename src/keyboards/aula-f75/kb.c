@@ -21,7 +21,7 @@
  * decides the transport; here we only route reports.
  *
  * No OS-mode switch: its pin has not been identified. P0.0, P0.1, P0.5, P0.6,
- * P4.1, P4.4, and P7.7 remain unknown — P7.4 and P4.5 are now identified as the
+ * P4.1, P4.4, and P7.7 remain unknown -- P7.4 and P4.5 are now identified as the
  * connection selector, and P4.7 as the serial link's "module ready" line.
  */
 

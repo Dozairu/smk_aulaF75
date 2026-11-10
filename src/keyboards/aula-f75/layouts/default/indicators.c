@@ -33,7 +33,7 @@
  * `matrix.c` avoids by bracketing its scan with `indicators_pwm_disable()` /
  * `indicators_pwm_enable()`.
  *
- * BUDGET. Everything below runs inside the ISR, within a 400 µs slot
+ * BUDGET. Everything below runs inside the ISR, within a 400 us slot
  * (`RELOAD_LED_SUBFRAME`). Hence **only one** effect evaluation per subframe:
  * the genesis-thor-300 measured that six -- one per row -- "does not fit and
  * starves the USB interrupt". A full animation frame therefore takes
@@ -208,7 +208,7 @@ static uint8_t         ripple_ring;
 /*
  * THE LAKE -- a wave radiating from the pressed key.
  *
- * ⚠️ THIS EFFECT IS NOT A TRANSCRIPTION. The factory firmware has nothing like
+ * WARNING: THIS EFFECT IS NOT A TRANSCRIPTION. The factory firmware has nothing like
  * it: its concentric ripple (`0x746A`) radiates from a FIXED center tabulated
  * at `CODE 0x2959`, and its reactive engine (`0x64F1`) lights up the pressed
  * key without propagating it. This effect combines both and is an original
@@ -508,7 +508,7 @@ static const __code uint8_t fx_period_ms[AULA_FX_OFF][LED_SPEED_LEVELS] = {
 #define LED_SWEEP_MS ((uint8_t)38)
 
 /*
- * ⚠️ WHAT THIS ARCHITECTURE CANNOT RENDER.
+ * WARNING: WHAT THIS ARCHITECTURE CANNOT RENDER.
  *
  * The factory firmware redraws the entire panel every frame and can therefore
  * go down to one millisecond. Here a frame COSTS one full regeneration sweep,
@@ -633,7 +633,7 @@ void indicators_pwm_enable(void)
  * disabled for ~5 ms. Without these two hooks, `tick_dispatch` stays frozen
  * during that time with the last subframe's column STILL selected and all
  * three PWM banks active: that column would conduct for 5 ms instead of
- * 400 µs, roughly a dozen times its nominal duty cycle.
+ * 400 us, roughly a dozen times its nominal duty cycle.
  *
  * And this is not a rare event: every change of effect, brightness, speed, or
  * Bluetooth slot calls `settings_mark_dirty()`. Same fix as on the NuPhy
@@ -765,7 +765,7 @@ static bool rf_diag_paint(void)
  * followed by a long low-glow rest that keeps the active mode visible.
  *
  * TIMING. One table step per full regeneration sweep, i.e. ninety subframes of
- * ~421 µs, or ~37.9 ms. Twenty-four steps give 909 ms per heartbeat: **66 beats
+ * ~421 us, or ~37.9 ms. Twenty-four steps give 909 ms per heartbeat: **66 beats
  * per minute**, a resting pulse.
  *
  * Why sync to the full sweep rather than an arbitrary rate: the ninety cells
@@ -828,7 +828,7 @@ static __bit            enc_was_beating;
  * Scroll Lock. This keyboard has no dedicated indicator -- the key itself
  * lights up, in white, at its grid position.
  *
- * ⚠️ WIRED ONLY. In 2.4 GHz and Bluetooth modes USB is unmounted, and nothing
+ * WARNING: WIRED ONLY. In 2.4 GHz and Bluetooth modes USB is unmounted, and nothing
  * in the EUART0 protocol decoded so far reports the host LED state back.
  * `rf_radio_on()` therefore resets `led_state` to zero: showing nothing is
  * better than showing stale state.
@@ -1209,7 +1209,7 @@ bool indicators_update_step(keyboard_state_t *keyboard, uint8_t current_step)
     caps_on = (keyboard->led_state & HID_LED_CAPS_LOCK) ? 1 : 0;
 
     /* The LED subframe is the only regular timebase in the firmware --
-     * ~400 µs -- and that is the same rate at which the factory firmware
+     * ~400 us -- and that is the same rate at which the factory firmware
      * samples its encoder from its PWM ISR. */
     aula_encoder_sample();
     aula_macro_tick();
