@@ -1,15 +1,15 @@
 #pragma once
 
 /*
- * Liaison sans-fil de l'AULA F75 : BK3632 relié par EUART0.
+ * AULA F75 wireless link: BK3632 connected over EUART0.
  *
- * Rien à voir avec `src/platform/bk3632/rf_controller.c`, qui parle au même SoC
- * mais par SPI bit-bangé (NuPhy Air60). Ici le transport est l'EUART0 du
- * SH68F90A, avec sa propre trame et son propre jeu de commandes.
+ * Unrelated to `src/platform/bk3632/rf_controller.c`, which talks to the same SoC
+ * over bit-banged SPI (NuPhy Air60). Here the transport is the SH68F90A's
+ * EUART0, with its own framing and command set.
  *
- * Tout ce qui suit vient du désassemblage du firmware d'usine
- * (`docs/keyboards/aula-f75.md`). Le code a été flashé et tourne, mais la
- * liaison elle-même n'a jamais été établie : voir l'overlay de diagnostic.
+ * Everything below comes from disassembling the factory firmware
+ * (`docs/keyboards/aula-f75.md`). The code has been flashed and runs, but the
+ * link itself has never been established: see the diagnostic overlay.
  */
 
 #include <stdint.h>
@@ -17,22 +17,22 @@
 #include "report.h"
 
 /*
- * Transport actif. C'est l'encodage LOCAL du firmware d'usine (`XRAM 0x031B`),
- * pas celui qui circule sur le fil -- voir rf_slot_t.
+ * Active transport. This is the factory firmware's LOCAL encoding (`XRAM 0x031B`),
+ * not what goes over the wire -- see rf_slot_t.
  */
 typedef enum {
-    RF_LINK_WIRED = 0, /* USB : la radio est muette, l'USB est initialisé */
-    RF_LINK_24G   = 1, /* dongle 2,4 GHz */
-    RF_LINK_BT    = 2  /* Bluetooth, slot dans rf_bt_slot() */
+    RF_LINK_WIRED = 0, /* USB: radio is silent, USB is initialized */
+    RF_LINK_24G   = 1, /* 2.4 GHz dongle */
+    RF_LINK_BT    = 2  /* Bluetooth, slot in rf_bt_slot() */
 } rf_link_t;
 
 /*
- * Octet « slot » de la commande 0x01, tel qu'il part sur le fil.
+ * "Slot" byte of command 0x01, as sent over the wire.
  *
- * ATTENTION : cet encodage n'est PAS celui de rf_link_t, et les deux se
- * croisent sur la valeur 0 -- qui vaut « filaire » côté rf_link_t et
- * « 2,4 GHz » sur le fil. Ne jamais passer un rf_link_t là où un rf_slot_t est
- * attendu. La conversion se fait dans rf_link_slot().
+ * WARNING: this encoding is NOT that of rf_link_t, and the two collide on
+ * value 0 -- which means "wired" in rf_link_t and "2.4 GHz" on the wire.
+ * Never pass an rf_link_t where an rf_slot_t is expected. Conversion is done
+ * in rf_link_slot().
  */
 typedef enum {
     RF_SLOT_24G = 0,
@@ -44,9 +44,8 @@ typedef enum {
 void rf_init(void);
 
 /*
- * À appeler depuis la boucle principale, pas depuis une ISR : échantillonne le
- * sélecteur à glissière, applique les changements de transport et consomme les
- * trames reçues.
+ * Call from the main loop, not from an ISR: samples the slide switch, applies
+ * transport changes, and consumes received frames.
  */
 void rf_task(void);
 
@@ -54,16 +53,15 @@ rf_link_t rf_link(void);
 bool      rf_is_wireless(void);
 
 /*
- * « Le module a répondu à une sonde récente. »
+ * "The module answered a recent probe."
  *
- * Ce n'est PAS le drapeau de connexion du firmware d'usine : le champ de la
- * trame d'état qui porte l'appairage n'a pas été isolé dans `euart0_parse`. Ce
- * qui est transcrit, c'est sa sonde de présence (`fcn.00003901`, commande 0x06
- * toutes les cent itérations, trois échecs et la liaison est déclarée morte) —
- * donc l'indication retombe, mais elle dit « la radio répond », pas « un hôte
- * est apparié ».
+ * This is NOT the factory firmware's connection flag: the status-frame field
+ * that carries pairing was not isolated in `euart0_parse`. What is transcribed
+ * is its presence probe (`fcn.00003901`, command 0x06 every hundred iterations,
+ * three failures and the link is declared dead) — so the indicator drops, but
+ * it says "the radio is responding", not "a host is paired".
  *
- * `rf_task()` la recopie dans `keyboard_state.connected`.
+ * `rf_task()` copies it into `keyboard_state.connected`.
  */
 bool rf_connected(void);
 
@@ -72,15 +70,15 @@ void    rf_set_bt_slot(uint8_t slot);
 
 
 /*
- * Réaffirme le lien courant avec le drapeau « appairage » de la commande 0x01.
- * Le firmware d'usine fait la même chose depuis son tic lent quand le raccourci
- * d'appairage a posé le bit 0x2C.5 (`fcn.0000870C`).
+ * Reasserts the current link with the "pairing" flag of command 0x01.
+ * The factory firmware does the same from its slow tick when the pairing
+ * shortcut has set bit 0x2C.5 (`fcn.0000870C`).
  */
 void rf_request_pairing(void);
 
 /*
- * À appeler depuis `user_sleep_prepare()` / `user_sleep_wake()`, autour de
- * `power_enter_powerdown()`. Sans effet en mode filaire.
+ * Call from `user_sleep_prepare()` / `user_sleep_wake()`, around
+ * `power_enter_powerdown()`. No-op in wired mode.
  */
 void rf_sleep_prepare(void);
 void rf_sleep_wake(void);
@@ -88,34 +86,34 @@ void rf_sleep_wake(void);
 /*
  * ---------------------------------------------------------------- DIAGNOSTIC
  *
- * Instantané d'état, rempli à chaque passage de `rf_task()` et lu par l'overlay
- * de `indicators.c` (touche `Fn + R`). C'est le SEUL instrument utilisable dans
- * le montage qui échoue -- batterie, USB débranché -- où la console HID n'existe
- * pas.
+ * State snapshot, populated on every pass of `rf_task()` and read by the
+ * overlay in `indicators.c` (`Fn + R` key). This is the ONLY usable instrument
+ * in the failing setup -- on battery, USB unplugged -- where the HID console
+ * does not exist.
  *
- * Un tableau et non un accesseur : l'overlay est peint depuis l'ISR Timer2, et
- * un appel vers `aula_rf.c` depuis l'ISR ferait partager au module le
- * recouvrement statique SDCC de la boucle principale.
+ * An array rather than an accessor: the overlay is painted from the Timer2 ISR,
+ * and calling into `aula_rf.c` from the ISR would make the module share the
+ * main loop's SDCC static overlay.
  */
-#define RF_DIAG_P74    0 /* sélecteur, broche 1 */
-#define RF_DIAG_P45    1 /* sélecteur, broche 2 */
-#define RF_DIAG_P47    2 /* « module prêt » */
-#define RF_DIAG_LINK   3 /* rf_link_t courant */
-#define RF_DIAG_TXPEND 4 /* link-select encore en attente d'émission */
-#define RF_DIAG_NAME   5 /* nombre de noms Bluetooth émis, 0 à 2 */
-#define RF_DIAG_TXBUSY 6 /* rafale série en vol */
-#define RF_DIAG_CONN   7 /* le module a répondu à une sonde récente */
-#define RF_DIAG_QCOUNT 8 /* rapports en file, 0 à 6 -- sature si rien ne part */
-#define RF_DIAG_MISSES 9 /* sondes d'état sans réponse */
+#define RF_DIAG_P74    0 /* selector, pin 1 */
+#define RF_DIAG_P45    1 /* selector, pin 2 */
+#define RF_DIAG_P47    2 /* "module ready" */
+#define RF_DIAG_LINK   3 /* current rf_link_t */
+#define RF_DIAG_TXPEND 4 /* link-select still pending transmission */
+#define RF_DIAG_NAME   5 /* number of Bluetooth names sent, 0 to 2 */
+#define RF_DIAG_TXBUSY 6 /* serial burst in flight */
+#define RF_DIAG_CONN   7 /* module answered a recent probe */
+#define RF_DIAG_QCOUNT 8 /* queued reports, 0 to 6 -- saturates if nothing goes out */
+#define RF_DIAG_MISSES 9 /* unanswered status probes */
 /*
- * Réception. Ces trois-là partagent « le module a-t-il seulement ouvert la
- * bouche ? » en deux questions distinctes : si RXTOT reste à zéro, rien
- * n'arrive sur le fil et le défaut est en amont de tout décodage ; s'il monte,
- * le module parle et c'est notre analyse de trame qui le rejette.
+ * Reception. These three split "did the module even open its mouth?" into two
+ * distinct questions: if RXTOT stays at zero, nothing is arriving on the wire
+ * and the fault is upstream of any decoding; if it climbs, the module is
+ * talking and our frame parser is rejecting it.
  */
-#define RF_DIAG_RXTOT  10 /* octets reçus depuis le démarrage, modulo 256 */
-#define RF_DIAG_RXLAST 11 /* dernier octet reçu -- ce que le module dit */
-#define RF_DIAG_RXIDX  12 /* remplissage courant du tampon de réception */
+#define RF_DIAG_RXTOT  10 /* bytes received since boot, modulo 256 */
+#define RF_DIAG_RXLAST 11 /* last byte received -- what the module says */
+#define RF_DIAG_RXIDX  12 /* current fill level of the receive buffer */
 #define RF_DIAG_FIELDS 13
 
 extern __xdata uint8_t rf_diag_state[RF_DIAG_FIELDS];

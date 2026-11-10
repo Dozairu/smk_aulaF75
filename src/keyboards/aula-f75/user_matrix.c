@@ -3,13 +3,13 @@
 #include "user_matrix.h"
 
 /*
- * Scan de matrice 6 lignes x 15 colonnes.
+ * 6 rows x 15 columns matrix scan.
  *
- * Sélection de colonne ACTIVE BASSE, lignes lues ACTIVES BASSES avec pull-ups.
- * Ordre de scan lu dans la table de saut du firmware d'usine @ 0x72F4.
+ * Column selection is ACTIVE-LOW, rows are read ACTIVE-LOW with pull-ups.
+ * Scan order read from the stock firmware jump table @ 0x72F4.
  */
 
-/* Les 18 sorties PWM du rétroéclairage : 6 lignes de LED x R/G/B */
+/* The 18 backlight PWM outputs: 6 LED rows x R/G/B */
 #define LED_P1_MASK (uint8_t)0x3f
 #define LED_P2_MASK (uint8_t)0x3f
 #define LED_P3_MASK (uint8_t)0x3f
@@ -39,19 +39,19 @@ void user_matrix_scan_post(void)
 }
 
 /*
- * Instantané de l'état des touches, pour le rétroéclairage réactif.
+ * Snapshot of key states, for reactive backlighting.
  *
- * `src/smk/matrix.c` garde son tableau `matrix[]` privé et ses crochets ne
- * reçoivent pas la position ; `kb_process_record()` ne voit qu'un keycode. Or
- * le moteur réactif a besoin de (ligne, colonne).
+ * `src/smk/matrix.c` keeps its `matrix[]` array private and its hooks do not
+ * receive the matrix position; `kb_process_record()` only sees a keycode. Yet
+ * the reactive engine needs (row, col).
  *
- * La position transite pourtant ici deux fois par colonne : `col_select` la
- * reçoit, et `read_rows` est appelée juste après. Mémoriser l'une et ranger
- * l'autre suffit, sans toucher à une seule ligne de code partagé. Coût : quinze
- * octets et un rangement par lecture de lignes.
+ * However, the position passes through here twice per column: `col_select`
+ * receives it, and `read_rows` is called right after. Remembering the former
+ * and storing the latter is enough, without touching a single line of shared
+ * code. Cost: fifteen bytes and one store per row read.
  *
- * Le balayage de matrice et les sous-trames LED s'excluent dans le temps
- * (`tick.c` les alterne dans la même ISR), donc pas de course à craindre.
+ * Matrix scanning and LED sub-frames are mutually exclusive in time (`tick.c`
+ * alternates them inside the same ISR), so there is no race condition.
  */
 static __xdata uint8_t scan_pressed[MATRIX_COLS];
 static uint8_t         scan_col;
@@ -61,7 +61,7 @@ uint8_t user_matrix_pressed(uint8_t col)
     return (col < MATRIX_COLS) ? scan_pressed[col] : 0;
 }
 
-void user_matrix_col_select(uint8_t col) // actif bas : on tire à 0
+void user_matrix_col_select(uint8_t col) // active-low: drive to 0
 {
     scan_col = col;
 
@@ -106,17 +106,17 @@ void user_matrix_col_deselect(uint8_t col)
 }
 
 /*
- * Ligne N sur le bit N. Reproduit exactement le calcul du firmware d'usine
- * (0x73A6) : P5 décalé d'un cran puis masqué 0x30, combiné aux 4 bits bas de
- * P7, bits inutilisés forcés à 1 -- même convention que SMK, qui inverse
- * ensuite l'échantillon.
+ * Row N on bit N. Reproduces the exact calculation of the stock firmware
+ * (0x73A6): P5 shifted left by one then masked with 0x30, combined with the
+ * low 4 bits of P7, unused bits forced to 1 -- same convention as SMK, which
+ * then inverts the sample.
  */
 uint8_t user_matrix_read_rows(void)
 {
     const uint8_t raw = (uint8_t)((P7 & 0x0f) | ((P5 << 1) & 0x30) | 0xc0);
 
-    /* Lignes actives basses : un bit à 1 dans l'instantané est une touche
-     * enfoncée. `matrix.c` fait le même complément de son côté. */
+    /* Active-low rows: a 1 bit in the snapshot means a pressed key.
+     * `matrix.c` performs the same bitwise complement on its side. */
     if (scan_col < MATRIX_COLS) {
         scan_pressed[scan_col] = (uint8_t)(~raw) & 0x3f;
     }

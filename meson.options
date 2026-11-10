@@ -1,7 +1,71 @@
-option('nkro', type : 'feature', value : 'enabled', description: 'NKRO support')
-option('sleep', type : 'feature', value : 'enabled', description: 'Inactivity sleep (SH68F90 Power-Down mode, INT4/USB wake)')
-option('rf_debug_keep_usb', type : 'boolean', value : false,
-       description: 'Debug builds with wireless "euart0": keep the USB peripheral alive in wireless mode so the HID console stays readable while the radio runs. Changes the electrical setup under test - the failing case is battery-powered with USB unplugged - so it proves nothing about that case. Never ship it.')
-
-option('debug_sink', type : 'combo', choices : ['console', 'uart', 'both'], value : 'console',
-       description: 'Where dprintf output goes in debug builds: HID console only (default), UART only, or both. UART has a blocking busy-wait per byte (uart_putc), so picking it can stall the main loop while the TX shift register drains.')
+option('nkro', type : 'feature', value : 'enabled', description : 'NKRO support')
+option(
+    'isp',
+    type : 'feature',
+    value : 'enabled',
+    description : 'Jump to the ISP bootloader on the vendor HID feature report, which is how sinowisp reflashes a running board. Disabling it drops the report from the HID descriptor, so the only way back in is the hardware programming interface; on a board whose bootloader has no USB window of its own that means opening the case.',
+)
+option('sleep', type : 'feature', value : 'enabled', description : 'Inactivity sleep (SH68F90 Power-Down mode, INT4/USB wake)')
+option(
+    'rf_debug_keep_usb',
+    type : 'boolean',
+    value : false,
+    description : 'Debug builds with wireless "euart0": keep the USB peripheral alive in wireless mode so the HID console stays readable while the radio runs. Changes the electrical setup under test - the failing case is battery-powered with USB unplugged - so it proves nothing about that case. Never ship it.',
+)
+option(
+    'debug_sink',
+    type : 'combo',
+    choices : ['console', 'uart', 'both'],
+    value : 'console',
+    description : 'Where dprintf output goes in debug builds: HID console only (default), UART only, or both. UART has a blocking busy-wait per byte (uart_putc), so picking it can stall the main loop while the TX shift register drains.',
+)
+option(
+    'usb_manufacturer',
+    type : 'string',
+    value : '',
+    description : 'Override the USB manufacturer string; empty keeps the keyboard\'s value, or SMK\'s default when the keyboard sets none.',
+)
+option(
+    'usb_product',
+    type : 'string',
+    value : '',
+    description : 'Override the USB product string; empty keeps the keyboard\'s value, or SMK\'s default when the keyboard sets none.',
+)
+option(
+    'usb_serial',
+    type : 'string',
+    value : '',
+    description : 'Override the USB serial number string; empty keeps the keyboard\'s value, or SMK\'s default when the keyboard sets none.',
+)
+option(
+    'boot',
+    type : 'feature',
+    value : 'enabled',
+    description : 'Build SMK\'s own ISP bootloader for each board whose platform supports it, plus the full-flash image that pairs it with the application.',
+)
+option(
+    'boot_chord',
+    type : 'string',
+    value : 'S,M,K',
+    description : 'Keys that hold the bootloader in ISP mode at power-on. Named without the KC_ prefix and resolved to matrix positions out of each board\'s default layout, so the same chord lands on the right keys on every keyboard.',
+)
+option(
+    'icp_programmer',
+    type : 'combo',
+    choices : ['sinodude-serial', 'sinolink'],
+    value : 'sinodude-serial',
+    description : 'Programmer sinodude drives for the *_full_flash targets: an Arduino running the sinodude-serial firmware, or a SinoLink USB dongle.',
+)
+option(
+    'icp_power',
+    type : 'combo',
+    choices : ['3v3', '5v', 'external'],
+    value : '3v3',
+    description : 'How the SinoLink powers the target while it writes. Cut the board\'s own USB power first. Ignored for sinodude-serial.',
+)
+option(
+    'icp_port',
+    type : 'string',
+    value : '/dev/ttyUSB0',
+    description : 'Serial port of the sinodude-serial programmer, used by the *_full_flash targets that write the stitched bootloader-plus-application image over ICP. Ignored for sinolink. On macOS this is a /dev/cu.usbserial-* path.',
+)

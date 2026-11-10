@@ -17,31 +17,30 @@
 #endif
 
 /*
- * Rétroéclairage de l'AULA F75.
+ * AULA F75 backlight.
  *
- * TOPOLOGIE. Les quinze colonnes de matrice servent de sélecteurs de
- * multiplexage LED, et les dix-huit canaux PWM sont les six lignes de LED
- * multipliées par R/G/B. C'est l'inverse du NuPhy Air60, où le PWM pilote les
- * colonnes. Le seul autre clavier de SMK bâti comme celui-ci est le
- * genesis-thor-300, qui partage lui aussi ses colonnes entre le balayage de
- * touches et l'affichage -- ce fichier suit sa structure, en remplaçant son
- * tramage de trames par du vrai PWM.
+ * TOPOLOGY. The fifteen matrix columns serve as LED multiplexing selectors,
+ * and the eighteen PWM channels are the six LED rows multiplied by R/G/B.
+ * This is the opposite of the NuPhy Air60, where PWM drives the columns. The
+ * only other keyboard in SMK built like this is the genesis-thor-300, which
+ * also shares its columns between key scanning and display -- this file
+ * follows its structure, replacing its frame dithering with hardware PWM.
  *
- * ORDONNANCEMENT. `src/smk/tick.c` alterne un balayage de matrice et
- * `LED_SUBFRAMES_PER_SCAN` sous-trames LED, le tout dans l'ISR Timer2. On pose
- * ce nombre à `MATRIX_COLS`, donc un balayage LED complet entre deux balayages
- * de touches. Les deux ne peuvent pas se chevaucher : le courant des LED se
- * couple dans la détection de ligne, ce que `matrix.c` évite en encadrant son
- * balayage par `indicators_pwm_disable()` / `indicators_pwm_enable()`.
+ * SCHEDULING. `src/smk/tick.c` alternates one matrix scan and
+ * `LED_SUBFRAMES_PER_SCAN` LED subframes, all inside the Timer2 ISR. We set
+ * this count to `MATRIX_COLS`, giving one full LED sweep between two key
+ * scans. The two cannot overlap: LED current couples into row sensing, which
+ * `matrix.c` avoids by bracketing its scan with `indicators_pwm_disable()` /
+ * `indicators_pwm_enable()`.
  *
- * BUDGET. Tout ce qui suit tourne dans l'ISR, avec un créneau de 400 µs
- * (`RELOAD_LED_SUBFRAME`). D'où **une seule** évaluation d'effet par
- * sous-trame : le genesis-thor-300 a mesuré que six -- une par ligne --
- * « does not fit and starves the USB interrupt ». Une trame d'animation
- * complète prend donc 6 x 15 = 90 sous-trames, soit six balayages de matrice.
+ * BUDGET. Everything below runs inside the ISR, within a 400 µs slot
+ * (`RELOAD_LED_SUBFRAME`). Hence **only one** effect evaluation per subframe:
+ * the genesis-thor-300 measured that six -- one per row -- "does not fit and
+ * starves the USB interrupt". A full animation frame therefore takes
+ * 6 x 15 = 90 subframes, or six matrix scans.
  *
- * Rien de tout ceci n'a été exécuté : aucun firmware n'a jamais été flashé sur
- * l'appareil.
+ * None of this has been executed: no firmware has ever been flashed to the
+ * device.
  */
 
 #define LED_ROWS MATRIX_ROWS
@@ -49,107 +48,104 @@
 
 #include LED_GEOMETRY_HEADER
 _Static_assert(LED_GEOMETRY_ROWS == LED_ROWS && LED_GEOMETRY_COLS == LED_COLS,
-               "la geometrie LED generee ne correspond pas a la matrice de touches");
+               "generated LED geometry size does not match the key matrix");
 
 /*
- * Diviseur d'horloge PWM : les trois bits bas de `PWM00CON`, que le firmware
- * d'usine pose à 0x89 en 0x68D3 -- soit PWM_MODE_ENABLE | PWM_SS | 0b001.
+ * PWM clock divider: the low three bits of `PWM00CON`, which the factory
+ * firmware sets to 0x89 at 0x68D3 -- i.e. PWM_MODE_ENABLE | PWM_SS | 0b001.
  */
 #define LED_PWM_CLK_DIV 0b001
 #define LED_PWM_MASTER  (uint8_t)(PWM_MODE_ENABLE | PWM_SS | LED_PWM_CLK_DIV)
 
 /*
- * Luminosité. Le firmware d'usine garde un gain sur dix crans en CODE 0x2937
- * (00 08 10 18 20 28 32 3c 46 50) qu'il applique en multipliant puis en
- * divisant par 80. `led_effect_rgb()` attend au contraire un facteur sur 0-255
- * qu'il applique par un décalage de huit : la table ci-dessous est donc celle
- * d'usine déjà mise à l'échelle (gain x 255 / 80), pour ne pas payer une
- * division par cellule dans l'ISR.
+ * Brightness. The factory firmware keeps a ten-step gain table at CODE 0x2937
+ * (00 08 10 18 20 28 32 3c 46 50) which it applies by multiplying and then
+ * dividing by 80. `led_effect_rgb()` instead expects a 0-255 factor applied
+ * via an eight-bit shift: the table below is therefore the factory table
+ * pre-scaled (gain x 255 / 80), avoiding a per-cell division inside the ISR.
  */
 static const __code uint8_t led_brightness_gain[LED_BRIGHTNESS_LEVELS] = {
     0, 25, 51, 76, 102, 127, 159, 191, 223, 255,
 };
 
-/* Pas d'animation par trame, indexé par `user_settings.led_speed`. */
+/* Animation step per frame, indexed by `user_settings.led_speed`. */
 static const __code uint8_t led_speeds[] = {1, 2, 4, 8, 16};
 #define LED_SPEED_LEVELS (sizeof(led_speeds))
 
 /*
- * Les effets. Les quatre premiers viennent de `led_effect.c`, partagé ; on lui
- * emprunte sa GÉOMÉTRIE (`led_effect_index`) mais pas ses couleurs, qui sont une
- * interpolation linéaire sur trois secteurs. La teinte vient de la roue d'usine,
- * dont les rampes sont perceptuelles.
+ * Effects. The first four come from the shared `led_effect.c`; we borrow its
+ * GEOMETRY (`led_effect_index`) but not its colors, which use linear
+ * interpolation across three sectors. The hue comes from the factory color
+ * wheel, whose ramps are perceptual.
  *
- * Le cinquième est propre à ce clavier : le moteur réactif du firmware d'usine
- * (`fcn.000064F1`, l'effet d'indice 12), où chaque touche porte sa couleur et
- * son intensité, et où l'intensité décroît d'une trame à l'autre. C'est l'effet
- * le plus caractéristique du F75, et le seul qui demande de savoir QUELLE touche
- * a été frappée.
+ * The fifth is specific to this keyboard: the factory firmware's reactive
+ * engine (`fcn.000064F1`, effect index 12), where each key holds its own color
+ * and intensity, and intensity decays from frame to frame. It is the F75's
+ * signature effect, and the only one that needs to know WHICH key was pressed.
  */
 #define AULA_FX_REACTIVE  ((uint8_t)(FX_COUNT + 0)) /*  4  0x64F1 */
 #define AULA_FX_RAIN      ((uint8_t)(FX_COUNT + 1)) /*  5  0x9B2B */
 #define AULA_FX_TWINKLE   ((uint8_t)(FX_COUNT + 2)) /*  6  0xAC1C -> 0x4EA9 */
 #define AULA_FX_SNAKE     ((uint8_t)(FX_COUNT + 3)) /*  7  0x8DDF */
-#define AULA_FX_SNAKE_RGB ((uint8_t)(FX_COUNT + 4)) /*  8  0x1D05, effet 0x26 -- adapté */
+#define AULA_FX_SNAKE_RGB ((uint8_t)(FX_COUNT + 4)) /*  8  0x1D05, effect 0x26 -- adapted */
 #define AULA_FX_RIPPLE    ((uint8_t)(FX_COUNT + 5)) /*  9  0x746A / 0x1D8D */
-#define AULA_FX_LAKE      ((uint8_t)(FX_COUNT + 6)) /* 10  CREATION, aucun equivalent d'usine */
+#define AULA_FX_LAKE      ((uint8_t)(FX_COUNT + 6)) /* 10  ORIGINAL, no factory equivalent */
 #define AULA_FX_KEYWAVE   ((uint8_t)(FX_COUNT + 7)) /* 11  0x82A5 */
 #define AULA_FX_VRAINBOW  ((uint8_t)(FX_COUNT + 8)) /* 12  0x9659 */
 #define AULA_FX_GAMING    ((uint8_t)(FX_COUNT + 9)) /* 13  0x1DAB -> 0x95A4 */
-#define AULA_FX_SHIMMER   ((uint8_t)(FX_COUNT + 10))/* 14  0x60C9, effet d'usine 6 */
+#define AULA_FX_SHIMMER   ((uint8_t)(FX_COUNT + 10))/* 14  0x60C9, factory effect 6 */
 #define AULA_FX_OFF       ((uint8_t)(FX_COUNT + 11))/* 15 */
 
 /*
- * Les six premiers de cette liste (REACTIVE à RIPPLE) partagent la MÊME
- * mécanique, et c'est celle du firmware d'usine : un plan d'intensité par
- * touche qui décroît d'une trame à l'autre, et un semeur qui y remet des
- * touches à fond. L'usine range la couleur de base en XRAM 0x0428, l'intensité
- * en 0x0017, et son rendu 0x62E6 calcule `base * intensité >> 5` vers 0x0152 --
- * exactement le modèle à deux plans que ce fichier tient déjà pour le moteur
- * réactif. Seul le SEMEUR change d'un effet à l'autre :
+ * The first six in this list (REACTIVE through RIPPLE) share the SAME
+ * mechanism, which is that of the factory firmware: a per-key intensity plane
+ * that decays from frame to frame, and a seeder that resets keys to full
+ * brightness. The factory firmware stores the base color at XRAM 0x0428, the
+ * intensity at 0x0017, and its renderer 0x62E6 computes `base * intensity >> 5`
+ * into 0x0152 -- the exact two-plane model this file already maintains for the
+ * reactive engine. Only the SEEDER changes from one effect to another:
  *
- *   REACTIVE   les touches frappées            (déjà en place)
- *   RAIN       une gouttelette par colonne, colonnes relancées au hasard
- *   TWINKLE    des touches tirées au hasard
- *   SNAKE      un point qui parcourt la grille en serpentin et rebondit
- *   SNAKE_RGB  le même, teinte tirée au hasard  (mode couleur 7 de l'usine)
- *   RIPPLE     une couronne par trame depuis (colonne 7, ligne 2)
+ *   REACTIVE   pressed keys                   (already in place)
+ *   RAIN       one droplet per column, columns restarted at random
+ *   TWINKLE    randomly picked keys
+ *   SNAKE      a dot snaking across the grid and bouncing back
+ *   SNAKE_RGB  same, with randomly picked hue (factory color mode 7)
+ *   RIPPLE     one ring per frame expanding from (col 7, row 2)
  *
- * Les trois derniers n'ont pas d'état : ce sont des fonctions pures de la
- * position et de la phase.
+ * The last three are stateless: pure functions of position and phase.
  *
- * UNE ADAPTATION ASSUMÉE, SNAKE_RGB. Chez l'usine, l'effet 0x26 n'est pas un
- * effet permanent mais une TRANSITION : 0x9184 sauvegarde l'effet courant en
- * XRAM 0x0E24 avant de poser 0x26, et le gestionnaire 0x1D37 restaure cette
- * sauvegarde dès que le sens vertical du serpent repasse à zéro, c'est-à-dire
- * quand le balayage a fini de parcourir la grille. L'usine s'en sert comme d'un
- * habillage de changement de mode.
+ * ONE DELIBERATE ADAPTATION: SNAKE_RGB. In the factory firmware, effect 0x26
+ * is not a permanent effect but a TRANSITION: 0x9184 saves the current effect
+ * in XRAM 0x0E24 before setting 0x26, and handler 0x1D37 restores that saved
+ * effect as soon as the snake's vertical direction returns to zero, i.e. when
+ * the sweep has finished traversing the grid. The factory uses it as a mode
+ * change flourish.
  *
- * SMK n'a pas de notion d'effet transitoire et notre liste se parcourt à la
- * touche, donc on le garde permanent. Le rendu est transcrit ; c'est sa DURÉE
- * qui est notre choix.
+ * SMK has no concept of transient effects and our list is cycled via key
+ * presses, so we keep it permanent. The rendering is transcribed; its DURATION
+ * is our choice.
  */
 
 /*
- * État du moteur réactif. Le firmware d'usine y met 378 octets de couleur et
- * 126 d'intensité ; ici une teinte sur la roue suffit, ce qui tient en un octet
- * par touche au lieu de trois.
+ * Reactive engine state. The factory firmware uses 378 bytes for color and
+ * 126 for intensity; here a color wheel hue index suffices, fitting in one
+ * byte per key instead of three.
  */
 /*
- * Décroissance du plan d'intensité, en points par trame. Elle suit la vitesse,
- * comme le diviseur de trame des semeurs : `4 << vitesse` donne 4, 8, 16, 32,
- * 64 pendant que le diviseur donne 16, 8, 4, 2, 1. Le produit reste constant,
- * donc la TRAÎNÉE garde la même longueur -- environ quatre touches -- à toutes
- * les vitesses, et seul le mouvement accélère.
+ * Intensity plane decay, in units per frame. It scales with speed, like the
+ * seeders' frame divider: `4 << speed` yields 4, 8, 16, 32, 64 while the
+ * divider yields 16, 8, 4, 2, 1. Their product stays constant, so the TRAIL
+ * keeps the same length -- roughly four keys -- at all speeds, and only the
+ * motion speeds up.
  */
 /*
- * Décroissance du plan d'intensité, par TRAME d'animation et non par balayage.
+ * Intensity plane decay, per animation FRAME rather than per sweep.
  *
- * Elle ne dépend plus de la vitesse, et c'est le firmware d'usine qui le dit :
- * son rendu calcule `base * intensité >> 5`, donc l'intensité ne porte que
- * TRENTE-ET-UN niveaux, et le moteur réactif `0x64F1` en retire exactement un
- * par trame rendue. 255 / 31 = 8. Toute la réponse à la vitesse est portée par
- * la période de trame ci-dessous, exactement comme en usine.
+ * It no longer depends on speed, following the factory firmware: its renderer
+ * computes `base * intensity >> 5`, so intensity only carries THIRTY-ONE
+ * levels, and the reactive engine `0x64F1` subtracts exactly one per rendered
+ * frame. 255 / 31 = 8. All speed responsiveness is carried by the frame period
+ * below, just like in the factory firmware.
  */
 #define SPARK_DECAY ((uint8_t)8)
 static __xdata uint8_t spark_hue[LED_COLS][LED_ROWS];
@@ -157,10 +153,10 @@ static __xdata uint8_t spark_val[LED_COLS][LED_ROWS];
 static __xdata uint8_t spark_prev[LED_COLS];
 
 /*
- * À purger en même temps que le framebuffer sur un changement d'effet : sinon
- * on revient dans le mode réactif avec des touches qui finissent de s'éteindre
- * depuis la dernière fois, et un bit resté dans `spark_prev` avale le premier
- * appui réel d'une touche qui était enfoncée à la sortie du mode.
+ * Must be cleared along with the framebuffer on an effect change: otherwise
+ * re-entering reactive mode shows keys still fading out from last time, and a
+ * stale bit in `spark_prev` swallows the first real press of any key that was
+ * held down when leaving the mode.
  */
 static void spark_reset(void)
 {
@@ -175,76 +171,77 @@ static void spark_reset(void)
     }
 }
 
-static uint8_t led_col;   /* colonne affichée par la sous-trame courante */
-static uint8_t led_phase; /* phase de l'animation, repli naturel a 256 */
+static uint8_t led_col;   /* column displayed by the current subframe */
+static uint8_t led_phase; /* animation phase, natural wrap at 256 */
 
 /*
- * Second compteur de phase, replié à 192 -- et c'est un CORRECTIF.
+ * Second phase counter, wrapping at 192 -- and this is a BUG FIX.
  *
- * `led_phase` est un octet : il reboucle à 256. Les consommateurs dont le module
- * divise 256 ne le voient pas -- la vague replie à 128, la roue de SMK travaille
- * sur 0-255. Mais l'arc-en-ciel vertical replie à **192** et le scintillement à
- * 192 ou 96 : `256 % 192 = 64`, donc à chaque rebouclage de `led_phase` leur
- * teinte SAUTE d'un tiers de roue. Le firmware d'usine n'a pas ce défaut parce
- * qu'il range la phase PAR TOUCHE et l'incrémente directement modulo 192 ou 96.
+ * `led_phase` is a byte: it wraps at 256. Consumers whose modulus divides 256
+ * do not notice -- the wave wraps at 128, SMK's color wheel works on 0-255.
+ * But the vertical rainbow wraps at **192** and shimmer wraps at 192 or 96:
+ * `256 % 192 = 64`, so on every wrap of `led_phase` their hue JUMPS by a third
+ * of the wheel. The factory firmware does not have this flaw because it stores
+ * phase PER KEY and increments it directly modulo 192 or 96.
  *
- * Ce compteur-ci se replie à 192, que 96 divise : les deux modules y sont sans
- * couture. Deux compteurs valent mieux qu'un seul faux.
+ * This counter wraps at 192, which is divisible by 96: both moduli are
+ * seamless. Two counters are better than one wrong one.
  */
 #define FX_PHASE192 192u
 static uint8_t fx_phase192;
-static uint8_t regen_row; /* curseur de régénération, une cellule par sous-trame */
+static uint8_t regen_row; /* regeneration cursor, one cell per subframe */
 static uint8_t regen_col;
 
-/* ------------------------------------------------------- semeurs d'usine */
+/* ---------------------------------------------------------- factory seeders */
 
 /*
- * État des semeurs. Vingt-deux octets en tout : l'usine en dépense bien plus,
- * mais elle range aussi la couleur de base de chaque touche, ce que le plan de
- * teintes ci-dessus remplace pour un tiers du prix.
+ * Seeder state. Twenty-two bytes in total: the factory firmware spends far
+ * more, because it also stores each key's base color, which the hue plane
+ * above replaces at a third of the cost.
  */
-static __xdata uint8_t rain_row[LED_COLS]; /* 0-5, ou 0xFF quand la colonne dort */
+static __xdata uint8_t rain_row[LED_COLS]; /* 0-5, or 0xFF when the column is idle */
 static uint8_t         snake_col;
 static uint8_t         snake_row;
-static uint8_t         snake_right; /* sens horizontal courant */
-static uint8_t         snake_down;  /* sens vertical courant */
+static uint8_t         snake_right; /* current horizontal direction */
+static uint8_t         snake_down;  /* current vertical direction */
 static uint8_t         ripple_ring;
 /*
- * LE LAC -- l'onde qui part de la touche frappée.
+ * THE LAKE -- a wave radiating from the pressed key.
  *
- * ⚠️ CET EFFET N'EST PAS UNE TRANSCRIPTION. Le firmware d'usine n'a rien de tel :
- * son onde concentrique (`0x746A`) part d'un centre FIXE, tabulé en
- * `CODE 0x2959`, et son moteur réactif (`0x64F1`) allume la touche frappée sans
- * la propager. Celui-ci combine les deux et c'est une création.
+ * ⚠️ THIS EFFECT IS NOT A TRANSCRIPTION. The factory firmware has nothing like
+ * it: its concentric ripple (`0x746A`) radiates from a FIXED center tabulated
+ * at `CODE 0x2959`, and its reactive engine (`0x64F1`) lights up the pressed
+ * key without propagating it. This effect combines both and is an original
+ * creation.
  *
- * Quatre gouttes simultanées. Chacune retient son origine, son âge en trames et
- * sa teinte de départ. À chaque trame l'âge avance d'un cran ; une cellule est
- * rallumée à fond quand sa DISTANCE à l'origine vaut exactement l'âge -- le
- * front de l'onde. La décroissance du plan d'intensité, déjà là, fait la traîne
- * derrière lui, comme le sillage d'une ride sur l'eau.
+ * Four simultaneous drops. Each tracks its origin, its age in frames, and its
+ * starting hue. Every frame, age advances by one step; a cell is re-seeded to
+ * full brightness when its DISTANCE to the origin equals the exact age -- the
+ * wavefront. The intensity plane decay, already in place, forms the trailing
+ * wake behind it, like a ripple on water.
  *
- * La distance pèse les lignes DEUX FOIS les colonnes : la géométrie générée
- * place les colonnes tous les 17 crans et les lignes tous les 42, donc un pas de
- * ligne vaut environ deux pas et demi de colonne. Sans cette pondération l'onde
- * serait un losange écrasé.
+ * Distance weights rows TWICE as much as columns: the generated geometry
+ * spaces columns by 17 units and rows by 42, so one row step equals roughly
+ * two and a half column steps. Without this weighting the wave would be a
+ * squashed diamond.
  *
- * Le coût tient dans le budget de l'ISR : le contrôle se fait UNE cellule à la
- * fois, dans `led_regen_one()`, soit quatre soustractions par sous-trame -- et
- * non un balayage des quatre-vingt-dix cellules d'un coup.
+ * The cost fits within the ISR budget: the check runs ONE cell at a time
+ * inside `led_regen_one()`, i.e. four subtractions per subframe -- rather than
+ * scanning all ninety cells at once.
  */
 #define LAKE_DROPS    4
-#define LAKE_MAX_AGE  25 /* 14 colonnes + 2 x 5 lignes, plus un cran de marge */
-#define LAKE_HUE_STEP 3  /* la teinte glisse en s'éloignant : 24 x 3 = un tiers de roue */
+#define LAKE_MAX_AGE  25 /* 14 columns + 2 x 5 rows, plus one step of margin */
+#define LAKE_HUE_STEP 3  /* hue shifts as it travels outward: 24 x 3 = one third of the wheel */
 
 static __xdata uint8_t drop_col[LAKE_DROPS];
 static __xdata uint8_t drop_row[LAKE_DROPS];
-static __xdata uint8_t drop_age[LAKE_DROPS]; /* 0 = emplacement libre */
+static __xdata uint8_t drop_age[LAKE_DROPS]; /* 0 = free slot */
 static __xdata uint8_t drop_hue[LAKE_DROPS];
 
-static uint8_t         fx_ms_acc;    /* millisecondes accumulées depuis la dernière trame */
-static __bit           spark_decay_due; /* la trame écoulée autorise la décroissance */
+static uint8_t         fx_ms_acc;    /* milliseconds accumulated since the last frame */
+static __bit           spark_decay_due; /* elapsed frame authorizes decay */
 
-/* Allume une touche à fond, si la grille en porte une à cette position. */
+/* Lights a key at full brightness, if the grid has a key at that position. */
 static void spark_seed(uint8_t col, uint8_t row, uint8_t hue)
 {
     if (col >= LED_COLS || row >= LED_ROWS) {
@@ -258,12 +255,12 @@ static void spark_seed(uint8_t col, uint8_t row, uint8_t hue)
 }
 
 /*
- * Pluie -- transcrite de 0x9B2B.
+ * Rain -- transcribed from 0x9B2B.
  *
- * Une colonne tirée au hasard est relancée si elle dort, puis chaque colonne
- * active descend d'une ligne et s'éteint après la sixième. L'usine écrit
- * exactement cette boucle : `si état < 6 : peindre, état++ ; sinon état = 0xFF`,
- * précédée d'un `si état[hasard] == 0xFF : état[hasard] = 0`.
+ * A randomly picked column is restarted if idle, then each active column moves
+ * down one row and turns off past the sixth. The factory firmware writes this
+ * exact loop: `if state < 6: paint, state++; else state = 0xFF`, preceded by
+ * `if state[random] == 0xFF: state[random] = 0`.
  */
 static void rain_step(void)
 {
@@ -286,10 +283,10 @@ static void rain_step(void)
 }
 
 /*
- * Scintillement -- 0xAC1C, dont le rendu 0x4EA9 tire une position au hasard
- * dans la table 0x2EED puis l'allume. Deux touches par trame : l'usine boucle
- * sur un compteur que le relevé ne fixe pas, et deux donne une densité qui
- * ressemble à ce que montre le clavier en vidéo.
+ * Twinkle -- 0xAC1C, whose renderer 0x4EA9 picks a random position from table
+ * 0x2EED and lights it up. Two keys per frame: the factory firmware loops over
+ * a counter whose value is not fixed in the disassembly notes, and two gives a
+ * density matching video footage of the keyboard.
  */
 static void twinkle_step(void)
 {
@@ -303,14 +300,15 @@ static void twinkle_step(void)
 }
 
 /*
- * Serpent -- transcrit de 0x8DDF.
+ * Snake -- transcribed from 0x8DDF.
  *
- * Le point avance horizontalement ; arrivé au bord il inverse son sens ET
- * descend (ou monte) d'une ligne ; arrivé en haut ou en bas il inverse aussi
- * son sens vertical. L'usine tient les quatre variables en XRAM 0x0ECA-0x0ECD.
+ * The dot advances horizontally; upon reaching the edge it reverses direction
+ * AND steps down (or up) one row; upon reaching the top or bottom it also
+ * reverses its vertical direction. The factory firmware keeps the four
+ * variables at XRAM 0x0ECA-0x0ECD.
  *
- * `random` distingue SNAKE de SNAKE_RGB : l'effet 0x26 force le mode couleur 7,
- * qui tire une teinte au hasard à chaque touche (0x1D2B).
+ * `random` distinguishes SNAKE from SNAKE_RGB: effect 0x26 forces color mode
+ * 7, which picks a random hue on every key (0x1D2B).
  */
 static void snake_step(uint8_t random_hue)
 {
@@ -346,12 +344,11 @@ static void snake_step(uint8_t random_hue)
 }
 
 /*
- * Onde concentrique -- couronnes de CODE 0x2959, une par trame, la teinte
- * avançant de 13 crans par couronne comme le relève la feuille sur 0x746A.
+ * Concentric ripple -- rings from CODE 0x2959, one per frame, with hue
+ * advancing by 13 steps per ring as documented in the notes on 0x746A.
  *
- * Les identifiants valent `colonne * 8 + ligne` ; ceux qui désignent une
- * colonne au-delà de la quinzième viennent d'un modèle plus large et sont
- * écartés par `spark_seed`.
+ * Identifiers equal `col * 8 + row`; those referring to a column beyond the
+ * fifteenth come from a wider model and are discarded by `spark_seed`.
  */
 static void ripple_step(void)
 {
@@ -361,11 +358,11 @@ static void ripple_step(void)
         const uint8_t id = aula_fx_ring(ripple_ring, slot);
 
         /*
-         * `0xFF` marque une place vide dans la couronne -- mais la table d'usine
-         * contient aussi des touches que CE clavier n'a pas : huit identifiants
-         * des colonnes 15 et 16 (`0x7A`-`0x7D`, `0x80`-`0x85`), qui appartiennent
-         * au modèle de vingt-et-une colonnes de la même famille. `spark_seed()`
-         * les écarte par sa borne de colonne ; c'est voulu, pas un hasard.
+         * `0xFF` marks an empty slot in the ring -- but the factory table also
+         * contains keys that THIS keyboard does not have: eight identifiers in
+         * columns 15 and 16 (`0x7A`-`0x7D`, `0x80`-`0x85`), belonging to the
+         * twenty-one-column model from the same family. `spark_seed()` filters
+         * them out via its column bound; this is intentional, not an accident.
          */
         if (id == AULA_FX_NO_KEY) {
             continue;
@@ -379,12 +376,12 @@ static void ripple_step(void)
 }
 
 /*
- * Appelé UNE FOIS par trame d'animation, au bouclage du curseur de
- * régénération -- et pas depuis `led_regen_one()`, qui voit chaque colonne six
- * fois par trame. Y semer ferait courir la pluie et le serpent six fois trop
- * vite, et rien dans le journal de compilation ne le montrerait.
+ * Called ONCE per animation frame, when the regeneration cursor wraps -- and
+ * not from `led_regen_one()`, which visits each column six times per frame.
+ * Seeding there would make rain and snake run six times too fast, with no
+ * warning in the build log.
  */
-/* Distance pondérée d'une cellule à une origine : les lignes comptent double. */
+/* Weighted distance from a cell to an origin: rows count double. */
 static uint8_t lake_dist(uint8_t col, uint8_t row, uint8_t c0, uint8_t r0)
 {
     const uint8_t dc = (col > c0) ? (uint8_t)(col - c0) : (uint8_t)(c0 - col);
@@ -393,7 +390,7 @@ static uint8_t lake_dist(uint8_t col, uint8_t row, uint8_t c0, uint8_t r0)
     return (uint8_t)(dc + (uint8_t)(dr << 1));
 }
 
-/* Une frappe jette une goutte : emplacement libre, sinon la plus ancienne. */
+/* A key press spawns a drop: uses a free slot, or overwrites the oldest. */
 static void lake_drop(uint8_t col, uint8_t row, uint8_t hue)
 {
     uint8_t i, pick = 0, oldest = 0;
@@ -412,13 +409,13 @@ static void lake_drop(uint8_t col, uint8_t row, uint8_t hue)
     drop_row[pick] = row;
     drop_hue[pick] = hue;
     drop_age[pick] = 1;
-    spark_seed(col, row, hue); /* le point d'impact s'allume tout de suite */
+    spark_seed(col, row, hue); /* impact point lights up immediately */
 }
 
 /*
- * Remise à plat complète sur changement d'effet : le plan d'intensité ET l'état
- * des semeurs. Sans cela, on rentre dans la pluie avec des colonnes déjà à
- * mi-course et dans le serpent avec un point posé n'importe où.
+ * Full reset on effect change: both the intensity plane AND the seeder state.
+ * Without this, rain starts with columns already mid-fall and snake starts
+ * with its head left wherever it happened to be.
  */
 static void fx_reset(void)
 {
@@ -440,91 +437,90 @@ static void fx_reset(void)
     spark_decay_due = 0;
 
     /*
-     * La phase repart de zéro, comme en usine. L'aiguillage de 0x1AA8 ressème
-     * le plan de l'effet choisi À CHAQUE sélection -- une branche par effet, la
-     * nôtre appelant le transposeur 0xACA3. Sans cette ligne, revenir sur la
-     * vague la reprendrait là où un autre effet a laissé le compteur commun,
-     * au lieu de repartir du champ de phase d'usine.
+     * Phase resets to zero, just like in the factory firmware. The dispatcher
+     * at 0x1AA8 reseeds the selected effect's plane ON EVERY selection -- one
+     * branch per effect, ours calling the transposer 0xACA3. Without this
+     * line, returning to the wave would resume wherever another effect left
+     * the shared counter, instead of starting from the factory phase field.
      */
     led_phase = 0;
 }
 
 /*
- * PÉRIODES D'USINE -- relevées, plus inférées.
+ * FACTORY PERIODS -- extracted from the dump, no longer inferred.
  *
- * `CODE 0x2FE9` porte quinze tables de cinq octets, indexées par la vitesse
- * 0 à 4. L'unité est le tic de systick d'usine, et ce tic vaut UNE
- * MILLISECONDE : le raccourci de réinitialisation exige que son compteur
- * atteigne 3000 tics (`0x870C`), et un appui long, c'est trois secondes.
+ * `CODE 0x2FE9` holds fifteen 5-byte tables, indexed by speed 0 to 4. The unit
+ * is the factory systick, and one tick equals ONE MILLISECOND: the reset
+ * shortcut requires its counter to reach 3000 ticks (`0x870C`), and a long
+ * press is three seconds.
  *
- * Quelle table chaque effet charge est décidé par son SEMEUR, dans la table de
- * répartition `0x1744` -- une entrée par effet, la clé étant l'effet demandé.
- * D'où la correspondance ci-dessous, entièrement tirée du dump :
+ * Which table each effect loads is decided by its SEEDER, in dispatch table
+ * `0x1744` -- one entry per effect, keyed by the requested effect ID. Hence
+ * the mapping below, taken straight from the dump:
  *
- *   notre effet         effet d'usine  moteur    table d'usine
- *   ------------------  -------------  --------  ------------------------------
- *   FX_RADIAL                 1        0x746A    aucune -- période FIXE 10, en dur dans `0x1B61`
- *   FX_HORIZONTAL             2        0x7C12    `0x2FF3`
- *   FX_VERTICAL              11        0x6C9B    `0x3016`
- *   FX_SOLID                  3        0x9DA4    `0x2FF8`
- *   AULA_FX_REACTIVE         12        0x64F1    `0x301B`
- *   AULA_FX_RAIN              5        0x9B2B    `0x2FE9`
- *   AULA_FX_TWINKLE           8        0xAC1C    AUCUNE -- choix : celle de l'autre scintillement (effet 6)
- *   AULA_FX_SNAKE            10        0x8DDF    `0x3011`
- *   AULA_FX_SNAKE_RGB      0x26        0x1D05    AUCUNE -- choix : celle du serpent, même moteur
- *   AULA_FX_RIPPLE           17        0x746A    `0x302F`
- *   AULA_FX_LAKE              -            -      AUCUNE -- création : celle de l'onde
- *   AULA_FX_KEYWAVE          15        0x82A5    `0x3025`
- *   AULA_FX_VRAINBOW         16        0x9659    `0x302A`
- *   AULA_FX_GAMING         0x20        0x95A4    AUCUNE -- image fixe : choix, celle de l'uni
- *   AULA_FX_SHIMMER           6        0x60C9    `0x3002`
+ *   our effect          factory effect  engine    factory table
+ *   ------------------  --------------  --------  ------------------------------
+ *   FX_RADIAL                 1         0x746A    none -- FIXED period 10, hardcoded in `0x1B61`
+ *   FX_HORIZONTAL             2         0x7C12    `0x2FF3`
+ *   FX_VERTICAL              11         0x6C9B    `0x3016`
+ *   FX_SOLID                  3         0x9DA4    `0x2FF8`
+ *   AULA_FX_REACTIVE         12         0x64F1    `0x301B`
+ *   AULA_FX_RAIN              5         0x9B2B    `0x2FE9`
+ *   AULA_FX_TWINKLE           8         0xAC1C    NONE -- choice: uses the other shimmer table (effect 6)
+ *   AULA_FX_SNAKE            10         0x8DDF    `0x3011`
+ *   AULA_FX_SNAKE_RGB      0x26         0x1D05    NONE -- choice: uses the snake table, same engine
+ *   AULA_FX_RIPPLE           17         0x746A    `0x302F`
+ *   AULA_FX_LAKE              -             -     NONE -- original: uses the ripple table
+ *   AULA_FX_KEYWAVE          15         0x82A5    `0x3025`
+ *   AULA_FX_VRAINBOW         16         0x9659    `0x302A`
+ *   AULA_FX_GAMING         0x20         0x95A4    NONE -- static image: choice, uses the solid table
+ *   AULA_FX_SHIMMER           6         0x60C9    `0x3002`
  *
- * Trois lignes sont donc un CHOIX et non une transcription ; elles sont
- * signalées comme telles. Les dix autres sont les octets du dump.
+ * Three entries are therefore a CHOICE rather than a transcription; they are
+ * marked as such. The remaining ten are exact bytes from the dump.
  */
 static const __code uint8_t fx_period_ms[AULA_FX_OFF][LED_SPEED_LEVELS] = {
-    { 10,  10,  10,  10,  10}, /* FX_RADIAL     -- période fixe de 0x1B61     */
-    { 45,  35,  25,  15,   5}, /* FX_HORIZONTAL -- CODE 0x2FF3                */
-    { 30,  24,  18,  12,   6}, /* FX_VERTICAL   -- CODE 0x3016                */
-    { 45,  35,  25,  15,   6}, /* FX_SOLID      -- CODE 0x2FF8                */
-    { 32,  24,  18,  16,   6}, /* REACTIVE      -- CODE 0x301B                */
-    {120, 100,  80,  50,  20}, /* RAIN          -- CODE 0x2FE9                */
-    { 20,  15,  10,   5,   1}, /* TWINKLE       -- CODE 0x3002, choix         */
-    {120,  90,  70,  45,   1}, /* SNAKE         -- CODE 0x3011                */
-    {120,  90,  70,  45,   1}, /* SNAKE_RGB     -- celle du serpent, choix    */
-    { 50,  40,  30,  20,   8}, /* RIPPLE        -- CODE 0x302F                */
-    { 50,  40,  30,  20,   8}, /* LAKE          -- création : celle de l'onde */
-    { 32,  24,  16,   8,   1}, /* KEYWAVE       -- CODE 0x3025                */
-    { 46,  36,  26,  16,   6}, /* VRAINBOW      -- CODE 0x302A                */
-    { 45,  35,  25,  15,   6}, /* GAMING        -- image fixe, choix          */
-    { 20,  15,  10,   5,   1}, /* SHIMMER       -- CODE 0x3002                */
+    { 10,  10,  10,  10,  10}, /* FX_RADIAL     -- fixed period from 0x1B61    */
+    { 45,  35,  25,  15,   5}, /* FX_HORIZONTAL -- CODE 0x2FF3                 */
+    { 30,  24,  18,  12,   6}, /* FX_VERTICAL   -- CODE 0x3016                 */
+    { 45,  35,  25,  15,   6}, /* FX_SOLID      -- CODE 0x2FF8                 */
+    { 32,  24,  18,  16,   6}, /* REACTIVE      -- CODE 0x301B                 */
+    {120, 100,  80,  50,  20}, /* RAIN          -- CODE 0x2FE9                 */
+    { 20,  15,  10,   5,   1}, /* TWINKLE       -- CODE 0x3002, choice         */
+    {120,  90,  70,  45,   1}, /* SNAKE         -- CODE 0x3011                 */
+    {120,  90,  70,  45,   1}, /* SNAKE_RGB     -- snake table, choice         */
+    { 50,  40,  30,  20,   8}, /* RIPPLE        -- CODE 0x302F                 */
+    { 50,  40,  30,  20,   8}, /* LAKE          -- original: ripple table      */
+    { 32,  24,  16,   8,   1}, /* KEYWAVE       -- CODE 0x3025                 */
+    { 46,  36,  26,  16,   6}, /* VRAINBOW      -- CODE 0x302A                 */
+    { 45,  35,  25,  15,   6}, /* GAMING        -- static image, choice        */
+    { 20,  15,  10,   5,   1}, /* SHIMMER       -- CODE 0x3002                 */
 };
 
 /*
- * Durée d'un balayage de régénération, en millisecondes.
+ * Duration of one regeneration sweep, in milliseconds.
  *
- * `tick.c` alterne UN balayage de matrice et `LED_SUBFRAMES_PER_SCAN` = 15
- * sous-trames LED. Une sous-trame dure 400 us (`RELOAD_LED_SUBFRAME`) et le
- * créneau de balayage environ 420 us, soit 6,42 ms par groupe de quinze. Une
- * cellule est régénérée par sous-trame, donc les 90 cellules demandent six
- * groupes : 38,5 ms.
+ * `tick.c` alternates ONE matrix scan and `LED_SUBFRAMES_PER_SCAN` = 15 LED
+ * subframes. One subframe lasts 400 us (`RELOAD_LED_SUBFRAME`) and the scan
+ * slot takes roughly 420 us, giving 6.42 ms per group of fifteen. One cell is
+ * regenerated per subframe, so all 90 cells require six groups: 38.5 ms.
  */
 #define LED_SWEEP_MS ((uint8_t)38)
 
 /*
- * ⚠️ CE QUE CETTE ARCHITECTURE NE PEUT PAS RENDRE.
+ * ⚠️ WHAT THIS ARCHITECTURE CANNOT RENDER.
  *
- * L'usine redessine le panneau entier à chaque trame et peut donc descendre à
- * une milliseconde. Ici une trame COÛTE un balayage de régénération, 38,5 ms :
- * toute période inférieure est ramenée à « une trame ». Le tableau ci-dessus
- * n'en est pas dénaturé -- il garde les écarts entre effets, et la pluie comme
- * le serpent conservent leur gradient de vitesse -- mais les périodes rapides
- * s'y écrasent, et c'est notre plancher, pas celui du firmware d'usine.
+ * The factory firmware redraws the entire panel every frame and can therefore
+ * go down to one millisecond. Here a frame COSTS one full regeneration sweep,
+ * 38.5 ms: any shorter period is clamped to "one frame". The table above is
+ * not invalidated -- it preserves the relative pacing between effects, and
+ * both rain and snake keep their speed gradient -- but fast periods get
+ * clamped at the bottom, which is our floor, not the factory firmware's.
  *
- * C'est aussi pourquoi `led_speeds[]` continue de faire varier le PAS de phase :
- * l'usine garde un pas fixe et fait varier la cadence, nous ne pouvons faire
- * varier la cadence que d'un facteur trois. Sans le pas variable, SPD_UP et
- * SPD_DN ne se verraient presque plus. Ce point-là est un choix, assumé.
+ * That is also why `led_speeds[]` continues to vary the phase STEP: the
+ * factory keeps a fixed step and varies the frame rate, whereas we can only
+ * vary the frame rate by a factor of three. Without a variable step, SPD_UP
+ * and SPD_DN would be barely noticeable. That is a deliberate design choice.
  */
 static bool fx_frame_advance(void)
 {
@@ -536,23 +532,23 @@ static bool fx_frame_advance(void)
     }
     fx_ms_acc = (uint8_t)(fx_ms_acc - period);
     if (fx_ms_acc >= period) {
-        fx_ms_acc = 0; /* une trame ne peut pas aller plus vite qu'un balayage */
+        fx_ms_acc = 0; /* a frame cannot run faster than one sweep */
     }
 
     /*
-     * LE SENS DE DÉFILEMENT -- transcrit du bit `0x23` du firmware d'usine.
+     * SCROLL DIRECTION -- transcribed from bit `0x23` of the factory firmware.
      *
-     * `0xEDA2` ne fait pas qu'incrémenter : il teste ce bit et DÉCRÉMENTE quand
-     * il est posé, en rebouclant sur `module - 1`. `rgb_scroll_step` (`0xA3F4`)
-     * et l'automate à quatre directions (`0x5C98`) le lisent aussi. Sa source
-     * est `b0[7]` de l'enregistrement par effet (`0x1172`) et, globalement,
-     * `[0x0315]` bit 7 (`0x1121`).
+     * `0xEDA2` does not only increment: it tests this bit and DECREMENTS when
+     * set, wrapping to `modulus - 1`. `rgb_scroll_step` (`0xA3F4`) and the
+     * four-direction state machine (`0x5C98`) also read it. Its source is
+     * `b0[7]` of the per-effect record (`0x1172`) and, globally, `[0x0315]`
+     * bit 7 (`0x1121`).
      *
-     * Ici il est global, comme `[0x0315]`, et rangé dans
-     * `user_settings.ul_brightness` -- un octet que la structure partagée réserve
-     * à l'éclairage d'ambiance, que ce clavier n'a pas, et qu'aucun fichier
-     * partagé ne touche. Même raison que pour le mode de couleur : ne pas
-     * allonger `user_settings_t`, ce qui ferait retomber tous les réglages.
+     * Here it is global, like `[0x0315]`, and stored in
+     * `user_settings.ul_brightness` -- a byte reserved by the shared struct
+     * for underglow, which this keyboard lacks, and which no shared file
+     * touches. Same rationale as for the color mode: avoid growing
+     * `user_settings_t`, which would invalidate all saved settings.
      */
     {
         const uint8_t step = led_speeds[user_settings.led_speed];
@@ -577,7 +573,7 @@ static bool fx_frame_advance(void)
 
             for (i = 0; i < LAKE_DROPS; i++) {
                 if (drop_age[i] != 0 && ++drop_age[i] >= LAKE_MAX_AGE) {
-                    drop_age[i] = 0; /* l'onde a quitté le clavier */
+                    drop_age[i] = 0; /* the wave has left the keyboard */
                 }
             }
             break;
@@ -591,14 +587,14 @@ static bool fx_frame_advance(void)
 #define LED_SPEED_DEFAULT      2
 
 
-/* ------------------------------------------------------------------ sortie */
+/* ------------------------------------------------------------------- output */
 
 void indicators_pwm_enable(void)
 {
     /*
-     * Le canal 0 de chaque banc porte l'activation et le diviseur ; les cinq
-     * autres ne portent que PWM_SS. Même découpage que les trois autres
-     * claviers de SMK.
+     * Channel 0 of each bank carries the enable bit and clock divider; the
+     * other five only carry PWM_SS. Same split as on the three other keyboards
+     * in SMK.
      */
     PWM00CON = LED_PWM_MASTER;
     PWM01CON = PWM_SS;
@@ -623,26 +619,25 @@ void indicators_pwm_enable(void)
 }
 
 /*
- * Extinction complète, et c'est bien deux choses : parquer les bancs PWM ne
- * suffit pas, parce qu'une broche parquée retombe sur la valeur du verrou de
- * port. C'est le RELÂCHEMENT DES COLONNES qui coupe réellement le courant --
- * plus aucune colonne sélectionnée, donc plus de chemin.
+ * Full blanking, which requires two separate actions: parking the PWM banks is
+ * not enough, because a parked pin falls back to the port latch value. It is
+ * RELEASING THE COLUMNS that actually cuts current -- with no column selected,
+ * there is no current path.
  *
- * Appelée depuis trois endroits qui n'ont rien à voir entre eux : `matrix.c`
- * avant chaque balayage, `sleep.c` avant la mise en veille, et
- * `settings_save_pre()` autour de l'effacement de page flash. Les trois veulent
- * la même chose : que le panneau soit noir et les colonnes libres.
+ * Called from three unrelated places: `matrix.c` before each scan, `sleep.c`
+ * before entering sleep, and `settings_save_pre()` around flash page erases.
+ * All three want the same thing: a dark panel and released columns.
  */
 /*
- * L'écriture des réglages efface une page de flash, et cet effacement tourne
- * interruptions coupées pendant ~5 ms. Sans ces deux crochets, `tick_dispatch`
- * reste gelé pendant ce temps avec la colonne de la dernière sous-trame TOUJOURS
- * sélectionnée et les trois bancs PWM actifs : cette colonne conduirait 5 ms au
- * lieu de 400 µs, soit une douzaine de fois son rapport cyclique nominal.
+ * Saving settings erases a flash page, and that erase runs with interrupts
+ * disabled for ~5 ms. Without these two hooks, `tick_dispatch` stays frozen
+ * during that time with the last subframe's column STILL selected and all
+ * three PWM banks active: that column would conduct for 5 ms instead of
+ * 400 µs, roughly a dozen times its nominal duty cycle.
  *
- * Et ce n'est pas un cas rare : chaque changement d'effet, de luminosité, de
- * vitesse ou de slot Bluetooth appelle `settings_mark_dirty()`. Même remède que
- * le NuPhy Air60, pour la même raison.
+ * And this is not a rare event: every change of effect, brightness, speed, or
+ * Bluetooth slot calls `settings_mark_dirty()`. Same fix as on the NuPhy
+ * Air60, for the same reason.
  */
 void settings_save_pre(void)
 {
@@ -665,13 +660,13 @@ void indicators_pwm_disable(void)
     user_matrix_cols_deselect_all();
 }
 
-/* --------------------------------------------------------------- animation */
+/* ---------------------------------------------------------------- animation */
 
 /*
- * Une cellule par sous-trame. Le curseur balaie la grille en avançant la phase
- * à chaque tour complet, exactement comme le genesis-thor-300 : avancer la
- * phase par trame et non par sous-trame évite que baisser la luminosité ne
- * ralentisse aussi l'effet.
+ * One cell per subframe. The cursor sweeps the grid and advances the phase on
+ * each full pass, just like the genesis-thor-300: advancing phase per frame
+ * rather than per subframe prevents lowering brightness from also slowing down
+ * the effect.
  */
 static uint8_t led_scale(uint8_t value, uint8_t gain)
 {
@@ -679,23 +674,23 @@ static uint8_t led_scale(uint8_t value, uint8_t gain)
 }
 
 /*
- * LE CHOIX DE COULEUR D'USINE.
+ * FACTORY COLOR SELECTION.
  *
- * Le firmware d'usine ne rend pas tout en arc-en-ciel : chacun de ses effets
- * porte un mode de couleur sur quatre bits, `b1[3:0]`, verrouillé en XRAM
- * 0x0897, et son rendu se lit d'une ligne (`0x60C9`, `0x6C9B`) :
+ * The factory firmware does not render everything in rainbow mode: each of its
+ * effects carries a 4-bit color mode, `b1[3:0]`, latched at XRAM 0x0897, and
+ * its rendering logic fits in a single line (`0x60C9`, `0x6C9B`):
  *
- *     couleur = (mode == 7) ? roue[phase] : palette[effet][mode]
+ *     color = (mode == 7) ? wheel[phase] : palette[effect][mode]
  *
- * Les modes 0 à 6 sont les sept couleurs fixes de `CODE 0xC800` -- identiques
- * pour les dix-huit effets --, le mode 7 est l'arc-en-ciel, et lui seul lit la
- * roue de teintes. Ce portage ne rendait que le mode 7 ; les huit y sont.
+ * Modes 0 to 6 are the seven fixed colors at `CODE 0xC800` -- identical across
+ * all eighteen effects -- while mode 7 is rainbow, the only mode that reads
+ * the color wheel. Previously this port only rendered mode 7; all eight are
+ * now supported.
  *
- * Le mode vit dans `user_settings.ul_effect`, un octet que la structure partagée
- * réserve à l'éclairage d'ambiance -- que ce clavier n'a pas. Le réemployer
- * évite d'allonger `user_settings_t`, ce qui ferait retomber TOUS les réglages
- * enregistrés aux valeurs par défaut au premier démarrage (`nvm.c` compare la
- * longueur du bloc).
+ * The mode lives in `user_settings.ul_effect`, a byte reserved by the shared
+ * struct for underglow -- which this keyboard does not have. Reusing it avoids
+ * growing `user_settings_t`, which would reset ALL saved settings to defaults
+ * on first boot (`nvm.c` checks the struct size).
  */
 static void fx_color(uint8_t wheel_index, uint8_t out[3])
 {
@@ -706,16 +701,16 @@ static void fx_color(uint8_t wheel_index, uint8_t out[3])
     }
 }
 
-/* -------------------------------------------------- overlay de diagnostic radio
+/* --------------------------------------------------- radio diagnostic overlay
  *
- * La liaison sans-fil échoue dans un montage où l'USB est DÉBRANCHÉ -- clavier
- * sur batterie, dongle sur le PC. La console HID de SMK n'y existe pas. Les
- * quatre-vingt-dix LED, elles, fonctionnent : elles sont le seul instrument
- * disponible là où le défaut se produit.
+ * The wireless link fails in a setup where USB is UNPLUGGED -- keyboard on
+ * battery, dongle in the PC. SMK's HID console does not exist there. The
+ * ninety LEDs, however, do work: they are the only instrument available where
+ * the fault actually occurs.
  *
- * `Fn + R` peint l'état du pilote sur les touches `1` à `0` (ligne 1, colonnes
- * 1 à 10). L'overlay court-circuite la luminosité utilisateur : il doit rester
- * lisible même réglage à zéro, et même effet éteint.
+ * `Fn + R` paints the driver state across keys `1` to `0` (row 1, columns 1 to
+ * 10). The overlay bypasses user brightness: it must remain readable even when
+ * brightness is set to zero or the effect is turned off.
  */
 #ifdef RF_EUART0
 
@@ -726,7 +721,7 @@ void indicators_toggle_rf_diag(void)
     rf_diag_on = !rf_diag_on;
 }
 
-/* Rend false si la cellule courante ne fait pas partie de l'overlay. */
+/* Returns false if the current cell is not part of the overlay. */
 static bool rf_diag_paint(void)
 {
     uint8_t field;
@@ -740,20 +735,20 @@ static bool rf_diag_paint(void)
 
     switch (field) {
         case RF_DIAG_LINK:
-            /* éteint = filaire, bleu = 2,4 GHz, cyan = Bluetooth */
+            /* off = wired, blue = 2.4 GHz, cyan = Bluetooth */
             aula_rgb_set(regen_row, regen_col, 0, (v == 2) ? 255 : 0, v ? 255 : 0);
             break;
         case RF_DIAG_NAME:
-            /* 0 éteint, 1 jaune, 2 vert */
+            /* 0 off, 1 yellow, 2 green */
             aula_rgb_set(regen_row, regen_col, (v == 1) ? 255 : 0, v ? 255 : 0, 0);
             break;
         case RF_DIAG_QCOUNT:
         case RF_DIAG_MISSES:
-            /* compteur : rouge d'autant plus vif qu'il monte */
+            /* counter: brighter red as the count increases */
             aula_rgb_set(regen_row, regen_col, v ? (uint8_t)(40 + v * 35) : 0, 0, 0);
             break;
         default:
-            /* booléen : vert = 1, rouge = 0 */
+            /* boolean: green = 1, red = 0 */
             aula_rgb_set(regen_row, regen_col, v ? 0 : 255, v ? 255 : 0, 0);
             break;
     }
@@ -763,35 +758,34 @@ static bool rf_diag_paint(void)
 #endif /* RF_EUART0 */
 
 /*
- * Témoin de frappe automatique : un COEUR QUI BAT, en rouge, sur tout le clavier.
+ * Auto-typing indicator: a BEATING HEART, in red, across the entire keyboard.
  *
- * Deux coups par cycle -- le « poum-poum » d'un vrai coeur, pas une respiration.
- * Le premier (systole) frappe fort, le second, 227 ms plus tard, frappe moins
- * fort, puis vient un long repos à lueur faible qui garde le mode signalé.
+ * Two beats per cycle -- the "lub-dub" of a real heart, not a breathing ramp.
+ * The first (systole) hits hard, the second, 227 ms later, hits softer,
+ * followed by a long low-glow rest that keeps the active mode visible.
  *
- * CADENCE. Un pas de table par balayage complet de régénération, c'est-à-dire
- * quatre-vingt-dix sous-trames de ~421 µs, soit ~37,9 ms. Vingt-quatre pas font
- * 909 ms par battement : **66 pulsations par minute**, un pouls au repos.
+ * TIMING. One table step per full regeneration sweep, i.e. ninety subframes of
+ * ~421 µs, or ~37.9 ms. Twenty-four steps give 909 ms per heartbeat: **66 beats
+ * per minute**, a resting pulse.
  *
- * Pourquoi le balayage complet et pas un rythme choisi librement : les quatre-
- * vingt-dix cellules sont repeintes UNE PAR SOUS-TRAME, pas toutes ensemble. Une
- * cadence qui ne serait pas celle du balayage ferait tomber le changement de
- * valeur au milieu d'un cycle de repeinte, et le clavier montrerait une couture
- * -- une moitié au coup d'avant, l'autre au coup d'après. En avançant sur le
- * bouclage du balayage, le panneau entier porte toujours la même valeur.
+ * Why sync to the full sweep rather than an arbitrary rate: the ninety cells
+ * are repainted ONE PER SUBFRAME, not all at once. Any rate not aligned with
+ * the sweep would change the value mid-repaint, showing a visible seam across
+ * the keyboard -- half at the old step, half at the new one. Advancing on
+ * sweep wrap ensures the entire panel always displays the same value.
  *
- * VALEURS. `aula_rgb_duty()` est linéaire (`valeur << 2`), donc ce sont bien des
- * intensités. Le plancher à 12 reste visible dans le noir sans éclairer la
- * pièce ; le pic à 170 claque sans éblouir. Comme le diagnostic radio, la table
- * court-circuite la luminosité utilisateur : le témoin doit rester lisible
- * réglage à zéro et effet éteint.
+ * VALUES. `aula_rgb_duty()` is linear (`value << 2`), so these are true
+ * intensities. The floor at 12 stays visible in the dark without lighting up
+ * the room; the peak at 170 pops without dazzling. Like the radio diagnostic,
+ * the table bypasses user brightness: the indicator must remain visible even
+ * with brightness at zero and effects turned off.
  */
 #define MACRO_HEART_STEPS 24
 
 static const __code uint8_t macro_heart[MACRO_HEART_STEPS] = {
-    170, 140,  96,  60,  36,  24, /* systole : attaque sèche, chute rapide */
-    120,  92,  62,  40,  26,  18, /* diastole : plus faible, même profil    */
-     14,  12,  12,  12,  12,  12, /* repos : ~455 ms de lueur faible        */
+    170, 140,  96,  60,  36,  24, /* systole: sharp attack, fast decay */
+    120,  92,  62,  40,  26,  18, /* diastole: softer, same profile    */
+     14,  12,  12,  12,  12,  12, /* rest: ~455 ms of dim glow         */
      12,  12,  12,  12,  12,  12,
 };
 
@@ -799,90 +793,91 @@ static __xdata uint8_t macro_beat;
 static __bit           macro_was_on;
 
 /*
- * Les huit teintes du battement de molette, du rouge au violet.
+ * The eight hues of the encoder heartbeat, from red to violet.
  *
- * Le trajet est le COURT : rouge -> rose -> magenta -> violet, sans passer par
- * le jaune, le vert ni le cyan. C'est la plage demandée, et elle a l'avantage
- * de rester lisible d'un coup d'oeil -- huit teintes voisines se comparent,
- * huit teintes de l'arc-en-ciel se confondent avec le moteur d'effets.
+ * Takes the SHORT path around the wheel: red -> pink -> magenta -> violet,
+ * without passing through yellow, green, or cyan. That is the requested range,
+ * and it has the advantage of being readable at a glance -- eight neighboring
+ * hues are easy to compare, whereas eight full-rainbow hues blend in with the
+ * effect engine.
  *
- * Teinte pure, saturation et valeur au maximum : c'est le motif du coeur qui
- * porte la luminosité, la table ne porte que la couleur.
+ * Pure hue, full saturation and value: the heartbeat pattern carries the
+ * brightness, while this table only carries the color.
  */
 static const __code uint8_t enc_beat_hue[8][3] = {
-    {255,   0,   0}, /* 0 - rouge      */
+    {255,   0,   0}, /* 0 - red                              */
     {255,   0,  55},
     {255,   0, 109},
-    {255,   0, 164}, /* 3 - le cran de départ, rose magenta */
+    {255,   0, 164}, /* 3 - starting step, magenta-pink      */
     {255,   0, 218},
     {237,   0, 255},
     {182,   0, 255},
-    {128,   0, 255}, /* 7 - violet     */
+    {128,   0, 255}, /* 7 - violet                           */
 };
 
-/* Le battement de la molette rejoue le MÊME motif que le coeur, à une cadence
- * variable. L'accumulateur en 1/256e de pas évite une division par bouclage. */
+/* The encoder heartbeat replays the SAME pattern as the macro heart, at a
+ * variable rate. The 1/256th-step accumulator avoids a division on wrap. */
 static __xdata uint8_t  enc_beat;
 static __xdata uint16_t enc_acc;
 static __bit            enc_was_beating;
 
-/* ------------------------------------------------------------ Verr. Maj
+/* ------------------------------------------------------------------ Caps Lock
  *
- * Le rapport LED HID de l'hôte arrive par `usb_ep0_out_irq()` et atterrit dans
- * `keyboard_state.led_state` : bit 0 Verr. Num, **bit 1 Verr. Maj**, bit 2
- * Arrêt défil. Ce clavier n'a pas de voyant dédié -- c'est la touche elle-même
- * qui s'allume, en blanc, sur sa position de grille.
+ * The host's HID LED report arrives via `usb_ep0_out_irq()` and lands in
+ * `keyboard_state.led_state`: bit 0 Num Lock, **bit 1 Caps Lock**, bit 2
+ * Scroll Lock. This keyboard has no dedicated indicator -- the key itself
+ * lights up, in white, at its grid position.
  *
- * ⚠️ FILAIRE UNIQUEMENT. En 2,4 GHz et en Bluetooth l'USB est démonté, et rien
- * dans le protocole EUART0 décodé à ce jour ne remonte l'état LED de l'hôte.
- * `rf_radio_on()` remet donc `led_state` à zéro : mieux vaut ne rien afficher
- * qu'afficher une information périmée.
+ * ⚠️ WIRED ONLY. In 2.4 GHz and Bluetooth modes USB is unmounted, and nothing
+ * in the EUART0 protocol decoded so far reports the host LED state back.
+ * `rf_radio_on()` therefore resets `led_state` to zero: showing nothing is
+ * better than showing stale state.
  */
 #define HID_LED_CAPS_LOCK (1u << 1)
 
 /*
- * LE VOYANT EST UNE LED DÉDIÉE, ET CE N'EST PAS UNE LED : C'EST UN CANAL.
+ * THE INDICATOR IS A DEDICATED LED, AND IT IS NOT AN LED: IT IS A CHANNEL.
  *
- * Établi sur l'appareil, par balayage puis par sondage canal par canal. La
- * position `[ligne 0][colonne 14]` -- électriquement l'appui molette, en haut à
- * droite -- porte une position RGB complète dont les **trois canaux pilotent des
- * voyants d'état distincts**, physiquement ailleurs sur la carte :
+ * Established on the device, first by scanning and then by probing channel by
+ * channel. Position `[row 0][col 14]` -- electrically the encoder press, top
+ * right -- carries a full RGB position whose **three channels drive distinct
+ * status indicators** physically located elsewhere on the board:
  *
- *   ROUGE -> voyant de Verr. Maj, à GAUCHE de la touche Verr. Maj
- *   VERT  -> voyant entre Échap et F1
- *   BLEU  -> le même voyant entre Échap et F1
+ *   RED   -> Caps Lock indicator, to the LEFT of the Caps Lock key
+ *   GREEN -> indicator between Esc and F1
+ *   BLUE  -> the same indicator between Esc and F1
  *
- * Les voyants d'état sont des LED à une seule couleur : l'usine se sert d'un
- * emplacement libre comme de trois pilotes indépendants. Écrire du blanc ici
- * allume les deux voyants à la fois -- c'est ce qui s'est passé au premier essai.
+ * The status indicators are single-color LEDs: the factory uses a spare matrix
+ * slot as three independent drivers. Writing white here lights both indicators
+ * at once -- which is what happened on the first try.
  *
- * Deux affirmations de nos sources tombent avec cette mesure :
- *  - « l'appui d'encodeur n'a pas de LED » (layout.c, aula-f75.md) : la POSITION
- *    en a une, et même trois canaux utiles ; c'est la TOUCHE qui n'a rien sous
- *    son capuchon ;
- *  - « ce clavier n'a aucun voyant dédié » : il en a au moins deux.
+ * Two claims from our earlier sources fall with this measurement:
+ *  - "the encoder press has no LED" (layout.c, aula-f75.md): the POSITION does
+ *    have one, and even three useful channels; it is the KEY that has nothing
+ *    under its cap;
+ *  - "this keyboard has no dedicated indicator": it has at least two.
  *
- * C'est aussi l'explication du comptage d'OpenRGB, qui ne rattache que
- * QUATRE-VINGTS des quatre-vingt-dix LED à une touche : les dix autres ne sont
- * pas des trous, ce sont des LED réelles sans capuchon au-dessus.
+ * This also explains OpenRGB's count, which maps only EIGHTY of the ninety
+ * LEDs to a key: the other ten are not all empty holes, some are real LEDs
+ * without a keycap above them.
  *
- * Conséquence : cette cellule doit être peinte explicitement, canal par canal.
- * Sans ça les effets font clignoter les deux voyants au hasard -- ce qu'ils
- * faisaient depuis le premier flash.
+ * Consequence: this cell must be painted explicitly, channel by channel.
+ * Otherwise effects blink both status indicators at random -- which is what
+ * they did from the very first flash.
  *
- * Le voyant Échap/F1 (vert et bleu) porte les motifs d'état : transport,
- * appairage, veille, batterie faible. Voir `aula_status.c`. Les deux canaux
- * allument la MÊME LED blanche et leurs intensités s'ajoutent -- il n'y a ni
- * couleur ni second voyant à exploiter, seulement du rythme.
+ * The Esc/F1 indicator (green and blue) carries status patterns: transport,
+ * pairing, sleep, low battery. See `aula_status.c`. Both channels drive the
+ * SAME white LED and their intensities add up -- there is neither color nor a
+ * second indicator to exploit, only rhythm.
  */
 #define CAPS_ROW 0
 #define CAPS_COL 14
 
-/* Le canal est piloté à fond : le voyant est une LED unique derrière un diffuseur,
- * pas un capuchon rétroéclairé, et sa couleur est celle du composant -- pas la
- * nôtre. Comme les autres overlays, il court-circuite la luminosité utilisateur :
- * un témoin invisible réglage à zéro ne sert à rien, et c'est réglage à zéro
- * qu'on oublie le plus facilement Verr. Maj. */
+/* The channel is driven at full scale: the indicator is a single LED behind a
+ * diffuser, not a backlit keycap, and its color comes from the LED component
+ * itself -- not from us. Like the other overlays, it bypasses user brightness:
+ * an indicator that turns invisible at zero brightness is useless, and zero
+ * brightness is precisely when Caps Lock is easiest to forget. */
 #define CAPS_LEVEL 255
 
 static __bit caps_on;
@@ -893,32 +888,31 @@ static void led_regen_one(void)
     uint8_t       rgb[3];
 
     /*
-     * SUPPRESSION DES POSITIONS SANS TOUCHE, transcrite du moteur d'usine.
+     * SUPPRESSION OF KEYLESS POSITIONS, transcribed from the factory engine.
      *
-     * Les moteurs continus ne peignent pas la grille entière : `0x82A5` lit la
-     * position de la touche dans la table A (`CODE 0x2EED`) et ne rend QUE si
-     * elle est inférieure à quinze, puis passe encore par `rgb_key_suppressed`
-     * (`0x598F`) ; `0x6C9B` fait le même test avant d'écrire. Six des quatre-
-     * vingt-dix emplacements de la grille 6 x 15 ne portent aucune touche, et
-     * cette page les tient de `CODE 0xC500`.
+     * Continuous engines do not paint the entire grid: `0x82A5` reads the key
+     * position from table A (`CODE 0x2EED`) and ONLY renders if it is less
+     * than fifteen, then also checks `rgb_key_suppressed` (`0x598F`); `0x6C9B`
+     * performs the same check before writing. Six of the ninety slots in the
+     * 6 x 15 grid have no key at all, and this page gets them from
+     * `CODE 0xC500`.
      *
-     * Les semeurs du plan d'intensité testaient déjà la présence ; les chemins
-     * continus -- vague, arc-en-ciel vertical, uni, géométrie de SMK -- ne le
-     * faisaient pas et payaient une recherche de couleur pour rien.
+     * The intensity-plane seeders already checked for key presence; the
+     * continuous paths -- wave, vertical rainbow, solid, SMK geometry -- did
+     * not, paying a color lookup for nothing.
      */
     if (aula_fx_key_id(regen_col, regen_row) == AULA_FX_NO_KEY) {
-        /* Hissé en tête de chaîne : les overlays qui suivent peignent en dur, et
-         * peindre ces six trous allumerait des LED là où il n'y a pas de
-         * capuchon. */
+        /* Hoisted to the top of the chain: the overlays below paint
+         * unconditionally, and painting these six holes would light up LEDs
+         * where there is no keycap. */
         aula_rgb_set(regen_row, regen_col, 0, 0, 0);
         goto advance;
     }
 
     if (regen_row == CAPS_ROW && regen_col == CAPS_COL) {
-        /* Voyants d'état : jamais peints par les effets ni par le cœur de la
-         * frappe automatique. Rouge = Verr. Maj ; vert et bleu = le voyant
-         * Échap/F1, la même valeur sur les deux puisqu'ils s'additionnent sur
-         * une LED unique. */
+        /* Status indicators: never painted by effects or by the auto-typing
+         * heartbeat. Red = Caps Lock; green and blue = the Esc/F1 indicator,
+         * driven with the same value since both sum onto a single LED. */
         const uint8_t st = aula_status_level();
 
         aula_rgb_set(regen_row, regen_col, caps_on ? (uint8_t)CAPS_LEVEL : (uint8_t)0, st, st);
@@ -927,17 +921,17 @@ static void led_regen_one(void)
 
 #ifdef RF_EUART0
     if (rf_diag_on && rf_diag_paint()) {
-        goto advance; /* cellule prise par le diagnostic */
+        goto advance; /* cell claimed by the diagnostic overlay */
     }
 #endif
 
     if (aula_macro_active()) {
         /*
-         * Témoin de la frappe automatique : tout le clavier en rouge sourd, et
-         * le moteur d'effets court-circuité pour la durée. Comme le diagnostic,
-         * il ignore la luminosité utilisateur -- il doit rester visible réglage
-         * à zéro, et surtout effet ÉTEINT, qui est précisément l'état dans
-         * lequel on laisse le clavier tourner seul.
+         * Auto-typing indicator: the entire keyboard pulses deep red, and the
+         * effect engine is bypassed for the duration. Like the diagnostic, it
+         * ignores user brightness -- it must remain visible at zero brightness,
+         * and especially when effects are OFF, which is the exact state in
+         * which the keyboard is left running unattended.
          */
         aula_rgb_set(regen_row, regen_col, macro_heart[macro_beat], 0, 0);
         goto advance;
@@ -945,12 +939,13 @@ static void led_regen_one(void)
 
     if (aula_encoder_beating()) {
         /*
-         * Retour de rotation : même motif que la frappe automatique, mais la
-         * TEINTE dit le cran -- rouge en bas, violet en haut -- pendant que la
-         * CADENCE dit le sens. Deux grandeurs, deux canaux, rien à confondre.
+         * Rotation feedback: same pattern as auto-typing, but HUE indicates
+         * the step -- red at the bottom, violet at the top -- while TEMPO
+         * indicates direction. Two quantities, two channels, nothing to
+         * confuse.
          *
-         * Court-circuite la luminosité utilisateur, comme tous les overlays de
-         * ce fichier : un retour qu'on ne voit pas n'est pas un retour.
+         * Bypasses user brightness, like all overlays in this file: feedback
+         * you cannot see is not feedback.
          */
         const uint8_t lvl = aula_encoder_beat_level();
         const uint8_t v   = macro_heart[enc_beat];
@@ -962,20 +957,20 @@ static void led_regen_one(void)
 
     if (user_settings.led_effect >= AULA_FX_OFF) {
         /*
-         * Effet éteint. Ce cas n'arrivait pas avant les overlays :
-         * `indicators_update_step()` sautait tout le rendu quand l'effet valait
-         * AULA_FX_OFF. Il l'appelle maintenant pour peindre le diagnostic et le
-         * témoin de macro, donc ce chemin doit rendre du noir plutôt que de
-         * tomber dans la branche géométrique -- qui passerait l'indice 15 à
-         * `led_effect_index()`, dont l'énumération s'arrête à 3.
+         * Effect off. This case was unreachable before overlays were added:
+         * `indicators_update_step()` skipped rendering altogether when the
+         * effect was AULA_FX_OFF. It now calls into here to paint the
+         * diagnostic and macro indicators, so this path must output black
+         * rather than falling through to the geometric branch -- which would
+         * pass index 15 to `led_effect_index()`, whose enum stops at 3.
          */
         aula_rgb_set(regen_row, regen_col, 0, 0, 0);
     } else if (user_settings.led_effect >= AULA_FX_REACTIVE &&
         user_settings.led_effect <= AULA_FX_LAKE) {
         /*
-         * Le front de l'onde, pour le lac : cette cellule est-elle exactement à
-         * la distance atteinte par l'une des gouttes ? Quatre comparaisons, une
-         * seule fois par cellule et par sous-trame.
+         * Wavefront check for the lake effect: is this cell at the exact
+         * distance reached by one of the drops? Four comparisons, once per
+         * cell per subframe.
          */
         if (user_settings.led_effect == AULA_FX_LAKE) {
             uint8_t i;
@@ -988,9 +983,9 @@ static void led_regen_one(void)
                 }
             }
         }
-        /* Les six effets à plan d'intensité : le rendu est le même pour tous,
-         * seul le semeur diffère. La décroissance vit ici parce que chaque
-         * cellule est régénérée exactement une fois par trame. */
+        /* The six intensity-plane effects: rendering is identical for all of
+         * them, only the seeder differs. Decay lives here because each cell is
+         * regenerated exactly once per frame. */
         const uint8_t val = spark_val[regen_col][regen_row];
 
         if (val == 0) {
@@ -1003,12 +998,12 @@ static void led_regen_one(void)
                          led_scale(rgb[2], k));
             if (spark_decay_due) {
                 /*
-                 * Le lac décroît TROIS FOIS plus vite que le moteur réactif.
-                 * À 8 par trame, la traîne dure 32 trames alors que l'onde met
-                 * 25 trames à traverser le clavier : le sillage rattraperait le
-                 * front et on verrait un disque qui s'allume, pas une ride. À 24,
-                 * la traîne fait une dizaine de trames -- un anneau avec son
-                 * sillage derrière. C'est un CHOIX, propre à cet effet.
+                 * The lake decays THREE TIMES faster than the reactive engine.
+                 * At 8 per frame, the wake lasts 32 frames while the wave takes
+                 * 25 frames to cross the keyboard: the wake would blur into the
+                 * front and look like an expanding disk rather than a ripple.
+                 * At 24, the wake is about ten frames wide -- a ring with a
+                 * trailing tail. This is a deliberate CHOICE for this effect.
                  */
                 const uint8_t decay =
                     (user_settings.led_effect == AULA_FX_LAKE) ? (uint8_t)24 : SPARK_DECAY;
@@ -1018,10 +1013,10 @@ static void led_regen_one(void)
         }
     } else if (user_settings.led_effect == AULA_FX_VRAINBOW) {
         /*
-         * Arc-en-ciel vertical défilant -- transcrit de 0x9659 : la teinte
-         * avance de 25 crans PAR LIGNE, modulo 192, et sa base défile d'une
-         * trame à l'autre. Six lignes x 25 couvrent 150 des 192 entrées, donc
-         * un arc-en-ciel presque complet du haut vers le bas du clavier.
+         * Scrolling vertical rainbow -- transcribed from 0x9659: hue advances
+         * by 25 steps PER ROW, modulo 192, and its base scrolls from frame to
+         * frame. Six rows x 25 cover 150 of the 192 entries, spanning nearly a
+         * full rainbow from top to bottom of the keyboard.
          */
         const uint8_t hue = (uint8_t)((fx_phase192 + (uint8_t)(regen_row * 25u)) %
                                       AULA_RGB_WHEEL_SIZE);
@@ -1031,23 +1026,23 @@ static void led_regen_one(void)
                      led_scale(rgb[2], gain));
     } else if (user_settings.led_effect == AULA_FX_KEYWAVE) {
         /*
-         * Vague sur la palette de 128 -- 0x82A5, désormais entièrement
-         * transcrite : la palette, l'avance d'un cran par trame et par touche
-         * (0xEDA2), ET le champ de phase par touche.
+         * Wave over the 128-entry palette -- 0x82A5, now fully transcribed:
+         * the palette, the one-step-per-frame-per-key advance (0xEDA2), AND
+         * the per-key phase field.
          *
-         * Ce dernier était donné ici comme notre invention faute d'en trouver
-         * l'écrivain. Il n'y en a pas : c'est un tableau CONSTANT que
-         * l'initialiseur C dépose en XDATA 0x0E49 et que 0xACA3 transpose dans
-         * le plan 0x0017. `aula_fx_keywave()` le porte tel quel.
+         * The phase field was previously noted as our own invention for lack
+         * of finding its writer. There is no runtime writer: it is a CONSTANT
+         * array that the C initializer places at XDATA 0x0E49 and that 0xACA3
+         * transposes into plane 0x0017. `aula_fx_keywave()` carries it as-is.
          *
-         * Chaque touche part de sa phase et avance d'un cran par trame, ce qui
-         * revient exactement à `phase_de_la_touche + compteur de trames`. Aucun
-         * état à tenir : la fonction est pure.
+         * Each key starts at its initial phase and advances by one step per
+         * frame, which reduces to `key_phase + frame_counter`. No per-key
+         * state needed: the function is pure.
          */
         const uint8_t idx = (uint8_t)(aula_fx_keywave(regen_col, regen_row) + led_phase);
 
         if (user_settings.ul_effect >= AULA_FX_COLOR_WHEEL) {
-            aula_fx_palette(idx, rgb); /* la seconde roue d'usine, 128 teintes */
+            aula_fx_palette(idx, rgb); /* the second factory wheel, 128 hues */
         } else {
             aula_fx_color(user_settings.ul_effect, rgb);
         }
@@ -1055,14 +1050,13 @@ static void led_regen_one(void)
                      led_scale(rgb[2], gain));
     } else if (user_settings.led_effect == AULA_FX_GAMING) {
         /*
-         * Image statique de CODE 0xCAFC : Échap, A W S D et le pavé fléché.
+         * Static image from CODE 0xCAFC: Esc, W A S D, and the arrow cluster.
          *
-         * Le bleu codé en dur qui était ici reposait sur une lecture fausse de
-         * la table -- trois plans de couleur dont seul le bleu serait non nul.
-         * `0xCAFC` est en réalité un MASQUE d'un octet par touche, sans aucune
-         * couleur (voir aula_fx.c). La couleur vient donc du mode de couleur,
-         * comme pour tous les autres effets ; le bleu reste accessible, c'est
-         * le mode 2.
+         * The hardcoded blue that used to be here was based on a misreading of
+         * the table -- three color planes of which only blue was non-zero.
+         * `0xCAFC` is actually a one-byte-per-key MASK with no embedded color
+         * (see aula_fx.c). The color therefore comes from the color mode, just
+         * like every other effect; blue remains available as mode 2.
          */
         if (aula_fx_gaming(regen_col) & (uint8_t)(1u << regen_row)) {
             fx_color(led_phase, rgb);
@@ -1073,22 +1067,22 @@ static void led_regen_one(void)
         }
     } else if (user_settings.led_effect == AULA_FX_SHIMMER) {
         /*
-         * Scintillement -- effet d'usine 6, moteur `0x60C9`, transcrit.
+         * Shimmer -- factory effect 6, engine `0x60C9`, transcribed.
          *
-         * Chaque touche porte sa propre phase, semée par `0xA791` depuis l'une
-         * de deux tables selon le mode de couleur, et avance d'un pas par trame
-         * via `0xEDA2(phase, 0xC0 ou 0x60)`. Comme toutes les touches avancent
-         * du même pas, la phase courante vaut `semence + compteur de trames` :
-         * aucun état à tenir, la même astuce que la vague.
+         * Each key carries its own phase, seeded by `0xA791` from one of two
+         * tables depending on the color mode, and advances by one step per
+         * frame via `0xEDA2(phase, 0xC0 or 0x60)`. Since all keys advance by
+         * the same step, the current phase equals `seed + frame_counter`: no
+         * state to maintain, using the same trick as the wave.
          *
-         * En arc-en-ciel la phase indexe la roue modulo 192 ; en couleur fixe
-         * elle indexe la rampe de respiration modulo 96, et la couleur fixe est
-         * mise à l'échelle par cette rampe. Le moteur d'usine fait exactement
-         * ces deux choses, dans ces deux modules.
+         * In rainbow mode the phase indexes the color wheel modulo 192; in
+         * fixed-color mode it indexes the breathing ramp modulo 96, and the
+         * fixed color is scaled by that ramp. The factory engine does both of
+         * these things, with those exact moduli.
          *
-         * `led_phase` avance de `led_speeds[vitesse]` et non de un : c'est le
-         * choix de ce portage, déjà expliqué plus haut, et il est appliqué ici
-         * comme à la vague.
+         * `led_phase` advances by `led_speeds[speed]` rather than by one: that
+         * is this port's design choice, explained above, and applied here just
+         * like on the wave.
          */
         if (user_settings.ul_effect >= AULA_FX_COLOR_WHEEL) {
             const uint16_t p = (uint16_t)aula_fx_shimmer_phase(regen_col, regen_row, 1) + fx_phase192;
@@ -1107,30 +1101,30 @@ static void led_regen_one(void)
         }
     } else if (user_settings.led_effect == (uint8_t)FX_SOLID) {
         /*
-         * Le blanc en dur était une invention : l'effet d'usine d'indice 3
-         * (`0x9DA4`) est « une matrice d'une seule couleur, teinte calculée hors
-         * boucle ». Cette couleur, c'est le choix de couleur -- la roue à la
-         * phase courante en arc-en-ciel, la couleur fixe sinon. Le blanc reste
-         * accessible : c'est le mode 6.
+         * Hardcoded white was an invention: factory effect index 3 (`0x9DA4`)
+         * is "a single-color matrix, with hue computed outside the loop". That
+         * color comes from the color mode -- the color wheel at the current
+         * phase in rainbow mode, or the fixed color otherwise. White remains
+         * available as mode 6.
          */
         fx_color(led_phase, rgb);
         aula_rgb_set(regen_row, regen_col, led_scale(rgb[0], gain), led_scale(rgb[1], gain),
                      led_scale(rgb[2], gain));
     } else {
         /*
-         * Géométrie de SMK, couleurs d'usine : l'index sur 0-255 est ramené aux
-         * 192 entrées de la roue.
+         * SMK geometry, factory colors: the 0-255 index is rescaled to the 192
+         * entries of the color wheel.
          *
-         * La colonne passée n'est PAS la colonne électrique mais la colonne
-         * SPATIALE, tirée de la table A d'usine (`CODE 0x2EED`). La géométrie
-         * générée suppose une grille uniforme -- `axis_x[col] = col * 17` -- et
-         * cette hypothèse est fausse sur la ligne 4, où la colonne électrique 12
-         * se trouve entre les colonnes 0 et 1. Sans cette conversion, le
-         * dégradé horizontal et l'onde radiale placent cette touche-là au
-         * mauvais endroit.
+         * The column passed in is NOT the electrical column but the SPATIAL
+         * column, taken from factory table A (`CODE 0x2EED`). The generated
+         * geometry assumes a uniform grid -- `axis_x[col] = col * 17` -- and
+         * that assumption fails on row 4, where electrical column 12 sits
+         * physically between columns 0 and 1. Without this conversion, the
+         * horizontal gradient and radial wave place that key in the wrong
+         * spot.
          *
-         * La LIGNE, elle, n'a besoin d'aucune conversion : la table B d'usine
-         * (`CODE 0x2F6B`) est exactement l'index de ligne sur ses 126 positions.
+         * The ROW, on the other hand, needs no conversion: factory table B
+         * (`CODE 0x2F6B`) is identical to the row index across all 126 slots.
          */
         const uint8_t idx =
             led_effect_index((led_effect_t)user_settings.led_effect, regen_row,
@@ -1146,13 +1140,13 @@ advance:
         regen_col = 0;
         if (++regen_row >= LED_ROWS) {
             regen_row = 0;
-            /* Le panneau vient d'être repeint en entier : le coeur peut avancer
-             * d'un pas sans couper la trame en deux. */
+            /* The entire panel has just been repainted: the heartbeat can
+             * advance by one step without tearing the frame in half. */
             if (++macro_beat >= MACRO_HEART_STEPS) {
                 macro_beat = 0;
             }
-            /* La cadence de la molette est fractionnaire : au plus trois pas par
-             * bouclage à la vitesse maximale, donc la boucle est bornée. */
+            /* The encoder heartbeat rate is fractional: at most three steps
+             * per wrap at maximum speed, so the loop is bounded. */
             if (aula_encoder_beating()) {
                 enc_acc = (uint16_t)(enc_acc + aula_encoder_beat_rate());
                 while (enc_acc >= 256u) {
@@ -1163,8 +1157,8 @@ advance:
                 }
             }
             aula_status_tick();
-            /* La phase avance DANS la porte de trame, comme en usine : le rendu
-             * d'usine est entièrement conditionné à `tic >= période`. */
+            /* Phase advances INSIDE the frame gate, as in the factory firmware:
+             * factory rendering is gated on `tick >= period`. */
             spark_decay_due = fx_frame_advance();
         }
     }
@@ -1173,19 +1167,18 @@ advance:
 void indicators_pre_update(void)
 {
     /*
-     * `matrix.c` laisse les colonnes en ENTRÉE derrière lui
-     * (`user_matrix_scan_post`). Il faut les reprendre en sortie avant de
-     * pouvoir en sélectionner une pour l'affichage.
+     * `matrix.c` leaves the columns configured as INPUTS when it finishes
+     * (`user_matrix_scan_post`). We must switch them back to outputs before
+     * selecting one for display.
      */
     user_matrix_scan_pre();
     indicators_pwm_disable();
 }
 
 /*
- * Détection des frappes pour le moteur réactif : une colonne par sous-trame,
- * donc chaque colonne est examinée une fois par balayage LED -- exactement la
- * cadence à laquelle `matrix.c` la rafraîchit. Seuls les fronts comptent, une
- * touche maintenue ne réamorce pas.
+ * Keypress detection for the reactive engine: one column per subframe, so each
+ * column is checked once per LED sweep -- the exact rate at which `matrix.c`
+ * refreshes it. Only rising edges count; holding a key down does not retrigger.
  */
 static void led_react_poll(void)
 {
@@ -1211,13 +1204,13 @@ static void led_react_poll(void)
 
 bool indicators_update_step(keyboard_state_t *keyboard, uint8_t current_step)
 {
-    (void)current_step;  /* `tick.c` passe toujours 0 */
+    (void)current_step;  /* `tick.c` always passes 0 */
 
     caps_on = (keyboard->led_state & HID_LED_CAPS_LOCK) ? 1 : 0;
 
-    /* La sous-trame LED est la seule base de temps régulière du firmware --
-     * ~400 µs -- et c'est à cette cadence que l'usine échantillonne aussi sa
-     * molette, depuis son ISR PWM. */
+    /* The LED subframe is the only regular timebase in the firmware --
+     * ~400 µs -- and that is the same rate at which the factory firmware
+     * samples its encoder from its PWM ISR. */
     aula_encoder_sample();
     aula_macro_tick();
     aula_layout_tick();
@@ -1225,7 +1218,7 @@ bool indicators_update_step(keyboard_state_t *keyboard, uint8_t current_step)
     if (aula_macro_active()) {
         if (!macro_was_on) {
             macro_was_on = 1;
-            macro_beat   = 0; /* le mode démarre sur un coup, pas au milieu du repos */
+            macro_beat   = 0; /* start on a beat, not mid-rest */
         }
     } else {
         macro_was_on = 0;
@@ -1234,7 +1227,7 @@ bool indicators_update_step(keyboard_state_t *keyboard, uint8_t current_step)
     if (aula_encoder_beating()) {
         if (!enc_was_beating) {
             enc_was_beating = 1;
-            enc_beat        = 0; /* démarrer sur un coup, pas au milieu du repos */
+            enc_beat        = 0; /* start on a beat, not mid-rest */
             enc_acc         = 0;
         }
     } else {
@@ -1255,8 +1248,8 @@ bool indicators_update_step(keyboard_state_t *keyboard, uint8_t current_step)
 #endif
         led_regen_one();
 
-        /* Charger les dix-huit rapports cycliques PENDANT que les bancs sont
-         * parqués, puis sélectionner la colonne, puis seulement rallumer. */
+        /* Load all eighteen duty cycles WHILE the banks are parked, then
+         * select the column, and only then re-enable PWM. */
         aula_rgb_load_column(led_col);
         user_matrix_col_select(led_col);
         indicators_pwm_enable();
@@ -1264,7 +1257,7 @@ bool indicators_update_step(keyboard_state_t *keyboard, uint8_t current_step)
 
     if (++led_col >= LED_COLS) {
         led_col = 0;
-        return true; /* trame bouclée -- c'est ce que `sleep.c` compte */
+        return true; /* frame complete -- this is what `sleep.c` counts */
     }
     return false;
 }
@@ -1273,16 +1266,16 @@ void indicators_post_update(void)
 {
 }
 
-/* ------------------------------------------------------------- réglages */
+/* ----------------------------------------------------------------- settings */
 
 void indicators_apply_defaults(void)
 {
-    user_settings.led_effect     = AULA_FX_LAKE; /* demandé comme défaut */
+    user_settings.led_effect     = AULA_FX_LAKE; /* requested as default */
     user_settings.led_brightness = LED_BRIGHTNESS_DEFAULT;
     user_settings.led_speed      = LED_SPEED_DEFAULT;
-    user_settings.ul_effect      = AULA_FX_COLOR_WHEEL; /* arc-en-ciel, comme en usine */
-    user_settings.ul_brightness  = 0;                   /* sens avant, bit 0x23 effacé */
-    user_settings.ul_speed       = 0;                   /* compensation AZERTY éteinte */
+    user_settings.ul_effect      = AULA_FX_COLOR_WHEEL; /* rainbow, as in factory firmware */
+    user_settings.ul_brightness  = 0;                   /* forward direction, bit 0x23 cleared */
+    user_settings.ul_speed       = 0;                   /* AZERTY compensation off */
 }
 
 void indicators_validate_settings(void)
@@ -1306,9 +1299,9 @@ void indicators_validate_settings(void)
         user_settings.ul_speed = 0;
     }
 
-    /* La compensation AZERTY est persistée dans `ul_speed` -- voir
-     * `aula_layout.c`. C'est ici qu'elle est rendue au module, et pas dans
-     * `kb_init()` : celui-ci tourne AVANT `restore_settings()`. */
+    /* AZERTY compensation is persisted in `ul_speed` -- see `aula_layout.c`.
+     * It is restored to the module here rather than in `kb_init()`, which runs
+     * BEFORE `restore_settings()`. */
     aula_layout_restore(user_settings.ul_speed != 0);
 }
 
@@ -1328,7 +1321,7 @@ void indicators_start(void)
     indicators_validate_settings();
 }
 
-/* ------------------------------------------------------- actions clavier */
+/* --------------------------------------------------------- keyboard actions */
 
 void indicators_toggle_direction(void)
 {
@@ -1349,7 +1342,7 @@ void indicators_next_effect(void)
     if (++user_settings.led_effect > AULA_FX_OFF) {
         user_settings.led_effect = 0;
     }
-    aula_rgb_clear(); /* l'effet précédent laisserait ses pixels derrière lui */
+    aula_rgb_clear(); /* the previous effect would leave its pixels behind */
     fx_reset();
     settings_mark_dirty();
 }

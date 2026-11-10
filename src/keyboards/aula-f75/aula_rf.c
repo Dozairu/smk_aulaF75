@@ -12,80 +12,79 @@
 #include <string.h>
 
 /*
- * Liaison EUART0 <-> BK3632 de l'AULA F75.
+ * AULA F75 EUART0 <-> BK3632 link.
  *
- * Transcrit du firmware d'usine. Les adresses citées renvoient à
- * `docs/keyboards/aula-f75.md`, qui porte le raisonnement complet.
+ * Transcribed from the factory firmware. Quoted addresses refer to
+ * `docs/keyboards/aula-f75.md`, which carries the full reasoning.
  *
- * ÉTABLI au désassemblage : le débit et les registres, les deux handshakes, le
- * format de trame et sa somme de contrôle, le jeu de commandes, et la machine à
- * états du sélecteur de transport (`fcn.000084E9`) — y compris le fait que la
- * commande 0x01 avec le slot 0 est ce qui fait passer le module en 2,4 GHz.
+ * ESTABLISHED by disassembly: baud rate and registers, both handshakes, frame
+ * format and checksum, command set, and the transport selector state machine
+ * (`fcn.000084E9`) — including the fact that command 0x01 with slot 0 is what
+ * switches the module to 2.4 GHz.
  *
- * INFÉRÉ, et signalé comme tel à chaque endroit : la disposition exacte des
- * octets de charge utile des trames de frappe (0x02 / 0x03), et le champ de la
- * trame d'état qui signale « connecté ».
+ * INFERRED, and flagged as such at every site: the exact byte layout of the
+ * key report frame payloads (0x02 / 0x03), and the status-frame field that
+ * signals "connected".
  *
- * Rien n'a jamais été flashé sur l'appareil : ce code n'a pas été exécuté.
+ * Nothing has ever been flashed to the device: this code has not been executed.
  */
 
-/* ------------------------------------------------------------------ liaison */
+/* --------------------------------------------------------------------- link */
 
 /*
- * Débit : SBRTH/SBRTL/SFINE relevés en 0xB1CE.
+ * Baud rate: SBRTH/SBRTL/SFINE recorded at 0xB1CE.
  *
- *   SBRT   = 0x7FFB (SBRTH bit 7 = SBRTEN, donc la valeur est 0x7FFB)
+ *   SBRT   = 0x7FFB (SBRTH bit 7 = SBRTEN, so the value is 0x7FFB)
  *   Baud   = Fsys / (16 * (32768 - SBRT) + SFINE)
  *          = Fsys / (16 * 5 + 12) = Fsys / 92
- *          = 24 MHz / 92 ~= 260 870 bauds
+ *          = 24 MHz / 92 ~= 260,870 baud
  *
- * On garde les littéraux du firmware d'usine plutôt qu'un calcul depuis un
- * débit nominal : c'est le module en face qui impose la valeur, et elle ne
- * correspond à aucun débit standard.
+ * We keep the factory firmware literals rather than computing from a nominal
+ * baud rate: the peer module dictates the value, and it does not match any
+ * standard baud rate.
  */
 #define RF_SBRTH 0xFF
 #define RF_SBRTL 0xFB
 #define RF_SFINE 0x0C
-#define RF_SCON  0x50 /* mode 1, 8N1, réception activée */
+#define RF_SCON  0x50 /* mode 1, 8N1, reception enabled */
 
-_Static_assert(FREQ_SYS / 92 > 255000 && FREQ_SYS / 92 < 267000, "FREQ_SYS incompatible avec le diviseur d'usine (Fsys/92)");
+_Static_assert(FREQ_SYS / 92 > 255000 && FREQ_SYS / 92 < 267000, "FREQ_SYS incompatible with the factory divider (Fsys/92)");
 
-/* Buffer d'émission : 32 o, la taille exacte de celui du firmware d'usine. */
+/* Transmit buffer: 32 B, the exact size used by the factory firmware. */
 #define RF_TX_MAX 32
 
 /*
- * Réception : le firmware d'usine ne découpe PAS les trames dans son ISR.
+ * Reception: the factory firmware does NOT slice frames in its ISR.
  *
- * Son ISR (0xA544) empile les octets dans un tampon IDATA de 23 octets
- * (0x54-0x6A), jette tout ce qui dépasse, et pose un simple drapeau « octet
- * reçu » (0x24.4). Un étage différé (`fcn.000005EA`) recopie les 23 octets vers
- * XDATA 0x0120, et c'est `euart0_parse` qui dispatche sur l'octet 0 et vérifie
- * la somme À LA POSITION PROPRE AU TYPE :
+ * Its ISR (0xA544) pushes bytes into a 23-byte IDATA buffer (0x54-0x6A), drops
+ * anything beyond that, and sets a simple "byte received" flag (0x24.4). A
+ * deferred stage (`fcn.000005EA`) copies the 23 bytes into XDATA 0x0120, and
+ * `euart0_parse` dispatches on byte 0 and verifies the checksum AT THE OFFSET
+ * SPECIFIC TO EACH TYPE:
  *
- *   0x02  trame d'état  10 octets, somme = 0x55 - Σ[0..8],  comparée à [9]
- *   0x08  conteneur     22 octets, somme = 0x55 - Σ[0..20], comparée à [21]
- *   0x03  annonce       AUCUNE somme vérifiée, longueur non établie
+ *   0x02  status frame  10 bytes, sum = 0x55 - Σ[0..8],  compared with [9]
+ *   0x08  bulk frame    22 bytes, sum = 0x55 - Σ[0..20], compared with [21]
+ *   0x03  announce      NO checksum verified, length not established
  *
- * Une première rédaction de ce fichier attendait 22 octets pour TOUTES les
- * trames et sommait les 21 premiers : le format de la seule 0x08. Une trame
- * d'état de dix octets restait donc en attente, les octets de la suivante
- * complétaient le tampon, la somme échouait toujours, et la liaison était
- * déclarée morte en permanence.
+ * An initial draft of this file waited for 22 bytes for ALL frames and summed
+ * the first 21: the format of 0x08 alone. A ten-byte status frame therefore
+ * stayed pending, bytes from the next frame filled out the buffer, the checksum
+ * always failed, and the link was permanently declared dead.
  */
-#define RF_RX_MAX 23 /* le tampon d'usine, IDATA 0x54-0x6A */
+#define RF_RX_MAX 23 /* factory buffer, IDATA 0x54-0x6A */
 
 /*
- * Longueurs relevées SUR L'APPAREIL, une fois la perte d'octets corrigée. La
- * longueur dépend de l'octet 1 -- la commande acquittée -- et pas du seul type.
+ * Lengths recorded ON HARDWARE, once byte loss was fixed. The length depends
+ * on byte 1 -- the acknowledged command -- and not on the frame type alone.
  *
- *   02 06 00 00 00 02 dd 03 01 6a   DIX octets : la réponse à la sonde d'état
- *   02 01 00 00 00 52               SIX : accusé du link-select
- *   02 02 00 00 00 51               SIX : accusé d'un rapport
- *   03 00 00 00 00 52               SIX : annonce
+ *   02 06 00 00 00 02 dd 03 01 6a   TEN bytes: status probe response
+ *   02 01 00 00 00 52               SIX: link-select ACK
+ *   02 02 00 00 00 51               SIX: report ACK
+ *   03 00 00 00 00 52               SIX: announce
  *
- * Toutes vérifiées par la somme d'usine `0x55 - Σ`. Le portage attendait dix
- * octets pour TOUTE trame de type 0x02 : sur un accusé de six il avalait le
- * début de la trame suivante et ne se recalait jamais.
+ * All verified by the factory checksum `0x55 - Σ`. This port originally waited
+ * for ten bytes on ANY frame of type 0x02: on a six-byte ACK it swallowed the
+ * start of the next frame and never regained sync.
  */
 #define RF_RX_LEN_STATUS 10
 #define RF_RX_LEN_ACK    6
@@ -95,54 +94,54 @@ _Static_assert(FREQ_SYS / 92 > 255000 && FREQ_SYS / 92 < 267000, "FREQ_SYS incom
 #define RF_RX_TYPE_ANNOUNCE 0x03
 #define RF_RX_TYPE_BULK     0x08
 
-#define RF_HDR      0x01 /* octet 0, constant dans les deux sens */
-#define RF_SUM_SEED 0x55 /* somme = 0x55 - Σ, même constante aux deux sens */
+#define RF_HDR      0x01 /* byte 0, constant in both directions */
+#define RF_SUM_SEED 0x55 /* sum = 0x55 - Σ, same constant in both directions */
 
-/* Commandes, relevées une par une sur leurs douze émetteurs. */
-#define RF_CMD_LINK     0x01 /* slot + drapeau d'appairage */
-#define RF_CMD_REPORT_L 0x02 /* trame longue : 27 o de charge */
-#define RF_CMD_REPORT_S 0x03 /* trame courte : 10 o de charge */
-#define RF_CMD_STATUS   0x06 /* requête d'état -> réponse 02 06 ... */
-#define RF_CMD_NAME     0x09 /* nom Bluetooth, 32 octets */
-#define RF_CMD_SETTINGS 0x0B /* un paramètre ; émis en quittant le sans-fil */
-#define RF_CMD_WIRED    0x0E /* passage en filaire */
+/* Commands, recorded one by one across their twelve emitters. */
+#define RF_CMD_LINK     0x01 /* slot + pairing flag */
+#define RF_CMD_REPORT_L 0x02 /* long frame: 27 B payload */
+#define RF_CMD_REPORT_S 0x03 /* short frame: 10 B payload */
+#define RF_CMD_STATUS   0x06 /* status request -> 02 06 ... response */
+#define RF_CMD_NAME     0x09 /* Bluetooth name, 32 bytes */
+#define RF_CMD_SETTINGS 0x0B /* one parameter; sent when leaving wireless mode */
+#define RF_CMD_WIRED    0x0E /* switch to wired mode */
 
 /*
- * Non émises ici, mais relevées sur le firmware d'usine : 0x04 (un paramètre,
- * envoyé périodiquement avec la valeur 3), 0x08 (conteneur à sous-commandes),
- * 0x0C (deux paramètres, 7 et 8, émise depuis la préparation de veille en
- * `0x7D9B` quand `[0x0E3B]` est non nul) et 0x0D (renvoi du pourcentage de
- * batterie AU module, qui est celui qui nous l'a donné). Elles demandent des
- * données que ce portage n'a pas.
+ * Not sent here, but recorded in the factory firmware: 0x04 (one parameter,
+ * sent periodically with value 3), 0x08 (sub-command container), 0x0C (two
+ * parameters, 7 and 8, sent from sleep preparation at `0x7D9B` when `[0x0E3B]`
+ * is non-zero), and 0x0D (sending the battery percentage BACK to the module,
+ * which is the one that gave it to us). They require data that this port does
+ * not have.
  *
- * Le conteneur 0x08 REÇU porte treize sous-codes, tous décodés : cinq écritures
- * de page de configuration (0x01 remap, 0x02 éclairage par touche, 0x03 huit
- * profils, 0x04 réglages, 0x09), sept lectures (0x05, 0x41-0x44, 0x49, 0x4A) et
- * une action, 0x06, qui déclenche la réinitialisation d'usine immédiatement.
- * Aucun n'agit sur l'appairage. Ce portage n'en implémente aucun : il n'expose
- * pas sa configuration au module.
+ * The RECEIVED 0x08 container carries thirteen sub-codes, all decoded: five
+ * configuration page writes (0x01 remap, 0x02 per-key lighting, 0x03 eight
+ * profiles, 0x04 settings, 0x09), seven reads (0x05, 0x41-0x44, 0x49, 0x4A),
+ * and one action, 0x06, which immediately triggers a factory reset. None of
+ * them affect pairing. This port implements none of them: it does not expose
+ * its configuration to the module.
  */
 
-/* Longueurs totales, somme de contrôle comprise. */
+/* Total lengths, checksum included. */
 #define RF_LEN_SHORT     6
 #define RF_LEN_NAME      32
 #define RF_LEN_REPORT_L  30
 #define RF_LEN_REPORT_S  13
 
 /*
- * Drapeau de la commande 0x01 : l'octet 2 du fil. Le firmware d'usine émet 0
- * partout sauf sur un seul chemin, entièrement remonté :
+ * Command 0x01 flag: byte 2 on the wire. The factory firmware sends 0
+ * everywhere except on one single path, traced end-to-end:
  *
- *   clé 0x08 du répartiteur de raccourcis (`0x4136`) -> arm `0x426A`, qui exige
- *   le transport 2,4 GHz, remet à zéro le compteur d'appui `[0x0961:0x0962]` et
- *   pose le bit `0x2C.5` ; le tic lent `0x870C` attend que ce compteur 16 bits
- *   atteigne 3000, puis `0x87BF` émet `rf_link_select(slot, 1)`.
+ *   key 0x08 of the shortcut dispatcher (`0x4136`) -> arm `0x426A`, which
+ *   requires the 2.4 GHz transport, resets hold counter `[0x0961:0x0962]` and
+ *   sets bit `0x2C.5`; slow tick `0x870C` waits for that 16-bit counter to
+ *   reach 3000, then `0x87BF` emits `rf_link_select(slot, 1)`.
  *
- * C'est le MÊME compteur d'appui long que la réinitialisation d'usine (clé
- * 0x04, bit `0x2B.7`), et les deux bits sont consommés l'un après l'autre dans
- * le même tic. La lecture « 1 = relancer l'appairage » reste *inférée* -- rien
- * dans le 8051 ne dit ce que le BK3632 en fait -- mais elle est désormais
- * adossée à un raccourci dédié, pas à la seule différence de deux sites.
+ * This is the SAME long-press counter as factory reset (key 0x04, bit `0x2B.7`),
+ * and both bits are consumed one after the other in the same tick. Reading
+ * "1 = restart pairing" remains *inferred* -- nothing in the 8051 code says
+ * what the BK3632 does with it -- but it is now backed by a dedicated shortcut
+ * rather than just the difference between two call sites.
  */
 #define RF_LINK_SELECT  0
 #define RF_LINK_PAIRING 1
@@ -154,12 +153,11 @@ static volatile __bit           tx_busy;
 
 static __xdata uint8_t         rx_buf[RF_RX_MAX];
 /*
- * FLUX BRUT. La capture par trame ne suffit pas : entre deux passages de
- * `rf_task()` il arrive plusieurs trames -- la premiere capture montrait
- * `02 00 01 00 00 52` DEUX FOIS dans un seul tampon -- et c'est justement le
- * decoupage qui est en cause. On latche donc les soixante-quatre premiers
- * octets tels qu'ils tombent de l'ISR, sans aucune interpretation, et l'analyse
- * de trame se fait hors de la puce.
+ * RAW STREAM. Per-frame capture is not enough: several frames arrive between
+ * two passes of `rf_task()` -- the first capture showed `02 00 01 00 00 52`
+ * TWICE in a single buffer -- and frame slicing is precisely what is under
+ * suspicion. So we latch the first sixty-four bytes as they fall out of the
+ * ISR, with no interpretation at all, and frame analysis is done off-chip.
  */
 #if DEBUG == 1
 #    define RF_CAP_RAW 64
@@ -168,70 +166,70 @@ static __xdata uint8_t cap_raw_n;
 static __xdata uint8_t cap_raw_shown;
 #endif
 
-/* Compteurs bruts, en XDATA : la RAM interne n'a que dix-neuf octets de marge. */
+/* Raw counters, in XDATA: internal RAM only has nineteen bytes of headroom. */
 static volatile __xdata uint8_t rx_total;
 static volatile __xdata uint8_t rx_last;
 static volatile __data uint8_t rx_idx;
 static volatile __bit          rx_pending;
 
 /*
- * Seuls tx_len/tx_idx/rx_idx restent en DATA : l'ISR les touche à chaque octet.
- * Le reste part en XDATA — la RAM interne du 8051 est la ressource rare, et à
- * 260 kbauds un octet dure ~38 us, mille fois le coût d'un accès XDATA.
+ * Only tx_len/tx_idx/rx_idx stay in DATA: the ISR touches them on every byte.
+ * Everything else goes to XDATA — 8051 internal RAM is the scarce resource, and
+ * at 260 kbaud a byte takes ~38 us, a thousand times the cost of an XDATA access.
  */
 static __xdata rf_link_t link_state;
 static __xdata uint8_t   bt_slot;
 static __bit             link_connected;
 
 /*
- * Commande 0x01 en attente. Le firmware d'usine l'émet une seule fois, au
- * moment du changement de transport, et la perd si `P4.7` est bas à cet
- * instant-là (son prologue d'émission refuse alors la trame sans rien
- * réessayer). On garde l'intention à la place, et `rf_task()` la rejoue dès que
- * le module se déclare prêt : c'est le seul endroit où ce portage s'écarte du
- * firmware d'usine pour corriger un trou, et il est sans effet quand le module
- * répond tout de suite.
+ * Pending 0x01 command. The factory firmware sends it only once, when the
+ * transport changes, and loses it if `P4.7` is low at that exact moment (its
+ * transmit prologue then rejects the frame without retrying). We record the
+ * intent instead, and `rf_task()` replays it as soon as the module declares
+ * itself ready: this is the only place where this port departs from the factory
+ * firmware to plug a hole, and it has no effect when the module answers right
+ * away.
  */
 static __bit           link_tx_pending;
 static __xdata uint8_t link_tx_flag;
 
 /*
- * Annonce des deux noms Bluetooth, une fois par démarrage. Le firmware d'usine
- * les émet depuis `main`, sans se soucier de savoir si le module écoute ; on les
- * étale sur deux passages de `rf_task()`, dès que `P4.7` autorise l'émission.
- *   0 -> nom BT 3.0 à envoyer   1 -> nom BT 5.0 à envoyer   2 -> fait
+ * Broadcast of both Bluetooth names, once per boot. The factory firmware sends
+ * them from `main`, without caring whether the module is listening; we spread
+ * them across two passes of `rf_task()`, as soon as `P4.7` allows transmission.
+ *   0 -> BT 3.0 name to send   1 -> BT 5.0 name to send   2 -> done
  */
 static __xdata uint8_t name_stage;
 
-/* Le slot persisté n'est relisible qu'au premier passage de `rf_task()`. */
+/* The persisted slot can only be read on the first pass of `rf_task()`. */
 static __bit settings_restored;
 
 /*
- * PERSISTANCE DU SLOT BLUETOOTH.
+ * BLUETOOTH SLOT PERSISTENCE.
  *
- * `user_settings.rf_link` est libre sur ce clavier. Ce champ porte ailleurs
- * l'encodage `rf_mode_t` du NuPhy Air60, mais son unique consommateur,
- * `restore_rf_link()` dans `src/main.c`, est sous `#ifdef RF_ENABLED` — et
- * `RF_ENABLED` et `RF_EUART0` sont mutuellement exclusifs (`meson.build`). Sur
- * le F75 le transport vient du sélecteur matériel, jamais de la NVM, donc rien
- * ne lit ce champ.
+ * `user_settings.rf_link` is unused on this keyboard. Elsewhere that field
+ * carries the NuPhy Air60's `rf_mode_t` encoding, but its sole consumer,
+ * `restore_rf_link()` in `src/main.c`, is guarded by `#ifdef RF_ENABLED` — and
+ * `RF_ENABLED` and `RF_EUART0` are mutually exclusive (`meson.build`). On the
+ * F75 the transport comes from the hardware slide switch, never from NVM, so
+ * nothing reads that field.
  *
- * On y range le SLOT, pas le lien : c'est la seule chose que le sélecteur ne
- * dit pas et qui, sans ça, retombait à 1 à chaque démarrage. Le nom de l'alias
- * est là pour que personne ne relise `rf_link` en croyant y trouver un lien.
+ * We store the SLOT there, not the link: it is the only thing the slide switch
+ * does not tell us, and without this it fell back to 1 on every boot. The alias
+ * name is there so nobody reads `rf_link` expecting to find a link mode in it.
  */
 #define AULA_SETTINGS_BT_SLOT user_settings.rf_link
 
 /*
- * Sonde de présence, transcrite de `fcn.00003901` : la commande 0x06 part tous
- * les cent passages et, au bout de TROIS sondes sans réponse, le firmware
- * d'usine relâche la ligne d'émission (`P0CR &= 0xFB ; P0.2 = 1`) et retombe le
- * bit 0x2C.1 — son drapeau « liaison vivante ».
+ * Presence probe, transcribed from `fcn.00003901`: command 0x06 goes out every
+ * hundred passes and, after THREE unanswered probes, the factory firmware
+ * releases the transmit line (`P0CR &= 0xFB ; P0.2 = 1`) and clears bit 0x2C.1
+ * — its "link alive" flag.
  *
- * Son compteur tourne sur la cadence de `euart0_parse`, donc sur le trafic
- * reçu ; ici il tourne sur les passages de `rf_task()`, dont la cadence n'est
- * pas calibrée. Le seuil est donc pris large, pour la même raison que
- * l'anti-rebond du sélecteur.
+ * Its counter runs at the cadence of `euart0_parse`, hence on received traffic;
+ * here it runs on `rf_task()` passes, whose cadence is uncalibrated. The
+ * threshold is therefore chosen generously, for the same reason as the selector
+ * debounce.
  */
 #define RF_PROBE_PERIOD 2000
 #define RF_PROBE_MISSES 3
@@ -240,56 +238,55 @@ static __xdata uint8_t  probe_misses;
 static __bit            probe_answered;
 
 /*
- * Jauge de batterie. Le SH68F90A n'a pas d'ADC — vérifié, aucun registre `ADC*`
- * dans `sh68f90.h` ; c'est le BK3632 qui remonte la valeur brute dans les
- * octets 6 et 7 de la trame d'état, et le firmware d'usine la convertit dans
- * `fcn.0000801F`, une trame d'état sur six.
+ * Battery gauge. The SH68F90A has no ADC — verified, no `ADC*` register in
+ * `sh68f90.h`; the BK3632 reports the raw value in bytes 6 and 7 of the status
+ * frame, and the factory firmware converts it in `fcn.0000801F`, once every six
+ * status frames.
  */
-#define RF_BATT_FRAMES  6   /* cadence d'usine : une trame d'état sur six */
-#define RF_BATT_EMPTY   715 /* XRAM 0x02CB : en dessous, le pourcentage est nul */
-#define RF_BATT_FULL    912 /* seuil haut de l'hystérésis de fcn.00001DC3 */
-#define RF_BATT_LOW     737 /* seuil bas de la même hystérésis */
+#define RF_BATT_FRAMES  6   /* factory cadence: one status frame out of six */
+#define RF_BATT_EMPTY   715 /* XRAM 0x02CB: below this, percentage is zero */
+#define RF_BATT_FULL    912 /* upper threshold of the hysteresis in fcn.00001DC3 */
+#define RF_BATT_LOW     737 /* lower threshold of the same hysteresis */
 
 /*
- * Amortissement, transcrit de CODE 0xAF8D : le pourcentage AFFICHÉ converge vers
- * la cible d'un point à la fois, et l'index de la table est l'écart divisé par
- * dix. Une décélération : plus on est près de la cible, plus on avance lentement.
+ * Damping, transcribed from CODE 0xAF8D: the DISPLAYED percentage converges
+ * toward the target one point at a time, and the table index is the gap divided
+ * by ten. A deceleration curve: the closer to the target, the slower it steps.
  *
- * Les douze octets ont été relus DANS LE DUMP, parce que la feuille de relevé
- * les liste `20 10 05 02 ...` — une notation qui ressemble à de l'hexadécimal
- * alors qu'elle est décimale. Les octets réels sont
- * `14 0a 05 02 02 02 02 02 02 02 02 02`, donc bien 20, 10, 5 puis 2 tics :
- * c'est la PROSE de la feuille de relevé qui était juste, pas la lecture
- * hexadécimale de son listing.
+ * All twelve bytes were re-read FROM THE DUMP, because the disassembly notes
+ * list them as `20 10 05 02 ...` — a notation that looks hexadecimal when it is
+ * actually decimal. The actual bytes are
+ * `14 0a 05 02 02 02 02 02 02 02 02 02`, i.e. 20, 10, 5, then 2 ticks: the
+ * PROSE in the disassembly notes was right, not the hexadecimal reading of its
+ * listing.
  */
 static const __code uint8_t batt_damping[12] = {
     20, 10, 5, 2, 2, 2, 2, 2, 2, 2, 2, 2,
 };
 
-static __xdata uint8_t  batt_frames;  /* compte les trames d'état */
-static __xdata uint8_t  batt_target;  /* pourcentage visé */
-static __xdata uint8_t  batt_shown;   /* pourcentage affiché, celui qui converge */
-static __xdata uint8_t  batt_ticks;   /* compteur d'amortissement */
+static __xdata uint8_t  batt_frames;  /* counts status frames */
+static __xdata uint8_t  batt_target;  /* target percentage */
+static __xdata uint8_t  batt_shown;   /* displayed percentage, the converging value */
+static __xdata uint8_t  batt_ticks;   /* damping counter */
 static __bit            batt_low;
 
 /*
- * File d'émission des rapports de frappe, transcrite de `0x0C57`.
+ * Key report transmit queue, transcribed from `0x0C57`.
  *
- * Le firmware d'usine garde une file circulaire de SIX emplacements de
- * VINGT-HUIT octets, index d'écriture en `XRAM 0x0307`, de lecture en `0x030C`,
- * consommée par `hid_report_radio` (`fcn.000044F6`). L'octet 0 de
- * l'emplacement EST l'octet de commande : type 2 -> 28 octets recopiés puis une
- * trame de 30, type 3 -> 11 octets puis une trame de 13.
+ * The factory firmware keeps a circular queue of SIX slots of TWENTY-EIGHT
+ * bytes, write index at `XRAM 0x0307`, read index at `0x030C`, consumed by
+ * `hid_report_radio` (`fcn.000044F6`). Byte 0 of the slot IS the command byte:
+ * type 2 -> 28 bytes copied then a 30-byte frame, type 3 -> 11 bytes then a
+ * 13-byte frame.
  *
- * Sans elle, une frappe émise pendant qu'une rafale est en vol, ou avec `P4.7`
- * bas, est perdue sans trace : `rf_send_payload_long()` rendait `false` et
- * `kb.c` ignorait le retour.
+ * Without it, a keystroke sent while a burst is in flight, or with `P4.7` low,
+ * is lost without a trace: `rf_send_payload_long()` returned `false` and `kb.c`
+ * ignored the return value.
  *
- * Débordement : on écrase le plus ancien, ce que fait aussi le firmware d'usine
- * (son index d'écriture reboucle sans consulter celui de lecture). Six
- * emplacements à 260 kbauds représentent une réserve d'environ deux
- * millisecondes ; les atteindre veut dire que le module ne répond plus, auquel
- * cas la fraîcheur prime sur l'exhaustivité.
+ * Overflow: we overwrite the oldest entry, just like the factory firmware (its
+ * write index wraps without consulting the read index). Six slots at 260 kbaud
+ * represent about two milliseconds of buffer; filling them means the module is
+ * no longer responding, in which case freshness matters more than completeness.
  */
 #define RF_Q_SLOTS 6
 #define RF_Q_SIZE  28
@@ -299,14 +296,13 @@ static __xdata uint8_t q_tail;
 static __xdata uint8_t q_count;
 
 /*
- * Compteurs d'anti-rebond du sélecteur, un par position (0x08BD/0x02DF/0x0960).
+ * Selector debounce counters, one per position (0x08BD/0x02DF/0x0960).
  *
- * Le firmware d'usine exige dix passages consécutifs de son tic lent. SMK n'a
- * pas de base de temps équivalente ici — `rf_task()` est appelée depuis la
- * boucle principale, dont la cadence n'est pas calibrée. Le seuil est donc
- * exprimé en PASSAGES DE BOUCLE, pas en millisecondes, et pris large : le rôle
- * du compteur est d'absorber le rebond du contact, et un glissement de mode ne
- * demande pas de réactivité.
+ * The factory firmware requires ten consecutive passes of its slow tick. SMK
+ * has no equivalent timebase here — `rf_task()` is called from the main loop,
+ * whose cadence is uncalibrated. The threshold is therefore expressed in LOOP
+ * PASSES, not milliseconds, and chosen generously: the counter's job is to
+ * absorb contact bounce, and sliding a mode switch does not demand low latency.
  */
 #define RF_DEBOUNCE 250
 static __xdata uint16_t deb_wired;
@@ -314,22 +310,22 @@ static __xdata uint16_t deb_24g;
 static __xdata uint16_t deb_bt;
 
 /*
- * Instantané lu par l'overlay de diagnostic de `indicators.c`.
+ * Snapshot read by the diagnostic overlay in `indicators.c`.
  *
- * Un tableau plutôt qu'un accesseur : l'overlay tourne dans l'ISR Timer2, et un
- * appel depuis l'ISR vers ce module ferait partager à la fonction appelée le
- * recouvrement statique SDCC des fonctions de boucle principale -- exactement
- * ce que `utils/check_interrupts.py` casse le build pour empêcher.
+ * An array rather than an accessor: the overlay runs in the Timer2 ISR, and
+ * calling from the ISR into this module would make the called function share
+ * the SDCC static overlay of main-loop functions -- which is exactly what
+ * `utils/check_interrupts.py` fails the build to prevent.
  */
 __xdata uint8_t rf_diag_state[RF_DIAG_FIELDS];
 
 /* --------------------------------------------------------------------- ISR */
 
 /*
- * Vecteur 0x6B (_INT_EUART0 = 13). L'ISR ne fait que pousser l'octet suivant et
- * ramasser ce qui arrive : elle n'appelle aucune fonction partagée avec la
- * boucle principale, pour que le recouvrement de variables locales de SDCC
- * reste sain (c'est ce que vérifie la cible `check_interrupts`).
+ * Vector 0x6B (_INT_EUART0 = 13). The ISR only pushes the next byte and
+ * collects incoming bytes: it calls no function shared with the main loop, so
+ * SDCC local-variable overlaying stays sound (which is what the
+ * `check_interrupts` target verifies).
  */
 void rf_euart0_interrupt_handler(void) __interrupt(_INT_EUART0)
 {
@@ -339,8 +335,8 @@ void rf_euart0_interrupt_handler(void) __interrupt(_INT_EUART0)
             SBUF = tx_buf[tx_idx++];
         } else {
             /*
-             * Fin de rafale : P0.2 repasse en entrée et est relâché haut
-             * (transcrit de l'ISR d'usine, 0xA580).
+             * End of burst: P0.2 switches back to input and is released high
+             * (transcribed from the factory ISR, 0xA580).
              */
             P0CR &= (uint8_t)~0x04;
             P0_2    = 1;
@@ -351,9 +347,9 @@ void rf_euart0_interrupt_handler(void) __interrupt(_INT_EUART0)
     if (RI) {
         RI = 0;
         /*
-         * Empiler et signaler, rien d'autre — comme l'ISR d'usine, qui jette
-         * silencieusement ce qui dépasse son tampon. Le découpage appartient à
-         * `rf_rx_consume()`, seul endroit qui connaisse le format des types.
+         * Push and flag, nothing else — just like the factory ISR, which
+         * silently drops anything beyond its buffer. Frame slicing belongs in
+         * `rf_rx_consume()`, the only place that knows the per-type formats.
          */
         const uint8_t byte = SBUF;
         rx_total++;
@@ -370,27 +366,27 @@ void rf_euart0_interrupt_handler(void) __interrupt(_INT_EUART0)
     }
 }
 
-/* ----------------------------------------------------------------- émission */
+/* ------------------------------------------------------------ transmission */
 
 /*
- * Prologue commun aux douze émetteurs d'usine : ne rien envoyer si une rafale
- * est déjà en cours (bit 0x2C.1) ou si le module n'est pas prêt (P4.7 bas).
+ * Prologue shared by all twelve factory emitters: send nothing if a burst is
+ * already in progress (bit 0x2C.1) or if the module is not ready (P4.7 low).
  *
- * MAIS il y a DEUX portes, et la distinction est ce qui sort le clavier du
- * mutisme. Le firmware d'usine teste P4.7 avant les rapports ; il ne le teste
- * PAS avant les commandes de contrôle -- il émet les deux noms Bluetooth depuis
- * `main` (0x9148, 0x914D) sans aucun garde. Traiter le contrôle comme un
- * rapport crée un interblocage : si P4.7 reste bas, le link-select -- seule
- * commande qui commute réellement le module -- n'est jamais émis, donc le
- * module ne s'active pas, donc P4.7 ne monte pas.
+ * BUT there are TWO gates, and distinguishing them is what gets the keyboard
+ * out of silence. The factory firmware checks P4.7 before reports; it does NOT
+ * check it before control commands -- it sends both Bluetooth names from `main`
+ * (0x9148, 0x914D) with no guard at all. Treating control like a report creates
+ * a deadlock: if P4.7 stays low, link-select -- the only command that actually
+ * switches the module -- is never sent, so the module never activates, so P4.7
+ * never goes high.
  *
- * D'où le repli : le contrôle respecte la ligne tant qu'elle finit par monter,
- * puis passe outre. Une rafale en vol n'est jamais écrasée, dans les deux cas.
+ * Hence the fallback: control respects the line as long as it eventually rises,
+ * then overrides it. An in-flight burst is never overwritten in either case.
  */
 #define RF_GATE_REPORT 0
 #define RF_GATE_CTRL   1
 
-/* ~200 passages de boucle principale : quelques dizaines de millisecondes. */
+/* ~200 main-loop passes: a few tens of milliseconds. */
 #define RF_CTRL_STALL 200
 
 static __xdata uint8_t ctrl_stall;
@@ -415,8 +411,8 @@ static bool rf_can_send(uint8_t gate)
 }
 
 /*
- * `len` est la longueur TOTALE, somme de contrôle comprise. Les octets 0 à
- * len-2 doivent déjà être posés dans tx_buf.
+ * `len` is the TOTAL length, checksum included. Bytes 0 through len-2 must
+ * already be placed in tx_buf.
  */
 static bool rf_send_frame(uint8_t len, uint8_t gate)
 {
@@ -432,13 +428,13 @@ static bool rf_send_frame(uint8_t len, uint8_t gate)
     tx_buf[len - 1] = sum;
 
     tx_len = len;
-    tx_idx = 1; /* l'octet 0 part tout de suite, l'ISR enchaîne */
+    tx_idx = 1; /* byte 0 goes out immediately, the ISR chains the rest */
     tx_busy = 1;
 
     /*
-     * Requête d'émission : P0.2 est tiré bas AVANT de le basculer en sortie,
-     * puis re-tiré bas — l'ordre exact du firmware d'usine (0xAB13), qui évite
-     * un front haut parasite au moment du changement de direction.
+     * Transmit request: P0.2 is pulled low BEFORE switching it to output, then
+     * pulled low again — the exact order of the factory firmware (0xAB13),
+     * avoiding a spurious high glitch when changing direction.
      */
     P0_2 = 0;
     P0CR |= 0x04;
@@ -464,25 +460,26 @@ static bool rf_send_short(uint8_t cmd, uint8_t p0, uint8_t p1, uint8_t gate)
 }
 
 /*
- * Commande 0x01 : le sélecteur de radio. C'est ELLE qui met le module en
- * 2,4 GHz — `fcn.0000ED89`, appelée via `fcn.0000EF5A`.
+ * Command 0x01: radio selector. THIS is what puts the module into 2.4 GHz mode
+ * — `fcn.0000ED89`, called via `fcn.0000EF5A`.
  *
- *   01 01 <drapeau> <slot> 00 <somme>
+ *   01 01 <flag> <slot> 00 <sum>
  *
- * Le slot 0 est le dongle 2,4 GHz, 1 à 3 les trois emplacements Bluetooth.
- * Établi par `fcn.0000870C`, qui choisit `slot = (transport == 2) ? bt_slot : 0`
- * — donc le seul slot possible en mode 1 est 0.
+ * Slot 0 is the 2.4 GHz dongle, 1 to 3 are the three Bluetooth slots.
+ * Established by `fcn.0000870C`, which picks `slot = (transport == 2) ? bt_slot : 0`
+ * — so the only possible slot in mode 1 is 0.
  *
- * ⚠️ L'ORDRE DES DEUX OCTETS EST BIEN CELUI-LÀ, et ce fichier l'a longtemps eu
- * inversé. `fcn.0000ED89` écrit `IDATA[0x35] = R7` puis `IDATA[0x36] = R5` :
- * l'octet 2 vient de R7, l'octet 3 de R5. Or c'est R5 qui reçoit `bt_slot` sur
- * les quatre sites qui l'émettent (`0x85D7`, `0x44C0`, `0x87AD`, `0x06E6`),
- * tandis que R7 vaut 0 partout sauf sur la relance d'appairage, où il vaut 1.
+ * ⚠️ THE ORDER OF THOSE TWO BYTES REALLY IS THIS ONE, and this file had it
+ * swapped for a long time. `fcn.0000ED89` writes `IDATA[0x35] = R7` then
+ * `IDATA[0x36] = R5`: byte 2 comes from R7, byte 3 from R5. And R5 is what
+ * receives `bt_slot` across all four call sites that send it (`0x85D7`,
+ * `0x44C0`, `0x87AD`, `0x06E6`), whereas R7 is 0 everywhere except on pairing
+ * restart, where it is 1.
  *
- * Ce qui tranche est le superviseur de lien en `0x06E6` : en Bluetooth, quand
- * l'état reçu ne correspond pas, il redemande avec R5 = `bt_slot` et R7 = 0. Si
- * R7 portait le slot, le clavier réclamerait le dongle 2,4 GHz à chaque échec de
- * lien Bluetooth — il changerait de radio pour cause de mauvaise radio.
+ * The clincher is the link supervisor at `0x06E6`: in Bluetooth mode, when the
+ * received state does not match, it re-requests with R5 = `bt_slot` and R7 = 0.
+ * If R7 carried the slot, the keyboard would request the 2.4 GHz dongle on
+ * every Bluetooth link failure — switching radios because of a wrong radio.
  */
 static bool rf_send_link(rf_slot_t slot, uint8_t flag)
 {
@@ -490,18 +487,18 @@ static bool rf_send_link(rf_slot_t slot, uint8_t flag)
 }
 
 /*
- * Nom Bluetooth — commande 0x09, transcrite de `fcn.0000A307`, émise avec
- * `r5 = 32` en `0xA376`. Format établi :
+ * Bluetooth name — command 0x09, transcribed from `fcn.0000A307`, sent with
+ * `r5 = 32` at `0xA376`. Established format:
  *
- *   [0] 0x01   [1] 0x09   [2] profil   [3] 0x10 = 16 (longueur)
- *   [4..19] seize octets de nom        [31] somme
+ *   [0] 0x01   [1] 0x09   [2] profile   [3] 0x10 = 16 (length)
+ *   [4..19] sixteen name bytes          [31] sum
  *
- * Le firmware d'usine l'appelle DEUX FOIS depuis `main` (`0x9148`, `0x914D`),
- * une par profil, avec deux littéraux de seize caractères complétés par une
- * espace : `CODE 0xAF6D` = « AULA-F75 3.0 KB » et `CODE 0xAF7D` =
- * « AULA-F75 5.0 KB ». Le paramètre `[2]` choisit lequel.
+ * The factory firmware calls it TWICE from `main` (`0x9148`, `0x914D`), once
+ * per profile, with two space-padded sixteen-character literals:
+ * `CODE 0xAF6D` = "AULA-F75 3.0 KB " and `CODE 0xAF7D` = "AULA-F75 5.0 KB ".
+ * Parameter `[2]` selects which one.
  *
- * Les noms sont recopiés tels quels du dump, y compris l'espace de bourrage.
+ * The names are copied verbatim from the dump, trailing padding space included.
  */
 #define RF_NAME_LEN 16
 static const __code char rf_name_bt3[RF_NAME_LEN] = {
@@ -538,21 +535,21 @@ static bool rf_send_status_probe(void)
     return rf_send_short(RF_CMD_STATUS, 0, 0, RF_GATE_CTRL);
 }
 
-/* ------------------------------------------------------- trames de frappe */
+/* ------------------------------------------------------- key report frames */
 
 /*
- * Les deux trames de frappe sortent de la même file circulaire dans le firmware
- * d'usine (six emplacements de 28 octets en `0x0C57`) ; l'octet 0 de
- * l'emplacement EST l'octet de commande, 2 ou 3, et décide de la longueur.
- * Ici la file de SMK suffit : on émet directement.
+ * Both key report frames come out of the same circular queue in the factory
+ * firmware (six 28-byte slots at `0x0C57`); byte 0 of the slot IS the command
+ * byte, 2 or 3, and determines the length. Here SMK's queue is enough: we send
+ * directly.
  *
- * RELEVÉ, plus inféré : les deux émetteurs d'usine (`0x46C2` et `0x4730`)
- * recopient l'emplacement tel quel derrière l'en-tête `0x01`, l'octet 0 de
- * l'emplacement servant de commande. La charge utile, elle, ne porte PAS le
- * Report ID HID -- voir `rf_send_extra()` plus bas, et la section « La trame
- * courte » de `docs/keyboards/aula-f75.md`.
+ * RECORDED, no longer inferred: both factory emitters (`0x46C2` and `0x4730`)
+ * copy the slot verbatim after header `0x01`, with byte 0 of the slot serving
+ * as the command. The payload itself does NOT carry the HID Report ID -- see
+ * `rf_send_extra()` below, and the short-frame section of
+ * `docs/keyboards/aula-f75.md`.
  */
-/* Range un rapport dans la file ; l'octet 0 de l'emplacement est la commande. */
+/* Pushes a report into the queue; byte 0 of the slot is the command. */
 static void rf_queue_report(uint8_t cmd, const __xdata uint8_t *data, uint8_t len)
 {
     __xdata uint8_t *slot = q_buf[q_head];
@@ -577,8 +574,9 @@ static void rf_queue_report(uint8_t cmd, const __xdata uint8_t *data, uint8_t le
 }
 
 /*
- * Vide la file. Une seule trame part par passage : `rf_send_frame()` amorce la
- * rafale et l'ISR l'achève, donc `rf_can_send()` est faux au tour suivant.
+ * Flushes the queue. Only one frame goes out per pass: `rf_send_frame()` kicks
+ * off the burst and the ISR finishes it, so `rf_can_send()` is false on the
+ * next iteration.
  */
 static void rf_queue_flush(void)
 {
@@ -592,7 +590,7 @@ static void rf_queue_flush(void)
             tx_buf[1 + i] = slot[i];
         }
         if (!rf_send_frame(len, RF_GATE_REPORT)) {
-            return; /* on garde l'emplacement pour le prochain passage */
+            return; /* keep the slot for the next pass */
         }
         q_tail = (uint8_t)((q_tail + 1u) % RF_Q_SLOTS);
         q_count--;
@@ -610,28 +608,27 @@ void rf_send_nkro(__xdata report_nkro_t *report)
 }
 
 /*
- * La charge utile de la trame courte, RELEVÉE au désassembleur en `0x45AB` --
- * ce n'est plus une inférence :
+ * Short-frame payload, RECORDED in the disassembler at `0x45AB` -- no longer an
+ * inference:
  *
- *   [0..1]  usage Consumer, seize bits, poids faible d'abord  (0x09BD, 0x09BE)
- *   [2]     octet System                                      (0x097E)
- *   [3..9]  rapport souris, sept octets                       (0x09B1)
+ *   [0..1]  Consumer usage, sixteen bits, little-endian       (0x09BD, 0x09BE)
+ *   [2]     System byte                                       (0x097E)
+ *   [3..9]  mouse report, seven bytes                         (0x09B1)
  *
- * Le Report ID HID n'y est PAS. Le tampon Consumer d'usine commence pourtant
- * par lui -- `0x09BC` porte le Report ID 2 -- et le producteur radio le SAUTE
- * délibérément : c'est l'octet de commande de la trame qui tient lieu de
- * sélecteur, pas le Report ID. Envoyer `report->raw` tel quel décalait donc
- * tout d'un octet, et le dongle lisait `2` comme poids faible de l'usage.
- * C'est ce qui rendait la molette et les touches multimédia muettes en
- * 2,4 GHz et en Bluetooth, alors que la frappe passait.
+ * The HID Report ID is NOT there. Yet the factory Consumer buffer starts with
+ * it -- `0x09BC` holds Report ID 2 -- and the radio producer DELIBERATELY skips
+ * it: the frame's command byte acts as the selector, not the Report ID. Sending
+ * `report->raw` as-is shifted everything by one byte, and the dongle read `2`
+ * as the low byte of the usage. That is what made the encoder wheel and media
+ * keys silent over 2.4 GHz and Bluetooth while regular typing went through.
  *
- * L'octet System est INFÉRÉ : sa position est établie, mais aucun keycode
- * System n'est câblé dans cette disposition, donc rien ne l'a exercé.
+ * The System byte is INFERRED: its offset is established, but no System keycode
+ * is wired in this keymap, so nothing has exercised it.
  */
 #define RF_EXTRA_PAY 3
 
-/* En XDATA et non sur la pile : `rf_queue_report()` prend un `__xdata *`, et
- * sous `--stack-auto` un tableau local vit en RAM interne. */
+/* In XDATA rather than on the stack: `rf_queue_report()` takes an `__xdata *`,
+ * and under `--stack-auto` a local array lives in internal RAM. */
 static __xdata uint8_t extra_pay[RF_EXTRA_PAY];
 
 void rf_send_extra(__xdata report_extra_t *report)
@@ -646,17 +643,17 @@ void rf_send_extra(__xdata report_extra_t *report)
     } else if (report->report_id == REPORT_ID_SYSTEM) {
         extra_pay[2] = (uint8_t)(report->usage & 0xFFu);
     } else {
-        return; /* rien d'autre ne passe par cette trame */
+        return; /* nothing else goes through this frame */
     }
 
-    /* Les sept octets de souris restent nuls : `rf_queue_report()` efface
-     * l'emplacement, et ce clavier n'a pas de souris. */
+    /* The seven mouse bytes stay zero: `rf_queue_report()` clears the slot, and
+     * this keyboard has no mouse functionality. */
     rf_queue_report(RF_CMD_REPORT_S, extra_pay, RF_EXTRA_PAY);
 }
 
-/* ---------------------------------------------------------------- réception */
+/* --------------------------------------------------------------- reception */
 
-/* Somme d'usine : 0x55 - Σ des `len` premiers octets, comparée à l'octet `len`. */
+/* Factory checksum: 0x55 - Σ of the first `len` bytes, compared to byte `len`. */
 static bool rf_rx_checksum_ok(uint8_t len)
 {
     uint8_t sum = RF_SUM_SEED;
@@ -667,16 +664,16 @@ static bool rf_rx_checksum_ok(uint8_t len)
     return sum == rx_buf[len];
 }
 
-/* Vide le tampon, l'IRQ masquée : sans ça un octet arrivé entre le test et la
- * remise à zéro se retrouverait attribué à la trame suivante. */
+/* Clears the buffer with the IRQ masked: otherwise a byte arriving between the
+ * check and the reset would end up attributed to the next frame. */
 /*
- * Retire `len` octets en tête et conserve le reste.
+ * Removes `len` bytes from the front and keeps the remainder.
  *
- * `rf_rx_drop()` jetait le tampon ENTIER après chaque trame : quand deux trames
- * atterrissaient entre deux passages -- le cas normal à 260 kbauds contre une
- * boucle principale en millisecondes -- la seconde était perdue. Et sur un type
- * inconnu, tout jeter interdisait tout recalage : on retire maintenant UN seul
- * octet et on retente.
+ * `rf_rx_drop()` used to discard the ENTIRE buffer after each frame: when two
+ * frames landed between two passes -- the normal case at 260 kbaud against a
+ * millisecond-scale main loop -- the second one was lost. And on an unknown
+ * type, dropping everything prevented any resynchronization: we now drop a
+ * SINGLE byte and retry.
  */
 static void rf_rx_take(uint8_t len)
 {
@@ -711,19 +708,19 @@ static void rf_rx_drop(void)
 }
 
 /*
- * Jauge de batterie, transcrite de `fcn.0000801F` — appelée une trame d'état
- * sur six, exactement comme en usine.
+ * Battery gauge, transcribed from `fcn.0000801F` — called on one status frame
+ * out of six, just like in the factory firmware.
  *
- * ÉTABLI : la provenance (octets 6 et 7 de la trame, petit-boutiste — l'octet 6
- * est le poids faible), le plancher à 715, le plafond à 100 %, la cadence d'une
- * trame sur six, et la courbe d'amortissement.
+ * ESTABLISHED: the source (bytes 6 and 7 of the frame, little-endian — byte 6
+ * is the low byte), the floor at 715, the ceiling at 100%, the one-in-six frame
+ * cadence, and the damping curve.
  *
- * INFÉRÉ : la PENTE. Le firmware d'usine plafonne et plancheise, mais la feuille
- * de relevé ne donne pas le facteur d'échelle. On l'ancre sur les deux seules
- * constantes établies de la même grandeur — le plancher 715 et le seuil haut
- * 912 de l'hystérésis de `fcn.00001DC3` — ce qui donne une droite entre les
- * deux. Une conversion 10 bits sur un pont diviseur rend l'hypothèse plausible,
- * pas certaine.
+ * INFERRED: the SLOPE. The factory firmware clamps to the floor and ceiling,
+ * but the disassembly notes do not give the scaling factor. We anchor it on the
+ * only two established constants of the same quantity — the 715 floor and the
+ * 912 upper threshold of the hysteresis in `fcn.00001DC3` — yielding a straight
+ * line between the two. A 10-bit conversion across a voltage divider makes the
+ * hypothesis plausible, not certain.
  */
 static void rf_battery_sample(void)
 {
@@ -739,16 +736,16 @@ static void rf_battery_sample(void)
     } else if (raw >= RF_BATT_FULL) {
         batt_target = 100;
     } else {
-        /* (912-715) * 100 = 19 700 : le produit tient dans 16 bits, pas besoin
-         * de tirer la division 32 bits de SDCC. */
+        /* (912-715) * 100 = 19,700: the product fits in 16 bits, no need to
+         * pull in SDCC's 32-bit division helper. */
         batt_target = (uint8_t)(((uint16_t)(raw - RF_BATT_EMPTY) * 100u) /
                                 (uint16_t)(RF_BATT_FULL - RF_BATT_EMPTY));
     }
 
     batt_low = (raw < RF_BATT_LOW) ? 1 : 0;
 
-    /* Convergence amortie : un point à la fois, d'autant plus lentement qu'on
-     * est près de la cible. */
+    /* Damped convergence: one point at a time, stepping more slowly the closer
+     * we get to the target. */
     if (batt_shown != batt_target) {
         const uint8_t gap   = (batt_shown > batt_target) ? (uint8_t)(batt_shown - batt_target)
                                                          : (uint8_t)(batt_target - batt_shown);
@@ -765,25 +762,25 @@ static void rf_battery_sample(void)
 }
 
 /*
- * Traitement de la trame d'état, transcrit de la branche `octet[0] == 2` de
- * `euart0_parse`. Ce n'est pas seulement un décodage : c'est aussi le
- * SUPERVISEUR DE LIEN du firmware d'usine, qui réaffirme la consigne dès que
- * l'état reçu ne correspond pas au transport demandé.
+ * Status frame handling, transcribed from the `byte[0] == 2` branch of
+ * `euart0_parse`. This is not just decoding: it is also the factory firmware's
+ * LINK SUPERVISOR, which reasserts the target link whenever the received state
+ * does not match the requested transport.
  *
  *   if (transport == 2) {                       // Bluetooth
- *       if (slot == 0 || slot > 3) slot = 1;    // borne 1..3, par le code
- *       if (frame[4] == slot && frame[5] != 0)  // connecte
- *       else cmd_01(slot, 0);                   // sinon on redemande
+ *       if (slot == 0 || slot > 3) slot = 1;    // clamp to 1..3 in code
+ *       if (frame[4] == slot && frame[5] != 0)  // connected
+ *       else cmd_01(slot, 0);                   // otherwise re-request
  *   }
- *   else if (transport == 1)                    // 2,4 GHz
+ *   else if (transport == 1)                    // 2.4 GHz
  *       if (frame[4] != 0 || frame[5] == 0) cmd_01(0, 0);
  *   else if (transport == 0 && frame[4] != 0x0A) cmd_0E();
  *
- * La branche filaire n'est pas reprise : ce portage coupe l'IRQ EUART0 en mode
- * filaire, donc aucune trame d'état n'y arrive jamais.
+ * The wired branch is omitted: this port disables the EUART0 IRQ in wired mode,
+ * so no status frame ever arrives there.
  *
- * `link_connected` cesse ainsi d'être un proxy : c'est désormais le vrai
- * drapeau du module, croisé avec le slot attendu.
+ * `link_connected` thus stops being a proxy: it is now the module's true flag,
+ * cross-checked against the expected slot.
  */
 static void rf_status_apply(void)
 {
@@ -813,24 +810,24 @@ static void rf_status_apply(void)
 }
 
 /*
- * Vidange du tampon de reception, avec son verdict.
+ * Draining the receive buffer, along with its verdict.
  *
- * Le module REPOND -- mesure sur l'appareil : le compteur d'octets recus grimpe
- * sans interruption en 2,4 GHz comme en Bluetooth. Ce qui manque, c'est de
- * savoir ce qu'il dit : sans les octets bruts on ne peut pas distinguer une
- * trame valide mal analysee d'un debit mal regle qui produit du bruit.
+ * The module RESPONDS -- measured on hardware: the received-byte counter climbs
+ * uninterrupted in both 2.4 GHz and Bluetooth modes. What was missing was
+ * knowing what it says: without the raw bytes, we cannot tell a valid frame
+ * that was misparsed apart from a misconfigured baud rate producing noise.
  */
 /*
- * CAPTURE DIFFÉRÉE des premières trames reçues.
+ * DEFERRED CAPTURE of the first received frames.
  *
- * Imprimer au fil de l'eau ne marche pas : la console vit sur l'USB, et le
- * mode sans-fil est justement celui où l'USB n'est pas disponible -- sur
- * batterie il n'y a pas de câble, et même branché le firmware normal coupe le
- * périphérique. Deux captures ont été perdues à cause de ça.
+ * Printing on the fly does not work: the console lives over USB, and wireless
+ * mode is precisely when USB is unavailable -- on battery there is no cable,
+ * and even plugged in, normal firmware disables the peripheral. Two captures
+ * were lost because of that.
  *
- * On mémorise donc les TROIS PREMIÈRES trames, sans jamais les écraser, et on
- * les rejoue dès que la console redevient disponible -- typiquement au retour
- * en position filaire. Le timing ne compte plus.
+ * We therefore record the FIRST THREE frames, never overwriting them, and
+ * replay them as soon as the console becomes available again -- typically when
+ * switching back to the wired position. Timing no longer matters.
  */
 #if DEBUG == 1
 
@@ -861,7 +858,7 @@ static void rf_rx_dump(uint8_t verdict)
     cap_n++;
 }
 
-/* Rejoue huit octets bruts par passage, puis les trames, quand la console a la place. */
+/* Replays eight raw bytes per pass, then the frames, when the console has room. */
 static void rf_cap_replay(void)
 {
     uint8_t i;
@@ -896,7 +893,7 @@ static void rf_cap_replay(void)
 #    define rf_cap_replay()     ((void)0)
 #endif
 
-/* why= : 0 type inconnu, 1 somme/gardes 0x02 KO, 2 statut OK, 3 annonce, 4 conteneur */
+/* why= : 0 unknown type, 1 0x02 checksum/guards failed, 2 status OK, 3 announce, 4 bulk */
 #define RF_WHY_TYPE  0
 #define RF_WHY_BAD02 1
 #define RF_WHY_OK02  2
@@ -909,7 +906,7 @@ static uint8_t rf_rx_frame_len(void)
         case RF_RX_TYPE_STATUS:   return (rx_buf[1] == RF_CMD_STATUS) ? RF_RX_LEN_STATUS : RF_RX_LEN_ACK;
         case RF_RX_TYPE_ANNOUNCE: return RF_RX_LEN_ACK;
         case RF_RX_TYPE_BULK:     return RF_RX_LEN_BULK;
-        default:                  return 0; /* type inconnu : octet parasite */
+        default:                  return 0; /* unknown type: stray byte */
     }
 }
 
@@ -917,7 +914,7 @@ static void rf_rx_classify(void)
 {
     const uint8_t type = rx_buf[0];
     if (type == RF_RX_TYPE_BULK) {
-        /* Conteneur à sous-commandes : rien n'en dépend dans ce portage. */
+        /* Sub-command container: nothing in this port depends on it. */
         rf_rx_dump(RF_WHY_BULK);
         return;
     }
@@ -931,31 +928,31 @@ static void rf_rx_classify(void)
 
 static void rf_rx_consume(void)
 {
-    /* Plusieurs trames peuvent avoir atterri : on en traite jusqu'à quatre par
-     * passage, assez pour suivre la cadence du module sans monopoliser la boucle.
-     * Flot aplati (un seul drapeau d'arrêt, aucun continue/return dans la boucle)
-     * et switch/classement isolés dans rf_rx_frame_len()/rf_rx_classify() : réunis,
-     * ils font trébucher l'optimiseur SDCC 4.5.0 (error 110). Logique identique à la
-     * transcription d'origine. */
+    /* Several frames may have landed: we process up to four per pass, enough
+     * to keep up with the module's cadence without hogging the loop.
+     * Flattened control flow (single stop flag, no continue/return inside the
+     * loop) and switch/classification isolated in rf_rx_frame_len()/rf_rx_classify():
+     * combined, they trip up the SDCC 4.5.0 optimizer (error 110). Logic is
+     * identical to the original transcription. */
     uint8_t stop = 0;
     for (uint8_t guard = 0; !stop && guard < 4 && rx_pending; guard++) {
         uint8_t len = rf_rx_frame_len();
         if (len == 0) {
-            rf_rx_take(1); /* octet parasite : recaler, pas tout jeter */
+            rf_rx_take(1); /* stray byte: resync rather than dropping everything */
         } else if (rx_idx < len) {
-            stop = 1;      /* trame incomplète : laisser le reste arriver */
+            stop = 1;      /* incomplete frame: let the rest arrive */
         } else if (!rf_rx_checksum_ok((uint8_t)(len - 1))) {
             rf_rx_dump(RF_WHY_BAD02);
             rf_rx_take(1);
         } else {
-            probe_answered = 1; /* somme juste : le module a parlé, et proprement */
+            probe_answered = 1; /* valid checksum: the module spoke, and cleanly */
             rf_rx_classify();
             rf_rx_take(len);
         }
     }
 }
 
-/* ------------------------------------------------------- machine à états */
+/* --------------------------------------------------------- state machine */
 
 static void rf_uart_init(void)
 {
@@ -963,25 +960,24 @@ static void rf_uart_init(void)
     SBRTH = RF_SBRTH;
     SBRTL = RF_SBRTL;
     SFINE = RF_SFINE;
-    PCON |= _SSTAT; /* active les drapeaux d'erreur de réception */
+    PCON |= _SSTAT; /* enable receive error flags */
 
     /*
-     * PRIORITÉ MAXIMALE POUR L'EUART0. C'est la correction de fond.
+     * HIGHEST PRIORITY FOR EUART0. This is the root fix.
      *
-     * `tick.c` exécute le balayage COMPLET de la matrice et les sous-trames LED
-     * DANS l'ISR Timer2. Un balayage dure ~320 µs ; à 260 870 bauds un octet
-     * tombe toutes les 38 µs, et le SH68F90 n'a aucun tampon derrière `SBUF`.
-     * À priorité égale l'ISR série ne préempte pas : chaque balayage de matrice
-     * COÛTE HUIT OCTETS.
+     * `tick.c` runs the FULL matrix scan and LED sub-frames INSIDE the Timer2
+     * ISR. A scan takes ~320 µs; at 260,870 baud a byte arrives every 38 µs,
+     * and the SH68F90 has no FIFO behind `SBUF`. At equal priority the serial
+     * ISR cannot preempt: every matrix scan COSTS EIGHT BYTES.
      *
-     * Mesuré sur l'appareil. Le module émet `02 00 01 00 00 52` et
-     * `03 00 00 00 00 52` -- sommes de contrôle valides toutes les deux -- et le
-     * flux reçu n'en contenait que des morceaux : `02 00 00 52`, `02 00 52`,
-     * `02 00 01 00`. Aucune trame n'arrivait entière, donc aucune ne validait sa
-     * somme, donc `link_connected` ne montait jamais et le clavier restait muet.
+     * Measured on hardware. The module sends `02 00 01 00 00 52` and
+     * `03 00 00 00 00 52` -- both with valid checksums -- and the received
+     * stream only contained fragments: `02 00 00 52`, `02 00 52`,
+     * `02 00 01 00`. No frame ever arrived intact, so none passed its checksum,
+     * so `link_connected` never went high and the keyboard stayed silent.
      *
-     * Le firmware d'usine pose exactement ce bit : `0xECC5` écrit `IPH1 = 0x42`
-     * et `IPL1 = 0x41`, bit 6 des deux côtés, soit le niveau 3.
+     * The factory firmware sets this exact bit: `0xECC5` writes `IPH1 = 0x42`
+     * and `IPL1 = 0x41`, bit 6 in both registers, i.e. priority level 3.
      */
     IPH1 |= _ES0;
     IPL1 |= _ES0;
@@ -999,20 +995,20 @@ static void rf_uart_init(void)
     rx_total   = 0;
     rx_last    = 0;
 
-    /* Handshake au repos : P0.2 en entrée, relâché. */
+    /* Handshake idle: P0.2 as input, released high. */
     P0CR &= (uint8_t)~0x04;
     P0_2 = 1;
 }
 
 /*
- * Attend la fin de la rafale en cours avant de couper l'IRQ : sans cela une
- * trame encore en vol laisserait tx_busy armé pour toujours et P0.2 bloqué bas
- * en sortie, ce qui pend la liaison. Borné, parce qu'un module absent ne
- * répondra jamais.
+ * Waits for the current burst to finish before disabling the IRQ: otherwise a
+ * frame still in flight would leave tx_busy set forever and P0.2 stuck low as
+ * an output, hanging the link. Bounded, because an absent module will never
+ * respond.
  */
 static void rf_tx_drain(void)
 {
-    /* 32 octets à ~260 kbauds ~= 1,3 ms ; dix millisecondes sont larges. */
+    /* 32 bytes at ~260 kbaud ~= 1.3 ms; ten milliseconds is plenty. */
     for (uint8_t i = 0; tx_busy && i < 10; i++) {
         delay_ms(1);
     }
@@ -1024,40 +1020,41 @@ static void rf_tx_drain(void)
 }
 
 /*
- * Armement de la radio, transcrit du thunk d'usine 0xEF40 — quatre
- * instructions, appelé par `fcn.000084E9` en 0x8581 et 0x85D5 :
+ * Radio arming, transcribed from factory thunk 0xEF40 — four instructions,
+ * called by `fcn.000084E9` at 0x8581 and 0x85D5:
  *
- *   ef40  ORL  IEN1,#0x40      IEN1 |= _ES0      -- l'IRQ EUART0 s'arme
- *   ef43  ANL  USBCON,#0x7F    USBCON &= ~_ENUSB -- le module USB s'ÉTEINT
- *   ef46  SETB 0x3f            drapeau interne partagé, hors sujet ici
+ *   ef40  ORL  IEN1,#0x40      IEN1 |= _ES0      -- EUART0 IRQ is armed
+ *   ef43  ANL  USBCON,#0x7F    USBCON &= ~_ENUSB -- USB module is TURNED OFF
+ *   ef46  SETB 0x3f            shared internal flag, irrelevant here
  *   ef48  MOV  R7,#0x14
  *   ef4a  LJMP 0xED03          ~20 ms
  *
- * La deuxième instruction manquait à une première rédaction de ce fichier : en
- * sans-fil le firmware d'usine COUPE le périphérique USB, il ne se contente pas
- * d'ignorer l'hôte.
+ * The second instruction was missing in an initial draft of this file: in
+ * wireless mode the factory firmware SHUTS DOWN the USB peripheral, rather than
+ * merely ignoring the host.
  *
- * On appelle `usb_hw_deinit()` et NON `usb_deinit()`. Les deux retombent
- * `_ENUSB | _SW1CON | _SW2CON` et désarment l'interruption USB, mais
- * `usb_deinit()` remet en plus toute la machine à états logicielle à zéro — dont
- * `interface0_protocol`. Or `host_nkro_active()` (`src/smk/host.c:12`) exige
- * `USB_PROTOCOL_REPORT` : le remettre à zéro fait retomber le clavier en 6KRO
- * pour toute la durée du mode sans-fil, alors que `NKRO_REPORT_BITS` vaut 20
- * précisément « limited by wireless dongle hid descriptor » (`report.h:10`).
+ * We call `usb_hw_deinit()` and NOT `usb_deinit()`. Both clear
+ * `_ENUSB | _SW1CON | _SW2CON` and disarm the USB interrupt, but `usb_deinit()`
+ * also resets the entire software state machine to zero — including
+ * `interface0_protocol`. Yet `host_nkro_active()` (`src/smk/host.c:12`) requires
+ * `USB_PROTOCOL_REPORT`: zeroing it makes the keyboard fall back to 6KRO for
+ * the entire duration of wireless mode, even though `NKRO_REPORT_BITS` is 20
+ * specifically because it is "limited by wireless dongle hid descriptor"
+ * (`report.h:10`).
  *
- * Ne couper que le matériel est donc à la fois plus fidèle au firmware d'usine —
- * qui n'exécute qu'un `anl USBCON,#0x7F` — et la seule façon de garder le NKRO
- * sur la radio. L'état logiciel est reconstruit par `usb_init()` au retour au
- * filaire.
+ * Shutting down only the hardware is therefore both more faithful to the
+ * factory firmware — which only executes `anl USBCON,#0x7F` — and the only way
+ * to keep NKRO working over the radio. Software state is rebuilt by
+ * `usb_init()` when returning to wired mode.
  */
 static void rf_radio_on(void)
 {
     /*
-     * L'état des LED hôte (Verr. Maj, Verr. Num, Arrêt défil) n'arrive QUE par
-     * `usb_ep0_out_irq()`. L'USB va être démonté juste en dessous : à partir de
-     * cet instant on ne sait plus rien de ce que fait l'hôte, et laisser le
-     * témoin allumé sur une information périmée serait pire que ne rien
-     * afficher. Au retour en filaire, l'hôte renvoie son état à l'énumération.
+     * Host LED state (Caps Lock, Num Lock, Scroll Lock) ONLY arrives through
+     * `usb_ep0_out_irq()`. USB is about to be torn down right below: from that
+     * point on we know nothing about what the host is doing, and leaving the
+     * indicator lit on stale information would be worse than showing nothing.
+     * On return to wired mode, the host resends its state during enumeration.
      */
     keyboard_set_led_state(0);
 
@@ -1075,15 +1072,15 @@ static void rf_radio_off(void)
 }
 
 /*
- * Entrée en 2,4 GHz, transcrite de `fcn.000084E9` (branche du compteur 0x02DF).
- * C'est la réponse à la question restée ouverte « qui met le transport à 1 » :
- * personne ne l'écrit directement, c'est cette branche du sélecteur qui le fait,
- * et elle prévient le module par la commande 0x01 avec le slot 0.
+ * Entering 2.4 GHz mode, transcribed from `fcn.000084E9` (branch of counter
+ * 0x02DF). This answers the previously open question "what sets transport to 1":
+ * nothing writes it directly; this branch of the selector does, and it notifies
+ * the module via command 0x01 with slot 0.
  */
 static void rf_enter_24g(void)
 {
     if (link_state == RF_LINK_WIRED) {
-        delay_ms(20); /* 0xEF8D : un temps de garde avant de couper l'USB */
+        delay_ms(20); /* 0xEF8D: guard delay before shutting down USB */
     }
     dprintf("rf enter 24g\r\n");
     link_state     = RF_LINK_24G;
@@ -1100,7 +1097,7 @@ static void rf_enter_bt(void)
     dprintf("rf enter bt\r\n");
     link_state = RF_LINK_BT;
     if (bt_slot < RF_SLOT_BT1 || bt_slot > RF_SLOT_BT3) {
-        bt_slot = RF_SLOT_BT1; /* borne d'usine : 1..3 */
+        bt_slot = RF_SLOT_BT1; /* factory clamp: 1..3 */
     }
     link_connected = 0;
     rf_radio_on();
@@ -1108,9 +1105,9 @@ static void rf_enter_bt(void)
 }
 
 /*
- * Retour au filaire, transcrit de `fcn.000084E9` @ 0x8543 et de `fcn.0000EED1` :
- * on prévient le module (0x0E puis 0x0B avec 0), puis on coupe l'IRQ EUART0 et
- * on réinitialise l'USB.
+ * Returning to wired mode, transcribed from `fcn.000084E9` @ 0x8543 and
+ * `fcn.0000EED1`: notify the module (0x0E then 0x0B with 0), disable the
+ * EUART0 IRQ, and reinitialize USB.
  */
 static void rf_enter_wired(void)
 {
@@ -1125,28 +1122,28 @@ static void rf_enter_wired(void)
     link_tx_pending = 0;
     rf_radio_off();
 #ifndef RF_DEBUG_KEEP_USB
-    usb_init(); /* sous KEEP_USB l'USB n'a jamais été coupé : le relancer
-                 * couperait la console au pire moment. */
+    usb_init(); /* under KEEP_USB, USB was never shut down: restarting it would
+                 * cut off the console at the worst possible moment. */
 #endif
     /*
-     * 200 ms bloquants, comme le firmware d'usine. `delay_us` donne un coup de
-     * chien de garde à chaque microseconde, donc le WDT ne mord pas — mais le
-     * balayage matrice et l'USB s'arrêtent pendant ce temps. C'est un
-     * changement de mode, il n'arrive pas en frappe.
+     * 200 ms blocking delay, just like the factory firmware. `delay_us` kicks
+     * the watchdog on every microsecond, so the WDT will not bite — but matrix
+     * scanning and USB stop during that time. This is a mode switch, so it does
+     * not happen while typing.
      */
     delay_ms(200);
 }
 
 /*
- * Sélecteur à glissière trois positions.
+ * Three-position slide switch.
  *
- *   P7.4 = 0            -> 2,4 GHz
- *   P7.4 = 1, P4.5 = 1  -> filaire
+ *   P7.4 = 0            -> 2.4 GHz
+ *   P7.4 = 1, P4.5 = 1  -> wired
  *   P7.4 = 1, P4.5 = 0  -> Bluetooth
  *
- * Les deux broches sortent de `jb 0xF8.4` et `jb 0xB0.5` en tête de
- * `fcn.000084E9` ; 0xF8 est P7 et 0xB0 est P4 d'après `sh68f90.h`. Elles
- * figuraient jusqu'ici parmi les entrées « rôle inconnu » du portage.
+ * Both pins come from `jb 0xF8.4` and `jb 0xB0.5` at the top of `fcn.000084E9`;
+ * 0xF8 is P7 and 0xB0 is P4 according to `sh68f90.h`. Until now they were
+ * listed among the port's "unknown role" inputs.
  */
 static rf_link_t rf_read_selector(void)
 {
@@ -1217,22 +1214,22 @@ void rf_init(void)
     ctrl_stall = 0;
 
     rf_uart_init();
-    IEN1 &= (uint8_t)~_ES0; /* armée seulement quand un mode sans-fil est actif */
+    IEN1 &= (uint8_t)~_ES0; /* armed only when a wireless mode is active */
 
     /*
-     * Le transport de départ est LU SUR LE SÉLECTEUR, pas supposé filaire.
+     * The initial transport is READ FROM THE SELECTOR, not assumed to be wired.
      *
-     * Le firmware d'usine fait autrement : il part de `g_transport = 0` et
-     * laisse l'anti-rebond de `fcn.000084E9` converger. Ce portage ne reproduit
-     * pas ce comportement, parce que pendant la convergence `kb_send_report()`
-     * pousserait les frappes sur l'USB alors que la glissière dit « sans fil ».
-     * Le sélecteur est la seule autorité sur le transport : autant l'interroger
-     * tout de suite.
+     * The factory firmware does otherwise: it starts from `g_transport = 0` and
+     * lets the debounce in `fcn.000084E9` converge. This port does not
+     * reproduce that behavior, because while converging `kb_send_report()`
+     * would push keystrokes over USB even though the slide switch says
+     * "wireless". The selector is the sole authority on the transport: we might
+     * as well query it right away.
      *
-     * L'ordre de `main()` le permet : `rf_init()` est appelée par `kb_init()`,
-     * donc après `usb_init()` et avant `usb_wait_for_enumeration()`. Couper
-     * l'USB ici ne bloque rien — cette attente rend la main au bout de 500 ms
-     * (`ENUM_NO_HOST_MS`) quand aucun SETUP n'arrive.
+     * The ordering in `main()` allows it: `rf_init()` is called by `kb_init()`,
+     * i.e. after `usb_init()` and before `usb_wait_for_enumeration()`. Shutting
+     * down USB here does not hang anything — that wait returns after 500 ms
+     * (`ENUM_NO_HOST_MS`) when no SETUP packet arrives.
      */
     switch (rf_read_selector()) {
         case RF_LINK_24G:
@@ -1248,8 +1245,8 @@ void rf_init(void)
 }
 
 /*
- * Sonde de présence : commande 0x06 périodique, trois échecs et la liaison est
- * déclarée morte. Transcrit de `fcn.00003901` ; voir RF_PROBE_PERIOD.
+ * Presence probe: periodic command 0x06, three failures and the link is
+ * declared dead. Transcribed from `fcn.00003901`; see RF_PROBE_PERIOD.
  */
 static void rf_probe_task(void)
 {
@@ -1269,12 +1266,13 @@ static void rf_probe_task(void)
                 (unsigned)tx_busy, (unsigned)q_count);
         probe_misses   = 0;
         link_connected = 0;
-        /* Le firmware d'usine relâche ici la ligne d'émission (0x3D5A). */
+        /* The factory firmware releases the transmit line here (0x3D5A). */
         rf_tx_drain();
         /*
-         * Et on jette ce qui traîne en réception : une trame tronquée dont le
-         * type annonce une longueur qui n'arrivera jamais bloquerait le tampon
-         * indéfiniment, puisque `rf_rx_consume()` attend le compte.
+         * And we discard whatever is lingering in the receive buffer: a
+         * truncated frame whose type announces a length that will never arrive
+         * would stall the buffer indefinitely, since `rf_rx_consume()` waits
+         * for the full byte count.
          */
         rf_rx_drop();
     }
@@ -1284,13 +1282,13 @@ static void rf_probe_task(void)
 }
 
 /*
- * `rf_init()` est appelée depuis `kb_init()`, donc AVANT `settings_load()` :
- * elle ne peut pas connaître le slot persisté. C'est la même contrainte
- * d'ordonnancement qui vaut au NuPhy Air60 un `restore_rf_link()` séparé de son
- * `rf_init()`. Le premier passage de `rf_task()`, lui, est dans la boucle
- * principale, donc après. Il tombe aussi AVANT la première vidange de la file
- * de commandes, et `rf_link_slot()` ne lit le slot qu'au moment d'émettre : la
- * commande 0x01 déjà mise en attente partira donc avec le bon.
+ * `rf_init()` is called from `kb_init()`, hence BEFORE `settings_load()`: it
+ * cannot know the persisted slot yet. That is the same ordering constraint that
+ * gives the NuPhy Air60 a separate `restore_rf_link()` alongside `rf_init()`.
+ * The first pass of `rf_task()`, however, runs in the main loop, so after
+ * settings are loaded. It also runs BEFORE the command queue is flushed for the
+ * first time, and `rf_link_slot()` only reads the slot when actually sending:
+ * the already-queued 0x01 command will therefore go out with the right slot.
  */
 static void rf_restore_settings(void)
 {
@@ -1304,11 +1302,11 @@ static void rf_restore_settings(void)
 }
 
 /*
- * Trace la transition, pas l'état : imprimer à chaque passage noierait la
- * console. Seuls les champs STABLES déclenchent -- `q_count` et `probe_misses`
- * bougent en permanence en sans-fil et sont imprimés sans être surveillés.
+ * Traces transitions, not steady state: printing on every pass would flood the
+ * console. Only STABLE fields trigger a print -- `q_count` and `probe_misses`
+ * change constantly in wireless mode and are printed without being watched.
  *
- * Compile à zéro hors build debug (`debug.h`).
+ * Compiles to nothing outside debug builds (`debug.h`).
  */
 #if DEBUG == 1
 static __xdata uint8_t diag_prev[RF_DIAG_FIELDS];
@@ -1319,11 +1317,11 @@ static void rf_diag_trace(void)
     bool    changed = false;
 
     for (i = 0; i < RF_DIAG_FIELDS; i++) {
-        /* La file de rapports bouge à chaque frappe : la surveiller noierait
-         * la console sans rien apprendre sur la liaison. */
-        /* Les compteurs de réception ont fait leur office -- ils ont prouvé que
-         * le module parle. Les surveiller maintenant noierait la console et
-         * empêcherait le rejeu des trames capturées, qui est ce qui compte. */
+        /* The report queue changes on every keystroke: watching it would flood
+         * the console without teaching us anything about the link. */
+        /* The receive counters have served their purpose -- they proved that
+         * the module talks. Watching them now would flood the console and
+         * prevent replaying captured frames, which is what matters. */
         if (i != RF_DIAG_QCOUNT && i != RF_DIAG_RXTOT && i != RF_DIAG_RXLAST &&
             i != RF_DIAG_RXIDX && diag_prev[i] != rf_diag_state[i]) {
             changed = true;
@@ -1334,14 +1332,14 @@ static void rf_diag_trace(void)
         return;
     }
     /*
-     * Le tampon console fait 128 octets et `console_putc` JETTE en silence quand
-     * il déborde. La bannière de démarrage et le vidage de `diag_task` le
-     * saturent : sans cette attente la toute première transition -- la plus
-     * intéressante, celle qui dit dans quel état le sélecteur a été lu au
-     * démarrage -- partait à la poubelle. `diag.c` se cadence exactement pareil.
+     * The console buffer is 128 bytes and `console_putc` SILENTLY DROPS bytes
+     * when it overflows. The startup banner and `diag_task` dump saturate it:
+     * without this wait, the very first transition -- the most interesting one,
+     * showing which state the selector was read in at boot -- was thrown away.
+     * `diag.c` paces itself the exact same way.
      *
-     * `diag_prev` n'est mis à jour QU'À l'émission réelle : une transition ne
-     * peut donc pas être perdue, seulement retardée.
+     * `diag_prev` is only updated when actually printing: a transition can
+     * therefore be delayed, never lost.
      */
     if (!console_is_drained()) {
         return;
@@ -1375,18 +1373,18 @@ void rf_task(void)
 
     if (rf_is_wireless()) {
         /*
-         * Le link-select passe EN PREMIER, et son drapeau ne retombe qu'à la
-         * RÉUSSITE. Deux défauts corrigés d'un coup :
+         * Link-select goes FIRST, and its pending flag is only cleared on
+         * SUCCESS. That fixes two bugs at once:
          *
-         *  - il était placé DERRIÈRE les deux noms Bluetooth, donc otage de
-         *    leur réussite. Un seul échec figeait `name_stage`, et la seule
-         *    commande qui commute réellement le module n'était jamais émise --
-         *    matériel parfait ou non ;
-         *  - `link_tx_pending` était remis à zéro AVANT l'émission, dont le
-         *    retour était jeté : une commande refusée était perdue pour de bon,
-         *    alors que la mise en file existait justement pour la rejouer.
+         *  - it used to sit BEHIND both Bluetooth names, held hostage to their
+         *    completion. A single failure froze `name_stage`, and the only
+         *    command that actually switches the module was never sent --
+         *    whether the hardware was fine or not;
+         *  - `link_tx_pending` used to be cleared BEFORE sending, and the
+         *    return value was discarded: a rejected command was lost for good,
+         *    even though queuing existed specifically to retry it.
          *
-         * Le firmware d'usine émet ses noms depuis `main`, hors de toute file.
+         * The factory firmware sends its names from `main`, outside any queue.
          */
         if (link_tx_pending) {
             if (rf_send_link(rf_link_slot(), link_tx_flag)) {
@@ -1404,21 +1402,21 @@ void rf_task(void)
     }
 
     /*
-     * `paired` n'est pas alimenté : AUCUN champ de la trame d'état ne porte
-     * l'appairage — la notion n'apparaît nulle part dans la feuille de relevé,
-     * et le déduire de `connected` serait une invention. `keyboard.c` le laisse
-     * à zéro.
+     * `paired` is not populated: NO field in the status frame carries pairing
+     * state — the concept appears nowhere in the disassembly notes, and
+     * inferring it from `connected` would be a fabrication. `keyboard.c` leaves
+     * it at zero.
      *
-     * `battery_level` est sur l'échelle 0-7 qu'impose `keyboard.h`, pas en
-     * pourcentage : c'est le contrat des lecteurs d'indicateurs de SMK.
+     * `battery_level` uses the 0-7 scale required by `keyboard.h`, not a
+     * percentage: that is the contract expected by SMK's indicator readers.
      */
     keyboard_state.rf_link       = (uint8_t)rf_link();
     keyboard_state.connected     = rf_connected() ? 1 : 0;
     keyboard_state.battery_level = (uint8_t)(((uint16_t)batt_shown * 7u) / 100u);
     keyboard_state.low_power     = batt_low ? 1 : 0;
 
-    /* Le voyant d'état suit ces trois-là. Toute la détection de front vit dans
-     * `aula_status.c` : ici on ne fait que publier. */
+    /* The status LED tracks these three. All edge detection lives in
+     * `aula_status.c`: here we only publish the state. */
     aula_status_poll(keyboard_state.rf_link, link_connected, batt_low);
 
     rf_diag_state[RF_DIAG_P74]    = P7_4 ? 1 : 0;
@@ -1478,15 +1476,15 @@ void rf_set_bt_slot(uint8_t slot)
 
 
 /*
- * Veille. Le firmware d'usine coupe l'EUART0 avant de s'endormir (`fcn.00007D74`
- * et `fcn.00009E39`, SFR touchés SCON et IEN1) et **reconfigure la liaison de
- * bout en bout au réveil** : les deux chemins de sortie de veille, `0x7E85` et
- * `0x9EBF`, rappellent tous deux l'init `0xB1C2`. C'est exactement ce que fait
- * `rf_uart_init()`.
+ * Sleep. The factory firmware disables EUART0 before going to sleep
+ * (`fcn.00007D74` and `fcn.00009E39`, touching SFRs SCON and IEN1) and
+ * **reconfigures the link from scratch on wake**: both wake-up paths, `0x7E85`
+ * and `0x9EBF`, call the init routine `0xB1C2` again. That is exactly what
+ * `rf_uart_init()` does.
  *
- * On y ajoute la vidange de l'émission : une rafale interrompue par la mise en
- * veille laisserait `tx_busy` armé et `P0.2` bloqué bas en sortie, donc le
- * module tenu en requête pendant tout le sommeil.
+ * We also drain any ongoing transmission: a burst interrupted by entering sleep
+ * would leave `tx_busy` set and `P0.2` stuck low as an output, holding the
+ * module in request state throughout sleep.
  */
 void rf_sleep_prepare(void)
 {
@@ -1507,9 +1505,9 @@ void rf_sleep_wake(void)
     IEN1 |= _ES0;
 
     /*
-     * L'état de liaison d'avant le sommeil ne vaut plus rien. On applique la
-     * règle du superviseur d'usine — « pas connecté, donc on redemande le
-     * transport » — sans attendre la prochaine sonde, qui est lente.
+     * Pre-sleep link state is no longer valid. We apply the factory
+     * supervisor's rule — "not connected, so re-request the transport" —
+     * without waiting for the next probe, which is slow.
      */
     link_connected = 0;
     rf_queue_link(RF_LINK_SELECT);
@@ -1519,9 +1517,8 @@ void rf_request_pairing(void)
 {
     if (rf_is_wireless()) {
         rf_queue_link(RF_LINK_PAIRING);
-        /* Motif en boucle : il tient jusqu'à ce que la liaison s'établisse, et
-         * c'est alors le front de `connected` qui le remplace par la
-         * respiration de confirmation. */
+        /* Looping pattern: holds until the link comes up, at which point the
+         * rising edge of `connected` replaces it with the confirmation breath. */
         aula_status_event(AULA_STATUS_PAIRING);
     }
 }

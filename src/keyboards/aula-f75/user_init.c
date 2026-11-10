@@ -6,8 +6,8 @@
 #include "gpio.h"
 
 /*
- * Initialisation GPIO transcrite de l'init consolidée du firmware d'usine,
- * fcn @ 0xA7EC. Valeurs relevées telles quelles :
+ * GPIO initialization transcribed from the consolidated init in the stock
+ * firmware, fcn @ 0xA7EC. Values recorded verbatim:
  *
  *   P0CR=0x9C  P1CR=0x3F  P2CR=0x3F  P3CR=0x3F
  *   P4CR=0x4D  P5CR=0x87  P6CR=0xFF  P7CR=0x60
@@ -15,10 +15,10 @@
  *   P4PCR=0x6F P5PCR=0x9F P6PCR=0xFF P7PCR=0xDF
  *   P0=0x1C
  *
- * Bit CR à 1 = sortie. On reprend la configuration d'usine en bloc plutôt que
- * de la reconstruire broche par broche : plusieurs broches ont un rôle encore
- * inconnu (P4.1, P4.4, P4.6, P4.7, P5.5, P5.6, P7.7) et les laisser dans l'état
- * d'usine est plus sûr que de deviner.
+ * CR bit = 1 means output. We apply the stock configuration in bulk rather than
+ * reconstructing it pin by pin: several pins still have an unknown role
+ * (P4.1, P4.4, P4.6, P4.7, P5.5, P5.6, P7.7), and leaving them in the stock
+ * state is safer than guessing.
  */
 
 void user_gpio_init(void)
@@ -43,19 +43,20 @@ void user_gpio_init(void)
 
     GPIO_WRITE(0, 0x1c);
 
-    /* Colonnes désélectionnées (actif bas) avant le premier scan */
+    /* Columns deselected (active-low) before the first scan */
     user_matrix_cols_deselect_all();
 }
 
+#ifndef BOOT_CHORD_HEADER
 /*
- * Les 18 canaux du rétroéclairage : trois bancs de six, période et DUTY1
- * communs. La période 0x04B0 et les dix-huit constantes DUTY1 sont celles du
- * firmware d'usine, relevées dans sa routine 0x6707-0x68D3.
+ * The 18 backlight channels: three banks of six, shared period and per-channel
+ * DUTY1. The period 0x04B0 and the eighteen DUTY1 constants come from the stock
+ * firmware, recorded in its routine 0x6707-0x68D3.
  *
- * Les bancs ne sont PAS activés ici : c'est `indicators_pwm_enable()` qui pose
- * `PWM_MODE_ENABLE`, et `indicators_pwm_disable()` qui le retire avant chaque
- * balayage de matrice. Allumer ici laisserait les LED conduire pendant le
- * premier scan, avant que le moteur de rendu n'ait écrit quoi que ce soit.
+ * The banks are NOT enabled here: `indicators_pwm_enable()` sets
+ * `PWM_MODE_ENABLE`, and `indicators_pwm_disable()` clears it before each
+ * matrix scan. Enabling them here would leave the LEDs driving during the
+ * first scan, before the rendering engine has written anything.
  */
 void user_pwm_init(void)
 {
@@ -70,10 +71,10 @@ void user_pwm_init(void)
     PWM2PERDL = perdl;
 
     /*
-     * DUTY1 = la phase du canal, écrite ici et JAMAIS retouchée ensuite --
-     * c'est très exactement ce que fait le firmware d'usine en 0x6713-0x68CD,
-     * et les valeurs ci-dessous sont les siennes, relevées une à une.
-     * DUTY2 part sur la même valeur : impulsion nulle, panneau noir.
+     * DUTY1 = the channel phase, written here and NEVER touched again --
+     * this is exactly what the stock firmware does at 0x6713-0x68CD,
+     * and the values below are its own, recorded one by one.
+     * DUTY2 starts at the same value: zero pulse width, dark panel.
      */
     SET_PWM_DUTY(PWM00, AULA_RGB_PHASE(15), AULA_RGB_PHASE(15));
     SET_PWM_DUTY(PWM01, AULA_RGB_PHASE(16), AULA_RGB_PHASE(16));
@@ -93,12 +94,13 @@ void user_pwm_init(void)
     SET_PWM_DUTY(PWM23, AULA_RGB_PHASE(3), AULA_RGB_PHASE(3));
     SET_PWM_DUTY(PWM24, AULA_RGB_PHASE(4), AULA_RGB_PHASE(4));
     SET_PWM_DUTY(PWM25, AULA_RGB_PHASE(5), AULA_RGB_PHASE(5));
-
-    aula_rgb_clear();
 }
+#endif
 
 void user_init(void)
 {
     user_gpio_init();
+#ifndef BOOT_CHORD_HEADER
     user_pwm_init();
+#endif
 }

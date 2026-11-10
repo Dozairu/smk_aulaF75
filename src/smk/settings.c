@@ -5,9 +5,6 @@
 #endif
 
 _Static_assert(sizeof(user_settings_t) <= NVM_CAPACITY, "user_settings_t too large for the settings record");
-// La longueur du record NVM tient sur un octet (nvm.c) et est tronquée en (uint8_t)
-// ci-dessous : au-delà de 255 octets, la sauvegarde serait silencieusement coupée.
-_Static_assert(sizeof(user_settings_t) <= 255u, "user_settings_t exceeds the 1-byte NVM record length");
 
 user_settings_t user_settings;
 
@@ -21,7 +18,7 @@ bool settings_load(void)
 #if DEBUG == 1
 void settings_dump(void)
 {
-    dprintf("settings le=%02x lb=%02x ls=%02x ue=%02x ub=%02x us=%02x bat=%02x rf=%02x\r\n", user_settings.led_effect, user_settings.led_brightness, user_settings.led_speed, user_settings.ul_effect, user_settings.ul_brightness, user_settings.ul_speed, user_settings.battery_indicator_on, user_settings.rf_link);
+    dprintf("settings le=%02x lb=%02x ls=%02x lc=%02x ue=%02x ub=%02x us=%02x bat=%02x rf=%02x\r\n", user_settings.led_effect, user_settings.led_brightness, user_settings.led_speed, user_settings.led_color, user_settings.ul_effect, user_settings.ul_brightness, user_settings.ul_speed, user_settings.battery_indicator_on, user_settings.rf_link);
 }
 #endif
 

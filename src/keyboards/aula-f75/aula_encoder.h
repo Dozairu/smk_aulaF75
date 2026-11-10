@@ -4,37 +4,37 @@
 #include <stdint.h>
 
 /*
- * Molette rotative de l'AULA F75.
+ * Rotary encoder knob for the AULA F75.
  *
- * L'APPUI est une position de matrice ordinaire -- `[ligne 0][colonne 14]`,
- * câblée sur « muet » dans la disposition. La ROTATION, elle, est hors matrice :
- * deux phases en quadrature sur `P0.5` et `P0.6`.
+ * The PRESS is an ordinary matrix position -- `[row 0][col 14]`, wired to
+ * "mute" in the keymap. ROTATION, however, is outside the matrix: two
+ * quadrature phases on `P0.5` and `P0.6`.
  *
- * Le découpage en deux fonctions n'est pas du style. `aula_encoder_sample()`
- * vit dans l'ISR Timer2 et `aula_encoder_task()` dans la boucle principale :
- * `host_consumer_send()` traverse la pile de rapports, qui n'est pas joignable
- * depuis une ISR sans provoquer une collision de recouvrement SDCC -- ce que
- * `utils/check_interrupts.py` casse le build pour empêcher.
+ * Splitting this into two functions is not a stylistic choice.
+ * `aula_encoder_sample()` lives in the Timer2 ISR and `aula_encoder_task()` in
+ * the main loop: `host_consumer_send()` traverses the report stack, which
+ * cannot be called from an ISR without causing an SDCC overlay collision --
+ * something `utils/check_interrupts.py` fails the build to prevent.
  */
 
-/* Depuis la sous-trame LED (ISR, ~400 µs) : échantillonne et accumule. */
+/* From the LED subframe (ISR, ~400 us): samples and accumulates. */
 void aula_encoder_sample(void);
 
-/* Depuis la boucle principale : émet les rapports consumer en attente. */
+/* From the main loop: sends pending consumer reports. */
 void aula_encoder_task(void);
 
 /*
- * Témoin de rotation, lu depuis l'ISR de rendu. Le clavier bat comme un coeur
- * pendant ~1,5 s après la dernière détente, et la cadence suit le sens : monter
- * accélère, descendre ralentit. Le niveau est RELATIF -- rien dans le protocole
- * USB ni radio ne dit au clavier où en est le volume de l'hôte.
+ * Rotation indicator, read from the rendering ISR. The keyboard beats like a
+ * heart for ~1.5 s after the last detent, and the pace follows the direction:
+ * turning up speeds up, turning down slows down. The level is RELATIVE --
+ * nothing in the USB or radio protocol tells the keyboard the host's volume.
  */
 bool aula_encoder_beating(void);
 
-/* Pas de motif par bouclage de balayage, en 1/256e. 256 = cadence du coeur de
- * la frappe automatique. */
+/* Pattern steps per scan wrap, in 1/256ths. 256 = pace of the auto-type
+ * heartbeat. */
 uint16_t aula_encoder_beat_rate(void);
 
-/* Le cran courant, 0 (le plus bas) à 7. Le rendu en tire la teinte, pour que la
- * COULEUR dise le niveau pendant que la CADENCE dit le sens. */
+/* Current step, 0 (lowest) to 7. The renderer derives the hue from it, so
+ * COLOR indicates the level while PACE indicates the direction. */
 uint8_t aula_encoder_beat_level(void);

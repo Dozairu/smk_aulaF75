@@ -6,58 +6,58 @@
 #include <stdbool.h>
 
 /*
- * Epomaker x AULA F75 (modèle classique, PAS le "F75 Ultra")
+ * Epomaker x AULA F75 (classic model, NOT the "F75 Ultra")
  *
- *   MCU      SinoWealth SH68F90A, marquage IC BYK916
- *   USB      258A:010C  (lus dans la flash d'usine en 0x5FCE)
- *   Sans fil BK3632 Beken, relié par EUART0 -- voir la note plus bas
+ *   MCU      SinoWealth SH68F90A, IC marking BYK916
+ *   USB      258A:010C  (read from factory flash at 0x5FCE)
+ *   Wireless Beken BK3632, connected via EUART0 -- see note below
  *
- * ATTENTION : ce portage est INCOMPLET par construction. Le brochage n'a pas
- * été établi et n'est pas devinable depuis le firmware d'usine sans travail
- * supplémentaire. Les symboles manquants provoquent volontairement une erreur
- * de compilation : un fichier qui refuse de compiler est un livrable correct,
- * un fichier qui compile en briquant le clavier ne l'est pas.
+ * WARNING: this port is INCOMPLETE by design. The pinout has not been
+ * established and cannot be guessed from the factory firmware without further
+ * work. Missing symbols intentionally trigger a compilation error: a file that
+ * refuses to compile is a valid deliverable, a file that compiles and bricks
+ * the keyboard is not.
  *
- * Feuille de relevé : docs/keyboards/aula-f75.md
+ * Reverse-engineering notes: docs/keyboards/aula-f75.md
  */
 
 /* -------------------------------------------------------------------------
- * Matrice
+ * Matrix
  *
- * Établi : la table de couleurs d'OpenRGB expose num_leds = 90 et indexe les
- * LED en colonnes -- index = colonne * 6 + ligne. L'indice max est 89 (flèche
- * droite) et l'indice 6 (entre Échap et F1) est le trou de la rangée F.
- * Donc la grille LED est 6 lignes x 15 colonnes.
+ * Established: OpenRGB's color table exposes num_leds = 90 and indexes LEDs
+ * column-major -- index = col * 6 + row. The max index is 89 (right arrow)
+ * and index 6 (between Esc and F1) is the F-row gap.
+ * So the LED grid is 6 rows x 15 columns.
  *
- * NON établi : que la matrice de touches partage cette géométrie. C'est le cas
- * habituel sur ces claviers, mais le firmware d'usine ne l'a pas confirmé --
- * aucune borne de boucle de scan n'a été isolée. Une 16e colonne sans LED
- * resterait invisible pour OpenRGB.
+ * NOT established: whether the key matrix shares this geometry. That is the
+ * usual case on these keyboards, but the factory firmware did not confirm it --
+ * no scan loop bound has been isolated. A 16th column without LEDs would
+ * remain invisible to OpenRGB.
  * ------------------------------------------------------------------------- */
 #define MATRIX_ROWS 6
 #define MATRIX_COLS 15
 
 /* -------------------------------------------------------------------------
- * Brochage -- ÉTABLI PAR DÉSASSEMBLAGE, TRIPLEMENT RECOUPÉ
+ * Pinout -- ESTABLISHED BY DISASSEMBLY, TRIPLE-CHECKED
  *
- * Sources concordantes :
- *  1. init GPIO consolidée du firmware d'usine, fcn @ 0xA7EC :
+ * Corroborating sources:
+ *  1. consolidated GPIO init in the factory firmware, fcn @ 0xA7EC:
  *       P0CR=0x9C  P1CR=0x3F  P2CR=0x3F  P3CR=0x3F
  *       P4CR=0x4D  P5CR=0x87  P6CR=0xFF  P7CR=0x60
- *     (bit CR à 1 = sortie, cf. GPIO_OUTPUT dans platform/sh68f90/gpio.h)
- *  2. table de saut de sélection de colonne @ 0x72F4 : 20 emplacements dont
- *     15 peuplés, chaque handler relâchant la colonne précédente (setb) avant
- *     de sélectionner la suivante (clr) -- l'emplacement 0 relâche P4.3, ce qui
- *     ferme la boucle et fixe P4.3 comme dernière colonne.
- *  3. portage indépendant tiagoluizo/smk@aula-f75-port, qui aboutit au même
- *     brochage par une analyse séparée.
+ *     (CR bit set to 1 = output, cf. GPIO_OUTPUT in platform/sh68f90/gpio.h)
+ *  2. column selection jump table @ 0x72F4: 20 slots of which 15 are
+ *     populated, each handler releasing the previous column (setb) before
+ *     selecting the next one (clr) -- slot 0 releases P4.3, closing the loop
+ *     and establishing P4.3 as the last column.
+ *  3. independent port tiagoluizo/smk@aula-f75-port, which arrives at the same
+ *     pinout through separate analysis.
  *
- * Sélection de colonne ACTIVE BASSE. Lignes ACTIVES BASSES (pull-ups internes).
+ * Column selection ACTIVE LOW. Rows ACTIVE LOW (internal pull-ups).
  * ------------------------------------------------------------------------- */
 #define AULA_F75_PINMAP_VERIFIED 1
 
-/* Lignes -- entrées. Confirmé : P7CR=0x60 laisse P7.0-3 en entrée,
- * P5CR=0x87 laisse P5.3 et P5.4 en entrée. */
+/* Rows -- inputs. Confirmed: P7CR=0x60 leaves P7.0-3 as inputs,
+ * P5CR=0x87 leaves P5.3 and P5.4 as inputs. */
 #define KB_R0_P7_0 _P7_0
 #define KB_R1_P7_1 _P7_1
 #define KB_R2_P7_2 _P7_2
@@ -72,7 +72,7 @@
 #define KB_R4 P5_3
 #define KB_R5 P5_4
 
-/* Colonnes -- sorties, dans l'ordre de scan lu dans la table @ 0x72F4 */
+/* Columns -- outputs, in scan order read from the table @ 0x72F4 */
 #define KB_C0_P6_0  _P6_0
 #define KB_C1_P6_1  _P6_1
 #define KB_C2_P6_2  _P6_2
@@ -105,7 +105,7 @@
 #define KB_C13 P4_2
 #define KB_C14 P4_3
 
-/* Masques par port, dérivés des broches ci-dessus */
+/* Per-port masks, derived from the pins above */
 #define KB_C_P4_MASK (uint8_t)(KB_C12_P4_0 | KB_C13_P4_2 | KB_C14_P4_3)
 #define KB_C_P5_MASK (uint8_t)(KB_C8_P5_0 | KB_C9_P5_1 | KB_C10_P5_2 | KB_C11_P5_7)
 #define KB_C_P6_MASK (uint8_t)(KB_C0_P6_0 | KB_C1_P6_1 | KB_C2_P6_2 | KB_C3_P6_3 | \
@@ -113,122 +113,122 @@
 #define KB_R_P5_MASK (uint8_t)(KB_R4_P5_3 | KB_R5_P5_4)
 #define KB_R_P7_MASK (uint8_t)(KB_R0_P7_0 | KB_R1_P7_1 | KB_R2_P7_2 | KB_R3_P7_3)
 
-/* Rétroéclairage : 18 sorties PWM = 6 lignes physiques de LED x R/G/B.
- * Confirmé par P1CR=P2CR=P3CR=0x3F (les 18 broches PWM en sortie).
- * Correspondance MCU déduite du NuPhy Air60 : PWM0x<->P3_x, PWM1x<->P2_x,
- * PWM2x<->P1_x. Les colonnes de matrice servent de sélecteurs de multiplexage.
+/* Backlight: 18 PWM outputs = 6 physical LED rows x R/G/B.
+ * Confirmed by P1CR=P2CR=P3CR=0x3F (all 18 PWM pins set as outputs).
+ * MCU mapping deduced from the NuPhy Air60: PWM0x<->P3_x, PWM1x<->P2_x,
+ * PWM2x<->P1_x. The matrix columns serve as multiplexing selectors.
  *
- * Il n'y a PAS de macros LED_PWM_Cn ici, contrairement aux autres claviers de
- * SMK : chez eux un canal PWM pilote une colonne LED, ici il pilote une
- * (ligne, couleur). La correspondance canal -> registre vit en un seul endroit,
- * `aula_rgb_load_column()`, dans l'ordre de chargement du firmware d'usine --
- * qui n'est pas l'ordre naturel des numéros de canal. Une seconde table avec
- * une autre origine d'index n'aurait servi qu'à se contredire.
+ * There are NO LED_PWM_Cn macros here, unlike the other keyboards in SMK:
+ * on those, a PWM channel drives an LED column, whereas here it drives a
+ * (row, color). The channel -> register mapping lives in a single place,
+ * `aula_rgb_load_column()`, in the factory firmware's loading order --
+ * which is not the natural channel number order. A second table with a
+ * different index origin would only have served to contradict itself.
  *
- * Un balayage LED complet -- les quinze colonnes -- entre deux balayages de
- * matrice, comme le genesis-thor-300, seul autre clavier de SMK à partager ses
- * colonnes entre le scan et le multiplexage LED. */
+ * One full LED sweep -- all fifteen columns -- between two matrix scans,
+ * like the genesis-thor-300, the only other keyboard in SMK that shares its
+ * columns between scanning and LED multiplexing. */
 #define LED_SUBFRAMES_PER_SCAN MATRIX_COLS
 
 /*
- * Instantané de l'état des touches par colonne, bit N = ligne N enfoncée.
- * Alimenté par les crochets de scan de `user_matrix.c`, consommé par le moteur
- * réactif : `matrix.c` garde son tableau privé et ses crochets ne passent pas
- * la position, mais nos propres crochets, eux, la voient.
+ * Per-column key state snapshot, bit N = row N pressed.
+ * Fed by the scan hooks in `user_matrix.c`, consumed by the reactive engine:
+ * `matrix.c` keeps its array private and its hooks do not pass the position,
+ * whereas our own hooks do see it.
  */
 uint8_t user_matrix_pressed(uint8_t col);
 
-/* Dix crans de luminosité : la table de gain d'usine en CODE 0x2937 en compte
- * dix (00 08 10 18 20 28 32 3c 46 50), bornée par CODE[0xA8D5+effet] = 9. */
+/* Ten brightness steps: the factory gain table at CODE 0x2937 has ten entries
+ * (00 08 10 18 20 28 32 3c 46 50), bounded by CODE[0xA8D5+effect] = 9. */
 #define LED_BRIGHTNESS_LEVELS 10
 
 /* -------------------------------------------------------------------------
- * Liaison sans fil
+ * Wireless link
  *
- * Le NuPhy Air60 parle à son BK3632 en SPI bit-bangé (RF_BB_SPI_*,
- * src/platform/bb_spi.c). L'AULA F75 ne fonctionne PAS comme ça : son firmware
- * d'usine utilise EUART0 (vecteur 13, SCON 0xD8 / SBUF 0xAA), en half-duplex --
- * l'ISR bascule la direction d'une broche via P0CR puis P0.2.
+ * The NuPhy Air60 talks to its BK3632 over bit-banged SPI (RF_BB_SPI_*,
+ * src/platform/bb_spi.c). The AULA F75 does NOT work like that: its factory
+ * firmware uses EUART0 (vector 13, SCON 0xD8 / SBUF 0xAA), in half-duplex --
+ * the ISR toggles pin direction via P0CR and then P0.2.
  *
- * Conséquence : src/platform/bk3632/rf_controller.c n'est PAS réutilisable tel
- * quel pour ce clavier. Le transport EUART0 a donc été écrit à part, dans
- * aula_rf.c, et meson.build déclare 'wireless': 'euart0' pour ce clavier.
+ * Consequence: src/platform/bk3632/rf_controller.c is NOT reusable as-is
+ * for this keyboard. The EUART0 transport was therefore written separately in
+ * aula_rf.c, and meson.build declares 'wireless': 'euart0' for this keyboard.
  *
- * Sélecteur de connexion, trois positions (établi par fcn.000084E9) :
- *   P7.4 = 0            -> 2,4 GHz (dongle)
- *   P7.4 = 1, P4.5 = 1  -> filaire USB
- *   P7.4 = 1, P4.5 = 0  -> Bluetooth, slot choisi par LNK_BT1..3
- * P4.7 est la ligne « module prêt » : aucune trame ne part quand elle est basse.
+ * Connection selector, three positions (established by fcn.000084E9):
+ *   P7.4 = 0            -> 2.4 GHz (dongle)
+ *   P7.4 = 1, P4.5 = 1  -> USB wired
+ *   P7.4 = 1, P4.5 = 0  -> Bluetooth, slot selected by LNK_BT1..3
+ * P4.7 is the "module ready" line: no frame is sent while it is low.
  *
- * ÉTAT : transcrit du désassemblage, puis CONFIRMÉ SUR L'APPAREIL -- frappe par
- * le dongle 2,4 GHz et appairage Bluetooth. La panne initiale n'était pas dans
- * le pilote : `tick.c` balaie toute la matrice dans l'ISR Timer2 (~320 µs) et,
- * à 260 870 bauds, un octet tombe toutes les 38 µs sans FIFO sur SBUF. À
- * priorité égale l'EUART0 ne pouvait pas préempter et perdait huit octets par
- * balayage. `rf_uart_init()` pose donc `IPH1/IPL1 |= _ES0`, comme l'usine
- * (IPH1=0x42, IPL1=0x41). Le keycode RF_DIAG reste : c'est l'instrument qui l'a
- * montré, et le seul utilisable sur batterie.
+ * STATUS: transcribed from disassembly, then CONFIRMED ON DEVICE -- typing via
+ * the 2.4 GHz dongle and Bluetooth pairing. The initial failure was not in the
+ * driver: `tick.c` scans the entire matrix inside the Timer2 ISR (~320 µs) and,
+ * at 260,870 baud, a byte arrives every 38 µs with no FIFO on SBUF. At equal
+ * priority EUART0 could not preempt and dropped eight bytes per scan.
+ * `rf_uart_init()` therefore sets `IPH1/IPL1 |= _ES0`, like the factory
+ * firmware (IPH1=0x42, IPL1=0x41). The RF_DIAG keycode stays: it is the tool
+ * that revealed this, and the only one usable on battery.
  * ------------------------------------------------------------------------- */
 
 enum custom_keycodes {
-    FX_NEXT = SAFE_RANGE, /* effet RGB suivant */
-    FX_PREV,              /* effet RGB précédent */
-    BRI_UP,               /* luminosité + */
-    BRI_DN,               /* luminosité - */
-    SPD_UP,               /* vitesse + */
-    SPD_DN,               /* vitesse - */
-    CLR_NEXT,             /* couleur suivante : 0-6 fixes, 7 arc-en-ciel */
-    DIR_TOG,              /* sens de défilement : le bit 0x23 d'usine */
+    FX_NEXT = SAFE_RANGE, /* next RGB effect */
+    FX_PREV,              /* previous RGB effect */
+    BRI_UP,               /* brightness + */
+    BRI_DN,               /* brightness - */
+    SPD_UP,               /* speed + */
+    SPD_DN,               /* speed - */
+    CLR_NEXT,             /* next color: 0-6 fixed, 7 rainbow */
+    DIR_TOG,              /* scroll direction: factory bit 0x23 */
 
     /*
-     * Emplacements Bluetooth. Le transport lui-même vient de la glissière, pas
-     * d'une touche : ces trois-là ne choisissent QUE le slot, comme la commande
-     * 0x01 du firmware d'usine. Un appui sur le slot déjà actif relance
-     * l'appairage -- c'est ce que fait le firmware d'usine quand le bit 0x2C.5
-     * est posé (drapeau 1 de la commande 0x01, fcn.0000870C).
+     * Bluetooth slots. The transport itself comes from the slide switch, not
+     * from a key: these three ONLY select the slot, like command 0x01 in the
+     * factory firmware. Pressing the already-active slot restarts pairing --
+     * which is what the factory firmware does when bit 0x2C.5 is set (flag 1
+     * of command 0x01, fcn.0000870C).
      */
     LNK_BT1,
     LNK_BT2,
     LNK_BT3,
 
     /*
-     * Relance d'appairage, sur `Fn + \``  -- la position du raccourci d'usine
-     * (clé 0x08 du répartiteur 0x4136, arm 0x426A).
+     * Pairing restart, on `Fn + \`` -- the position of the factory shortcut
+     * (key 0x08 of dispatcher 0x4136, arm 0x426A).
      *
-     * DIVERGENCE ASSUMÉE : l'arm d'usine exige le transport 2,4 GHz et ne
-     * réappaire donc que le dongle. Ici la commande part avec `rf_link_slot()`,
-     * qui rend le slot du transport COURANT : la même touche relance le dongle
-     * en 2,4 GHz et l'emplacement actif en Bluetooth. Sans effet en filaire.
+     * DELIBERATE DIVERGENCE: the factory arm requires the 2.4 GHz transport
+     * and therefore only re-pairs the dongle. Here the command is sent with
+     * `rf_link_slot()`, which returns the slot of the CURRENT transport: the
+     * same key re-pairs the dongle in 2.4 GHz mode and the active slot in
+     * Bluetooth mode. No-op in wired mode.
      */
     RF_PAIR,
 
     /*
-     * Overlay de diagnostic radio sur les touches `1` à `0`. Le sans-fil échoue
-     * clavier sur batterie, USB débranché : la console HID n'existe pas dans ce
-     * montage, les LED oui.
+     * Radio diagnostic overlay on keys `1` to `0`. Wireless fails when the
+     * keyboard is on battery with USB unplugged: the HID console does not
+     * exist in that setup, whereas the LEDs do.
      */
     RF_DIAG,
 
     /*
-     * Mode « frappe automatique », sur `Fn + Espace` ET `Fn + appui molette`.
-     * Tape une lettre au hasard puis l'efface d'un retour arrière, toutes les
-     * 1 s ± 500 ms, jusqu'à ce qu'une touche quelconque l'arrête. Aucun
-     * équivalent d'usine. Voir `aula_macro.c`.
+     * "Auto-typing" mode, on `Fn + Space` AND `Fn + encoder press`.
+     * Types a random letter then deletes it with Backspace, every 1 s ± 500 ms,
+     * until any key stops it. No factory equivalent. See `aula_macro.c`.
      */
     MACRO_TG,
 
     /*
-     * Mode « compensation AZERTY », sur `Fn + Ctrl gauche`. Le clavier porte la
-     * disposition US International ; ce mode traduit chaque frappe pour un hôte
-     * réglé en AZERTY français. Non persisté : il repart éteint au démarrage.
-     * Voir `aula_layout.c`.
+     * "AZERTY compensation" mode, on `Fn + Left Ctrl`. The keyboard has a
+     * US International physical layout; this mode translates each keystroke
+     * for a host set to French AZERTY. Not persisted: starts off on boot.
+     * See `aula_layout.c`.
      */
     LAYOUT_AZ,
 
     /*
-     * `€` sur `Fn + E`. Visé pour un hôte FRANÇAIS, où c'est AltGr+E -- donc
-     * indépendant de LAYOUT_AZ. Sur un hôte US International, `€` est AltGr+5 et
-     * ce raccourci sortirait un `e`.
+     * `€` on `Fn + E`. Targeted at a FRENCH host, where it is AltGr+E -- thus
+     * independent of LAYOUT_AZ. On a US International host, `€` is AltGr+5 and
+     * this shortcut would output an `e`.
      */
     EURO,
 

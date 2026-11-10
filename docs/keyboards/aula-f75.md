@@ -1,841 +1,840 @@
-# Epomaker × AULA F75 (modèle classique)
+# Epomaker × AULA F75 (classic model)
 
-> ## ✅ 2026-09-11 — LE SANS-FIL FONCTIONNE, et la cause racine n'était pas dans le protocole
+> ## ✅ 2026-09-11 — WIRELESS WORKS, and the root cause wasn't in the protocol
 >
-> **Frappe confirmée sur le dongle 2,4 GHz, appairage Bluetooth confirmé** -- les deux transports,
-> après la première mise en service de la radio sur l'appareil. Ce qui bloquait n'était ni le brochage, ni le débit, ni la trame : **l'EUART0 perdait
-> huit octets à chaque balayage de matrice.**
+> **Keystrokes confirmed over the 2.4 GHz dongle, Bluetooth pairing confirmed** -- both transports,
+> after the first radio bring-up on the device. What was blocking wasn't the pinout, the baud rate, or the frame format: **EUART0 was dropping
+> eight bytes on every matrix scan.**
 
-## La mise en service du sans-fil — ce que l'appareil a dit
+## Wireless bring-up — what the hardware revealed
 
-Symptôme de départ : 2,4 GHz **et** Bluetooth échouent identiquement, rétroéclairage intact,
-frappes perdues. Les deux transports tombant ensemble, la faute était dans le chemin commun.
+Initial symptom: 2.4 GHz **and** Bluetooth fail identically, backlight intact,
+keystrokes lost. With both transports failing together, the fault lay in the shared path.
 
-### La cause racine : une priorité d'interruption
+### Root cause: an interrupt priority
 
-`tick.c` exécute le **balayage complet de la matrice** et les sous-trames LED **dans l'ISR Timer2**.
-Un balayage dure ~320 µs. À 260 870 bauds un octet tombe toutes les **38 µs**, et le SH68F90 n'a
-aucun tampon derrière `SBUF`. À priorité égale l'ISR série ne préempte pas : **chaque balayage de
-matrice coûte huit octets.**
+`tick.c` runs the **full matrix scan** and the LED subframes **inside the Timer2 ISR**.
+A scan takes ~320 µs. At 260,870 baud, a byte arrives every **38 µs**, and the SH68F90 has
+no buffer behind `SBUF`. At equal priority, the serial ISR does not preempt: **every matrix scan
+costs eight bytes.**
 
-La preuve est dans le flux brut, latché dans l'ISR sans aucune interprétation :
+The proof is in the raw stream, latched inside the ISR with zero interpretation:
 
 ```
 02 00 00 52 │ 03 00 52 │ 02 06 00 00 00 02 dd 03 │ 02 00 01 00 │ 02 00 01 00 00 52
 03 00 00 00 00 52 │ 02 00 01 00 │ 02 00 52 │ 02 00 01 │ 02 00
 ```
 
-`02 00 01 00 00 52` et `03 00 00 00 00 52` ont des sommes **valides** (`0x55 − Σ`). Tout le reste
-— `02 00 00 52`, `02 00 52`, `02 00 01 00` — n'en est que des **sous-suites**. Le module émettait
-correctement ; nous perdions des octets.
+`02 00 01 00 00 52` and `03 00 00 00 00 52` have **valid** checksums (`0x55 − Σ`). Everything else
+— `02 00 00 52`, `02 00 52`, `02 00 01 00` — is merely a **subsequence** of them. The module was transmitting
+properly; we were dropping bytes.
 
-**Le firmware d'usine pose exactement le bit qui manquait, et cette page le notait déjà** sans
-qu'on en tire la conséquence : `0xECC5` écrit `IPH1 = 0x42` et `IPL1 = 0x41`, bit 6 des deux côtés,
-soit l'EUART0 au **niveau 3**. SMK ne réglait aucune priorité d'interruption.
+**The factory firmware sets the exact bit that was missing, and this page had already noted it** without
+drawing the conclusion: `0xECC5` writes `IPH1 = 0x42` and `IPL1 = 0x41`, bit 6 in both,
+putting EUART0 at **priority level 3**. SMK did not configure any interrupt priorities.
 
 ```c
 IPH1 |= _ES0;
 IPL1 |= _ES0;
 ```
 
-Après correction, le même flux : **zéro trame rejetée, zéro perte de lien.**
+After the fix, on the same stream: **zero rejected frames, zero link drops.**
 
-### Le format des trames reçues — relevé, plus inféré
+### Received frame format — measured, no longer inferred
 
-La longueur dépend de **l'octet 1**, qui rappelle la commande acquittée, et non du seul type.
+The length depends on **byte 1**, which echoes the acknowledged command, not solely on the frame type.
 
-| Trame | Longueur | Sens |
+| Frame | Length | Meaning |
 | --- | --- | --- |
-| `02 06 00 00 00 02 dd 03 01 6a` | **10** | réponse à la sonde d'état `0x06` |
-| `02 01 00 00 00 52` | **6** | accusé du link-select |
-| `02 02 00 00 00 51` | **6** | accusé d'un rapport de touches |
-| `03 00 00 00 00 52` | **6** | annonce |
+| `02 06 00 00 00 02 dd 03 01 6a` | **10** | response to status probe `0x06` |
+| `02 01 00 00 00 52` | **6** | link-select acknowledgment |
+| `02 02 00 00 00 51` | **6** | key report acknowledgment |
+| `03 00 00 00 00 52` | **6** | announcement |
 
-Somme d'usine `0x55 − Σ` vérifiée sur chacune. Sur la réponse d'état, `[4] = 0` et `[5] = 2` — ce
-qui satisfait exactement la condition 2,4 GHz de `rf_status_apply()` — et `[6:7] = dd 03` donne une
-batterie de **989**, au-dessus du seuil « pleine » de 912.
+Factory checksum `0x55 − Σ` verified on each one. On the status response, `[4] = 0` and `[5] = 2` — which
+exactly satisfies the 2.4 GHz condition in `rf_status_apply()` — and `[6:7] = dd 03` gives a
+battery reading of **989**, above the "full" threshold of 912.
 
-Le portage attendait **dix** octets pour toute trame de type `0x02` : sur un accusé de six il
-avalait le début de la trame suivante et ne se recalait jamais.
+The port was expecting **ten** bytes for every type `0x02` frame: on a six-byte acknowledgment, it
+swallowed the start of the next frame and never resynchronized.
 
-### Trois défauts de structure, mis en évidence par la même mesure
+### Three structural flaws exposed by the same measurement
 
-1. **Le link-select était prisonnier des noms Bluetooth.** La commande `0x01` est la seule qui
-   commute le module, et elle était derrière deux envois de 32 octets dans une chaîne `if / else if`.
-   Un seul échec figeait `name_stage`. L'usine émet ses noms depuis `main`, **sans garde**.
-2. **`link_tx_pending` retombait avant l'émission**, dont le retour était jeté : une commande refusée
-   était perdue définitivement.
-3. **`rf_rx_drop()` jetait le tampon entier** après chaque trame. À 260 kbauds contre une boucle
-   principale en millisecondes, deux trames atterrissent couramment ensemble : la seconde était
-   perdue. Et sur un octet parasite, tout jeter interdisait tout recalage.
+1. **Link-select was held hostage by the Bluetooth names.** Command `0x01` is the only one that
+   switches the module, and it sat behind two 32-byte transmissions in an `if / else if` chain.
+   A single failure froze `name_stage`. The factory firmware sends its names from `main`, **unguarded**.
+2. **`link_tx_pending` was cleared before transmission**, whose return value was discarded: a rejected command
+   was lost forever.
+3. **`rf_rx_drop()` discarded the entire buffer** after each frame. At 260 kbaud against a main loop
+   running in milliseconds, two frames routinely arrive back-to-back: the second one was
+   lost. And on a stray byte, flushing everything prevented any resynchronization.
 
-`P4.7` a par ailleurs été mesuré **haut** : la ligne « module prêt » n'a jamais rien bloqué. Le garde
-reste sur les rapports, mais le contrôle s'en affranchit après `RF_CTRL_STALL` tentatives — sans ce
-repli, une ligne basse rendrait le défaut indiagnosticable.
+`P4.7` was also measured **high**: the "module ready" line never blocked anything. The guard
+remains on reports, but control commands bypass it after `RF_CTRL_STALL` attempts — without this
+fallback, a stuck-low line would make the fault impossible to diagnose.
 
-### L'outillage qui a permis tout ça
+### The tooling that made this possible
 
-**La console HID de SMK** (`src/smk/console.c`, page vendeur `0xFF31`, usage `0x74`, report ID 7) :
-elle existait, elle n'avait jamais servi sur ce clavier. Lecteur PC dans `tools/smk_console.py`.
+**The SMK HID console** (`src/smk/console.c`, vendor page `0xFF31`, usage `0x74`, report ID 7):
+it existed, but had never been used on this keyboard. PC reader in `tools/smk_console.py`.
 
-⚠️ **Un défaut de SMK amont la rendait inutilisable sous Windows.** La collection console ne
-déclarait que son `INPUT`, alors que l'attachement de l'hôte passe par `SET_REPORT(FEATURE, id 7)`.
-Linux transmet n'importe quel `SET_REPORT` via hidraw et le défaut y reste invisible ; **Windows
-valide contre le descripteur et refuse** — mesuré : `-1` à chaque longueur, sur les deux collections
-vendeur. Un item `FEATURE` ajouté dans `src/smk/usb.c`, et la console débite.
+⚠️ **An upstream SMK bug made it unusable on Windows.** The console collection only
+declared its `INPUT`, whereas host attachment goes through `SET_REPORT(FEATURE, id 7)`.
+Linux passes any `SET_REPORT` through hidraw so the bug goes unnoticed there; **Windows
+validates against the descriptor and rejects it** — measured: `-1` at every length, across both vendor
+collections. Adding a `FEATURE` item in `src/smk/usb.c` got the console streaming.
 
-**L'overlay LED `Fn + R`** peint l'état du pilote sur les touches `1` à `0`. C'est le seul
-instrument utilisable sur batterie, USB débranché — c'est-à-dire dans le montage qui échouait.
+**The `Fn + R` LED overlay** paints the driver state onto keys `1` through `0`. It is the only
+instrument usable on battery with USB unplugged — that is, in the exact setup that was failing.
 
-**La capture différée** : le firmware mémorise les 64 premiers octets reçus et les rejoue quand la
-console redevient disponible. Sans elle, le minutage de la manip devenait la variable dominante et
-deux captures ont été perdues.
-
-
+**Deferred capture**: the firmware records the first 64 received bytes and replays them when the
+console becomes available again. Without it, hand timing became the dominant variable and
+two captures were lost.
 
 
-## Verrouillage majuscule — le témoin qui n'existait pas
 
-`indicators_update_step()` recevait `keyboard_state_t *keyboard` et l'écartait d'un
-`(void)keyboard; /* les indicateurs d'état ne sont pas encore portés */`. Ce n'était donc pas une
-panne : la fonction n'avait jamais été écrite pour cette carte.
 
-L'état vient du rapport LED HID de l'hôte, posé par `usb_ep0_out_irq()` (`src/smk/usb.c`) dans
-`keyboard_state.led_state` — bit 0 `Verr. Num`, **bit 1 `Verr. Maj`**, bit 2 `Arrêt défil`.
+## Caps Lock — the indicator that didn't exist
 
-### Le voyant n'est pas une LED de touche, et ce n'est même pas une LED : c'est un CANAL
+`indicators_update_step()` received `keyboard_state_t *keyboard` and discarded it with a
+`(void)keyboard; /* status indicators are not ported yet */`. So it wasn't a
+bug: the function had simply never been written for this board.
 
-Établi **sur l'appareil**, par balayage des positions puis sondage canal par canal — pas par
-inférence, et contre deux affirmations écrites de nos propres sources.
+The state comes from the host HID LED report, stored by `usb_ep0_out_irq()` (`src/smk/usb.c`) into
+`keyboard_state.led_state` — bit 0 `Num Lock`, **bit 1 `Caps Lock`**, bit 2 `Scroll Lock`.
 
-La position `[ligne 0][colonne 14]` — électriquement l'appui molette, en haut à droite — porte une
-position RGB complète dont les **trois canaux pilotent des voyants d'état distincts, physiquement
-ailleurs sur la carte** :
+### The indicator isn't a key LED, and isn't even an LED: it's a CHANNEL
 
-| Canal | Voyant |
+Established **on the device**, by scanning matrix positions and then probing channel by channel — not by
+inference, and contrary to two written claims in our own sources.
+
+Position `[row 0][col 14]` — electrically the encoder press, top right — carries a
+full RGB position whose **three channels drive separate status indicators physically located
+elsewhere on the board**:
+
+| Channel | Indicator |
 | --- | --- |
-| **rouge** | **`Verr. Maj`**, à gauche de la touche `Verr. Maj` |
-| vert | le voyant entre `Échap` et `F1` |
-| bleu | le même voyant entre `Échap` et `F1` |
+| **red** | **`Caps Lock`**, to the left of the `Caps Lock` key |
+| green | the indicator between `Esc` and `F1` |
+| blue | the same indicator between `Esc` and `F1` |
 
-Les voyants d'état sont des LED à une seule couleur : l'usine se sert d'un emplacement libre comme de
-**trois pilotes indépendants**. Écrire du blanc à cette position allume les deux voyants d'un coup —
-c'est exactement ce qui s'est produit au premier essai, et c'est l'utilisateur qui l'a signalé.
+Status indicators are single-color LEDs: the factory uses a spare RGB slot as
+**three independent drivers**. Writing white to this position lights up both indicators at once —
+which is exactly what happened on the first try, as reported by the user.
 
-**Deux affirmations de cette page et de `layout.c` étaient fausses** :
+**Two claims on this page and in `layout.c` were wrong**:
 
-| Ce qui était écrit | La mesure |
+| What was written | Measurement |
 | --- | --- |
-| « l'appui d'encodeur n'a pas de LED » | la **position** en a une, avec trois canaux utiles ; c'est la **touche** qui n'a rien sous son capuchon |
-| « ce clavier n'a aucun voyant dédié » | il en a **au moins deux** |
+| "the encoder press has no LED" | the **position** has one, with three useful channels; it's the **key** that has nothing under its keycap |
+| "this keyboard has no dedicated indicator" | it has **at least two** |
 
-Et c'est l'explication du comptage d'OpenRGB : sa table `aula_f75_layout` ne rattache que
-**quatre-vingts** des quatre-vingt-dix LED à une touche. Les **dix** restantes — indices 6, 23, 29,
-41, 47, 65, 71, 75, 76, 84 — ne sont pas des trous de grille, ce sont des LED réelles sans capuchon
-au-dessus. Ce simple recomptage aurait suffi à trouver le voyant ; la recherche est passée par un
-scan du dump (non concluant : un scan d'octets sans alignement d'instruction confond `53 92 FD`, un
-`ANL`, avec un `MOV P7.5,C`) puis par un test de cinq broches libres, tous deux inutiles.
+And this explains OpenRGB's count: its `aula_f75_layout` table only maps
+**eighty** of the ninety LEDs to a key. The remaining **ten** — indices 6, 23, 29,
+41, 47, 65, 71, 75, 76, 84 — are not grid holes; they are real LEDs without a keycap
+above them. That simple recount would have been enough to find the indicator; instead, the search went through a
+dump scan (inconclusive: a byte scan without instruction alignment confuses `53 92 FD`, an
+`ANL`, with a `MOV P7.5,C`) and then a test of five spare pins, both unnecessary.
 
-Conséquence de rendu : cette cellule doit être peinte **explicitement, canal par canal**. Sans ça les
-effets font clignoter les deux voyants au hasard — ce qu'ils faisaient depuis le premier flash.
+Rendering consequence: this cell must be painted **explicitly, channel by channel**. Otherwise,
+lighting effects make both indicators blink at random — which they had been doing since the very first flash.
 
-### Le voyant `Échap`/`F1` : une LED blanche, donc du rythme et rien d'autre
+### The `Esc`/`F1` indicator: a white LED, hence rhythm and nothing else
 
-Mesuré : les canaux **vert** et **bleu** allument la **même LED blanche** et leurs intensités
-**s'ajoutent**. Il n'y a ni couleur ni second voyant à exploiter — les trois « niveaux » visibles au
-sondage sont simplement trois points d'une échelle continue. Les motifs ne peuvent donc se
-distinguer que par leur **rythme**, d'où un, deux ou trois éclats pour les trois transports : compter
-des éclats se lit d'un coup d'oeil, une différence de durée non.
+Measured: the **green** and **blue** channels light up the **same white LED** and their intensities
+**add up**. There is neither color nor a second indicator to exploit — the three "levels" visible during
+probing are simply three points on a continuous scale. Patterns can therefore only be
+distinguished by their **rhythm**, hence one, two, or three flashes for the three transports: counting
+flashes can be read at a glance, a difference in duration cannot.
 
-`aula_status.c` porte le lecteur de motifs. Neuf motifs en `__code`, 197 octets, dans un **seul
-tableau plat** avec des tables d'offset et de longueur : un tableau de pointeurs `__code` coûterait
-plus de flash et une indirection de plus à chaque pas.
+`aula_status.c` holds the pattern player. Nine patterns in `__code`, 197 bytes, in a **single
+flat array** with offset and length tables: an array of `__code` pointers would cost
+more flash and an extra indirection on every step.
 
-**Un pas = un bouclage du balayage de régénération**, ~37,9 ms. Même contrainte que le coeur de la
-frappe automatique, et pour la même raison : les quatre-vingt-dix cellules sont repeintes une par
-sous-trame, donc changer la valeur ailleurs qu'au bouclage la ferait tomber au milieu d'un cycle de
-repeinte.
+**One step = one wrap-around of the regeneration scan**, ~37.9 ms. Same constraint as the auto-type
+heartbeat, and for the same reason: the ninety cells are repainted one per
+subframe, so changing the value anywhere other than at wrap-around would land mid-repaint cycle.
 
-⚠️ Le masque des motifs en boucle vaut `0x0108` — **neuf motifs, donc neuf bits**. Il ne tient pas
-dans un octet ; la première rédaction le déclarait en `uint8_t` et perdait silencieusement la
-batterie faible.
+⚠️ The looping pattern mask is `0x0108` — **nine patterns, hence nine bits**. It does not fit
+in a byte; the first draft declared it as `uint8_t` and silently lost the
+low-battery warning.
 
-### Le motif d'endormissement a demandé trois lignes dans le coeur de SMK
+### The sleep pattern required three lines in SMK core
 
-`sleep_task()` (`src/smk/sleep.c`) coupe le tick et le PWM **avant** d'appeler `user_sleep_prepare()`
-: plus rien ne s'affiche à partir de là, donc un fondu d'endormissement ne peut pas y jouer.
+`sleep_task()` (`src/smk/sleep.c`) shuts down the tick and PWM **before** calling `user_sleep_prepare()`
+: nothing can be displayed from that point on, so a sleep fade-out cannot play there.
 
-L'interface de veille gagne deux crochets, implémentés par les six claviers :
+The sleep interface gains two hooks, implemented across all six keyboards:
 
-| Crochet | Rôle |
+| Hook | Role |
 | --- | --- |
-| `bool user_sleep_ready(void)` | rendre `false` retarde la veille d'un passage de boucle, moteur d'affichage toujours vivant |
-| `void user_sleep_cancel(void)` | appelé à chaque passage où la veille n'est **pas** due |
+| `bool user_sleep_ready(void)` | returning `false` delays sleep by one loop pass, keeping the display engine alive |
+| `void user_sleep_cancel(void)` | called on every pass where sleep is **not** due |
 
-`user_sleep_cancel()` n'est pas cosmétique : sans lui, un endormissement interrompu par une frappe
-en plein fondu laisserait la machine à états de la carte armée, et **le prochain endormissement
-partirait sans motif**. Les cinq autres claviers rendent `true` et ne font rien.
+`user_sleep_cancel()` is not cosmetic: without it, a sleep sequence interrupted by a keystroke
+mid-fade would leave the board's state machine armed, and **the next sleep entry
+would proceed without a pattern**. The other five keyboards return `true` and do nothing.
 
-### Ce qui n'est pas signalé, et pourquoi
+### What is not indicated, and why
 
-La **charge**. Le firmware d'usine la lit sur `P7.6`/`P7.7` avec un anti-rebond à deux seuils
-(`0x9723`–`0x97AA`) dont cette page dit seulement « *inféré* : en charge et charge terminée ». Tant
-que ce n'est pas décodé, l'afficher serait afficher une supposition — décision prise avec
-l'utilisateur.
+**Charging**. The factory firmware reads it on `P7.6`/`P7.7` with a two-threshold debounce
+(`0x9723`–`0x97AA`) about which this page only says "*inferred*: charging and charge complete". Until
+that is decoded, displaying it would mean displaying guesswork — a decision made with
+the user.
 
-⚠️ **Filaire uniquement, et c'est structurel.** En 2,4 GHz et en Bluetooth, `rf_radio_on()` appelle
-`usb_hw_deinit()` : `usb_ep0_out_irq()` ne tourne plus, et **rien dans le protocole EUART0 décodé à
-ce jour ne remonte l'état LED de l'hôte**. Les trames entrantes connues sont l'état (10 o), l'acquit
-(6 o) et le bloc (22 o) ; laquelle porterait cette information, et à quel offset, n'est pas établi.
+⚠️ **Wired only, and this is structural.** In 2.4 GHz and Bluetooth modes, `rf_radio_on()` calls
+`usb_hw_deinit()`: `usb_ep0_out_irq()` no longer runs, and **nothing in the EUART0 protocol decoded to
+date reports the host LED state back**. The known incoming frames are status (10 B), ack
+(6 B), and block (22 B); which one would carry this information, and at what offset, is not established.
 
-`rf_radio_on()` remet donc `led_state` à zéro avant de démonter l'USB. Sans ça, le témoin resterait
-allumé indéfiniment sur l'état qu'avait l'hôte au moment du débranchement — une information périmée
-affichée avec l'aplomb d'une information vraie, ce qui est pire que ne rien afficher. Au retour en
-filaire, l'hôte renvoie son état à l'énumération.
+`rf_radio_on()` therefore zeroes `led_state` before tearing down USB. Without that, the indicator would stay
+lit indefinitely in whatever state the host had when unplugged — stale information
+displayed with the confidence of truth, which is worse than displaying nothing. Upon returning to
+wired mode, the host resends its state during enumeration.
 
-**Ordre dans la chaîne de rendu** (`led_regen_one()`) : positions sans touche, **voyants d'état**,
-diagnostic radio, cœur de la frappe automatique, effets. Les voyants passent en tête parce qu'ils ne
-sont pas des touches : rien d'autre ne doit jamais écrire sur cette cellule.
-
-
-
-
-## Frappe automatique — création, et les deux pièges qu'elle a révélés
-
-⚠️ **Aucun équivalent d'usine.** `Fn + Espace` ou `Fn + appui molette` lance un mode qui tape une
-lettre au hasard, l'efface d'un retour arrière, et recommence après une attente tirée au sort entre
-0,5 et 1,5 s. N'importe quelle touche l'arrête, et cette touche ne tape rien. Tout le clavier passe
-en rouge battant comme un cœur pendant ce temps. Voir `aula_macro.c`.
-
-**Le témoin cardiaque, et pourquoi sa cadence n'est pas libre.** Deux coups par cycle — le premier
-fort, le second 227 ms plus tard et plus faible — puis un long repos à lueur faible : 909 ms par
-battement, soit 66 pulsations par minute. La table de vingt-quatre intensités vit dans
-`indicators.c`, en `__code`.
-
-Le pas de table avance sur le **bouclage du balayage de régénération**, pas à un rythme choisi
-librement. Les quatre-vingt-dix cellules sont repeintes **une par sous-trame**, jamais toutes
-ensemble : une cadence désalignée ferait tomber le changement de valeur au milieu d'un cycle de
-repeinte et le panneau montrerait une couture, une moitié au coup d'avant et l'autre au coup
-d'après — d'autant plus visible que l'attaque est sèche (trente crans d'écart entre deux pas). En
-avançant sur le bouclage, le panneau entier porte toujours la même valeur. Quatre-vingt-dix
-sous-trames de ~421 µs font ~37,9 ms, et vingt-quatre pas tombent sur un rythme cardiaque crédible.
-
-Les valeurs sont des intensités réelles : `aula_rgb_duty()` est linéaire (`valeur << 2`).
-
-L'intérêt de la consigner ici n'est pas la fonction : ce sont **deux propriétés du cœur de SMK**
-qu'elle a mises au jour, et qui piégeront la prochaine fonction du même genre.
-
-**1. `kb_process_record()` ne voit pas les touches `MO()`.** `process_key_state()`
-(`src/smk/matrix.c`) traite la branche `IS_QK_MOMENTARY` **avant** d'appeler le crochet, et retourne
-tôt. Un crochet qui prétend voir « toutes les touches » ne voit donc pas `Fn`. Pire, le relâchement
-de `Fn` appelle `clear_keys()`, qui **vide le rapport clavier sans l'émettre** — ce qui désynchronise
-tout état qui croit tenir une touche enfoncée.
-
-Conséquence pour ce mode : la séquence d'activation `Fn↓ Espace↓ Espace↑ Fn↑` aurait vidé le rapport
-au milieu de la première lettre. D'où un état d'attente qui ne démarre la machine qu'une fois la
-matrice **entièrement relâchée**.
-
-**2. `user_matrix_pressed()` est l'état brut, et il voit tout.** Déclaré dans `kbdef.h`, alimenté par
-`user_matrix_read_rows()`, déjà masqué aux six lignes réelles (`| 0xc0` avant complément, sinon les
-bits 6 et 7 du complément seraient parasites). C'est lui qui rattrape `Fn`, invisible du crochet.
-**Aucune modification du cœur SMK n'a donc été nécessaire** — inutile d'exporter `matrix[]` ou
-`action_layer`, qui ne sont pas dans `matrix.h`.
-
-**L'effacement de sortie, et pourquoi il ne peut pas être synchrone.** À l'annulation, une lettre
-est *à l'écran* si elle a été tapée sans être encore effacée — les sous-états `STEP_KEY_UP` et
-`STEP_BSP_DOWN`, et eux seuls. Le mode doit alors envoyer le retour arrière qu'il n'a pas eu le temps
-d'envoyer, pour rendre le texte intact.
-
-Ce retour arrière **ne peut pas partir en bloc depuis l'annulation** : l'hôte ne sonde l'endpoint
-que toutes les millisecondes (`bInterval = 1`), et un appui suivi aussitôt de son relâchement serait
-écrasé dans le tampon d'endpoint sans jamais être vu. C'est le même piège que `MACRO_HOLD` documente
-pour les frappes normales. D'où un état `MACRO_FLUSH` dédié : une pause pour laisser partir le
-relâchement en cours, l'appui, le maintien, le relâchement — environ sept millisecondes, puis
-l'attente de relâchement complet.
-
-**Le garde-fou qui manquait.** Un état qui avale toutes les touches jusqu'au relâchement complet se
-verrouille définitivement si une touche reste collée : le clavier n'écrirait plus rien jusqu'au
-redémarrage. Cinq secondes d'attente maximum, puis retour au repos quoi qu'il arrive — et retour au
-repos plutôt que démarrage, sinon une touche collée enchaînerait annulation et redémarrage sans fin.
-
-**Base de temps.** Il n'existe pas de compteur de millisecondes libre. La sous-trame LED (~420 µs
-une fois les balayages de matrice amortis) est la seule cadence régulière, celle qu'utilise déjà
-`aula_encoder.c`. Une seconde vaut ~2 381 sous-trames : compteur 16 bits obligatoire, et le tick
-lève un bit plutôt que de laisser la boucle lire le compteur — un test de bit est atomique sur 8051,
-une lecture 16 bits ne l'est pas.
-
-**Hasard.** Xorshift16 semé à l'activation depuis `TH2`/`TL2` en vol. L'instant d'activation est
-décidé par un humain : c'est la seule entropie du MCU, et elle suffit à un tirage sans exigence
-cryptographique.
-
-**Ce que le mode ne garantit pas.** La lettre est annulée par le retour arrière, donc le texte reste
-inchangé — **sauf si l'application au premier plan traite `Ret. arrière` autrement qu'un effacement
-de caractère** (navigateur réglé sur « page précédente », recherche incrémentale, raccourci de jeu).
-C'est la seule fonction de ce clavier qui envoie des touches à l'hôte sans que personne n'en touche
-une.
-
-**Et il empêche la veille.** `sleep_note_activity()` est appelé à chaque pas, sinon le mode s'arrête
-seul au bout d'environ **2 min 15 s** sur batterie. En sans-fil, il vide donc la batterie tant qu'il
-tourne. C'est un choix, pas un oubli.
-
-⚠️ **Le délai de veille se calcule facilement de travers.** `SLEEP_TIMEOUT` vaut 21 000 *trames*, et
-la trame que compte `sleep.c` est celle que rend `indicators_update_step()` : elle boucle tous les
-**quinze** passages (`led_col` parcourt `LED_COLS`), c'est-à-dire un multiplexage complet du
-panneau — **pas** les quatre-vingt-dix sous-trames d'une trame d'animation. Une trame vaut donc
-15 × 400 µs + un balayage de matrice (~320 µs) ≈ **6,3 ms**, et le délai 21 000 × 6,3 ms ≈ **133 s**.
-Confondre les deux trames donne treize minutes au lieu de deux — l'erreur a été commise et corrigée
-ici même.
+**Order in the rendering chain** (`led_regen_one()`): keyless positions, **status indicators**,
+radio diagnostics, auto-type heartbeat, lighting effects. Indicators come first because they are not
+keys: nothing else must ever write to this cell.
 
 
 
 
-## Le battement de la molette — deux grandeurs, deux canaux
+## Auto-type — design, and the two traps it uncovered
 
-La rotation n'a aucun retour : l'hôte ne dit jamais au clavier où en est son volume, ni en USB ni
-dans le protocole du BK3632. Le clavier ne peut donc afficher qu'un état **relatif**, celui qu'il
-mémorise lui-même.
+⚠️ **No factory equivalent.** `Fn + Space` or `Fn + encoder press` starts a mode that types a
+random letter, erases it with Backspace, and repeats after a random delay between
+0.5 and 1.5 s. Any key stops it, and that key types nothing. The entire keyboard pulses
+in a heartbeat red while active. See `aula_macro.c`.
 
-Le motif est celui du coeur de la frappe automatique, réemployé tel quel. Ce qui change, c'est que
-**deux grandeurs indépendantes** sont encodées sur deux canaux distincts :
+**The heartbeat indicator, and why its tempo isn't free.** Two beats per cycle — the first
+strong, the second 227 ms later and weaker — followed by a long rest at a dim glow: 909 ms per
+heartbeat, or 66 beats per minute. The twenty-four-entry intensity table lives in
+`indicators.c`, in `__code`.
 
-| Canal | Ce qu'il dit | Plage |
+The table step advances on the **wrap-around of the regeneration scan**, not at a freely chosen
+rate. The ninety cells are repainted **one per subframe**, never all at
+once: an unaligned cadence would drop the value change right in the middle of a repaint
+cycle and the panel would show a seam, half on the previous beat and half on the next
+beat — all the more visible because the attack is sharp (thirty steps apart between two entries). By
+advancing on the wrap-around, the entire panel always carries the same value. Ninety
+subframes of ~421 µs make ~37.9 ms, and twenty-four steps land on a believable heart rate.
+
+The values are true intensities: `aula_rgb_duty()` is linear (`value << 2`).
+
+The point of recording it here isn't the feature itself: it is **two properties of SMK's core**
+that it exposed, which will trap the next feature of this kind.
+
+**1. `kb_process_record()` does not see `MO()` keys.** `process_key_state()`
+(`src/smk/matrix.c`) handles the `IS_QK_MOMENTARY` branch **before** calling the hook, and returns
+early. A hook that claims to see "all keys" therefore never sees `Fn`. Worse, releasing
+`Fn` calls `clear_keys()`, which **clears the keyboard report without sending it** — desynchronizing
+any state that believes it is holding a key down.
+
+Consequence for this mode: the activation sequence `Fn↓ Space↓ Space↑ Fn↑` would have cleared the report
+in the middle of the first letter. Hence a wait state that only starts the state machine once the
+matrix is **completely released**.
+
+**2. `user_matrix_pressed()` is the raw state, and it sees everything.** Declared in `kbdef.h`, fed by
+`user_matrix_read_rows()`, already masked to the six real rows (`| 0xc0` before complement, otherwise
+bits 6 and 7 of the complement would be spurious). That is what catches `Fn`, invisible to the hook.
+**No modification to SMK core was therefore needed** — no need to export `matrix[]` or
+`action_layer`, which are not in `matrix.h`.
+
+**The exit erase, and why it cannot be synchronous.** Upon cancellation, a letter
+is *on screen* if it has been typed without yet being erased — substates `STEP_KEY_UP` and
+`STEP_BSP_DOWN`, and only those. The mode must then send the Backspace it didn't have time
+to send, to leave the text intact.
+
+This Backspace **cannot be sent all at once upon cancellation**: the host only polls the endpoint
+every millisecond (`bInterval = 1`), and a press immediately followed by its release would be
+overwritten in the endpoint buffer without ever being seen. This is the exact same trap that `MACRO_HOLD` documents
+for normal keystrokes. Hence a dedicated `MACRO_FLUSH` state: a pause to let the ongoing
+release go out, then the press, the hold, the release — about seven milliseconds, followed by
+waiting for full matrix release.
+
+**The missing safeguard.** A state that swallows all keys until full release locks up
+permanently if a key gets stuck: the keyboard would type nothing until a
+reboot. Five seconds maximum wait, then return to idle no matter what — and return to
+idle rather than starting, otherwise a stuck key would loop cancellation and restart endlessly.
+
+**Timebase.** There is no free millisecond counter. The LED subframe (~420 µs
+once matrix scans are amortized) is the only steady cadence, the one already used by
+`aula_encoder.c`. One second equals ~2,381 subframes: a 16-bit counter is mandatory, and the tick
+sets a bit rather than letting the loop read the counter — a bit test is atomic on 8051,
+a 16-bit read is not.
+
+**Randomness.** Xorshift16 seeded on activation from live `TH2`/`TL2`. The moment of activation is
+chosen by a human: it is the MCU's only entropy source, and it suffices for a non-cryptographic
+draw.
+
+**What the mode does not guarantee.** The letter is canceled by Backspace, so text remains
+unchanged — **unless the foreground application treats `Backspace` as something other than deleting
+a character** (browser set to "navigate back", incremental search, game hotkey).
+This is the only feature on this keyboard that sends keystrokes to the host without anyone touching
+a key.
+
+**And it prevents sleep.** `sleep_note_activity()` is called on every step, otherwise the mode stops
+on its own after about **2 min 15 s** on battery. In wireless mode, it therefore drains the battery for as long as it
+runs. This is a deliberate choice, not an oversight.
+
+⚠️ **The sleep timeout is easy to miscalculate.** `SLEEP_TIMEOUT` is 21,000 *frames*, and
+the frame counted by `sleep.c` is the one returned by `indicators_update_step()`: it wraps every
+**fifteen** passes (`led_col` cycles through `LED_COLS`), i.e., one full panel multiplex
+cycle — **not** the ninety subframes of an animation frame. One frame is therefore
+15 × 400 µs + one matrix scan (~320 µs) ≈ **6.3 ms**, and the timeout 21,000 × 6.3 ms ≈ **133 s**.
+Confusing the two frames gives thirteen minutes instead of two — a mistake that was made and fixed
+right here.
+
+
+
+
+## The encoder beat — two quantities, two channels
+
+Rotation has no feedback: the host never tells the keyboard what its volume is, neither over USB nor
+in the BK3632 protocol. The keyboard can therefore only display a **relative** state, the one it
+remembers itself.
+
+The pattern is that of the auto-type heartbeat, reused as-is. What changes is that
+**two independent quantities** are encoded onto two distinct channels:
+
+| Channel | What it conveys | Range |
 | --- | --- | --- |
-| **cadence** | le sens de la dernière détente | cycle de 2,8 s à 1,0 s, huit crans |
-| **teinte** | le cran atteint | rouge → rose → magenta → violet, huit crans |
+| **tempo** | the direction of the last detent | cycle from 2.8 s to 1.0 s, eight steps |
+| **hue** | the step reached | red → pink → magenta → violet, eight steps |
 
-Le trajet de teinte est le **court** : pas de jaune, pas de vert, pas de cyan. Huit teintes voisines
-se comparent d'un coup d'oeil ; huit teintes d'arc-en-ciel se confondraient avec le moteur d'effets,
-qui occupe déjà tout le spectre.
+The hue path is the **short** one: no yellow, no green, no cyan. Eight neighboring hues
+can be compared at a glance; eight rainbow hues would blend into the lighting effects engine,
+which already occupies the full spectrum.
 
-Les cadences sont quasi géométriques, pas linéaires — le tempo se perçoit en rapport, comme une
-hauteur de son. L'avance du motif passe par un accumulateur en 1/256e de pas, relevé au bouclage du
-balayage de régénération : **la même contrainte que pour les motifs du voyant d'état**, les
-quatre-vingt-dix cellules étant repeintes une par sous-trame.
+The tempos are quasi-geometric, not linear — tempo is perceived as a ratio, like musical
+pitch. Advancing the pattern goes through a 1/256th-step accumulator, sampled at the wrap-around of the
+regeneration scan: **the exact same constraint as for the status indicator patterns**, since the
+ninety cells are repainted one per subframe.
 
-L'état vit dans `aula_encoder.c` et le rendu dans `indicators.c` — la teinte est une affaire de
-rendu, le cran une affaire de molette, et `aula_encoder_beat_level()` est la seule chose qui passe
-de l'une à l'autre.
+The state lives in `aula_encoder.c` and the rendering in `indicators.c` — hue is a rendering
+matter, the step is an encoder matter, and `aula_encoder_beat_level()` is the only thing bridging
+the two.
 
 
-## La trame courte — le Report ID était l'octet de trop
+## The short frame — the Report ID was one byte too many
 
-**Symptôme :** en 2,4 GHz et en Bluetooth, la molette et les touches multimédia ne faisaient rien,
-alors que la frappe passait. Les deux empruntent pourtant la même file et le même émetteur.
+**Symptom:** in 2.4 GHz and Bluetooth modes, the encoder wheel and media keys did nothing,
+even though typing worked. Yet both go through the exact same queue and transmitter.
 
-Cette page annonçait la disposition de la charge utile comme **inférée** — « le placement à
-l'offset 0 est le choix le plus naturel, pas une lecture ». Elle l'est maintenant.
+This page previously listed the payload layout as **inferred** — "placing it at
+offset 0 is the most natural choice, not a reading". It has now been read.
 
-### La trame, relevée au désassembleur
+### The frame, read from the disassembler
 
-`euart0_send` est en **`0xAB0F`**, longueur dans `r5`, étiquette dans `r7`. Cinq appelants, et
-leurs longueurs identifient chacun :
+`euart0_send` is at **`0xAB0F`**, length in `r5`, tag in `r7`. Five callers, and
+their lengths identify each one:
 
-| Site | `r5` | Commande |
+| Call site | `r5` | Command |
 | --- | --- | --- |
-| `0x46C2` | 30 | `0x02` — rapport long |
-| `0x4730` | 13 | `0x03` — rapport court |
-| `0xA376` | 32 | `0x09` — nom Bluetooth |
-| `0xB0B8` | 23 | `0x08` — conteneur |
-| `0xED53` | 6 | commandes courtes |
+| `0x46C2` | 30 | `0x02` — long report |
+| `0x4730` | 13 | `0x03` — short report |
+| `0xA376` | 32 | `0x09` — Bluetooth name |
+| `0xB0B8` | 23 | `0x08` — container |
+| `0xED53` | 6 | short commands |
 
-Les deux émetteurs de rapport font **exactement la même chose**, à la longueur près :
+Both report transmitters do **the exact same thing**, up to length:
 
 ```asm
-mov r0, #0x33 ; mov @r0, #0x01      ; trame[0] = en-tete 0x01
-src = 0x0C57 + idx * 0x1C           ; l'emplacement de file, 28 octets
+mov r0, #0x33 ; mov @r0, #0x01      ; frame[0] = header 0x01
+src = 0x0C57 + idx * 0x1C           ; queue slot, 28 bytes
 inc r0                              ; destination = IDATA 0x34
-memcpy(dst, src, 0x1C ou 0x0B)      ; 28 octets (long) ou 11 (court)
-euart0_send(0x1E ou 0x0D, 6)
+memcpy(dst, src, 0x1C or 0x0B)      ; 28 bytes (long) or 11 (short)
+euart0_send(0x1E or 0x0D, 6)
 ```
 
-L'octet 0 de l'emplacement EST la commande, recopié tel quel en trame[1]. **Notre
-`rf_queue_flush()` construisait déjà cette trame octet pour octet.** Le défaut était ailleurs.
+Byte 0 of the slot IS the command, copied verbatim into `frame[1]`. **Our
+`rf_queue_flush()` was already building this frame byte for byte.** The bug was elsewhere.
 
-### Le producteur, et l'octet sauté
+### The producer, and the skipped byte
 
-Le producteur de la trame courte est en **`0x45AB`** :
+The short-frame producer is at **`0x45AB`**:
 
 ```asm
 slot[0] = 0x03
-slot[1] = [0x09BD]                  ; usage Consumer, poids faible
-slot[2] = [0x09BE]                  ; usage Consumer, poids fort
-slot[3] = [0x097E]                  ; octet System
-slot[4..10] = memcpy(0x09B1, 7)     ; rapport souris
+slot[1] = [0x09BD]                  ; Consumer usage, low byte
+slot[2] = [0x09BE]                  ; Consumer usage, high byte
+slot[3] = [0x097E]                  ; System byte
+slot[4..10] = memcpy(0x09B1, 7)     ; mouse report
 ```
 
-Le tampon Consumer d'usine est `0x09BC`, et **`0x09BC` porte le Report ID 2** — cette page
-l'établissait déjà par deux chemins indépendants. Le producteur radio commence à `0x09BD` : il
-**saute le Report ID**. C'est l'octet de commande de la trame qui tient lieu de sélecteur.
+The factory Consumer buffer is `0x09BC`, and **`0x09BC` holds Report ID 2** — this page
+had already established that through two independent paths. The radio producer starts at `0x09BD`: it
+**skips the Report ID**. The frame's command byte acts as the selector instead.
 
-Le producteur du rapport long confirme la règle (`0x451A`) : `slot[1] = [0x08B2]`, le masque de
-modificateurs, puis cinq touches depuis `0x08B4`. Pas de Report ID non plus.
+The long-report producer confirms the rule (`0x451A`): `slot[1] = [0x08B2]`, the modifier
+mask, followed by five keys from `0x08B4`. No Report ID there either.
 
-**Notre code envoyait `report->raw`**, c'est-à-dire `[Report ID, usage_lo, usage_hi]`. Tout était
-décalé d'un octet et le dongle lisait `2` comme poids faible de l'usage. Le rapport clavier, lui,
-n'a jamais eu de Report ID en 6KRO — d'où une frappe qui marchait et un volume qui ne marchait pas.
+**Our code was sending `report->raw`**, i.e., `[Report ID, usage_lo, usage_hi]`. Everything was
+shifted by one byte and the dongle read `2` as the low byte of the usage. The keyboard report, by contrast,
+never had a Report ID in 6KRO — hence typing worked while volume did not.
 
-> **Leçon de méthode.** Les deux chemins étaient symétriques dans notre code et le raisonnement
-> statique n'a pas départagé : le rapport clavier *et* le rapport Consumer commençaient « au plus
-> naturel ». Seule la dissymétrie du dump — l'un commence à `0x08B2`, l'autre à `0x09BD` et pas
-> `0x09BC` — donnait la réponse. Une inférence marquée comme telle a fini par coûter un bug ; elle
-> a au moins été trouvée là où la page disait de chercher.
+> **Methodological lesson.** Both paths were symmetrical in our code and static reasoning
+> could not tell them apart: both the keyboard report *and* the Consumer report started "in the most
+> natural way". Only the asymmetry in the dump — one starts at `0x08B2`, the other at `0x09BD` and not
+> `0x09BC` — gave the answer. An inference explicitly marked as such ended up costing a bug; at least it
+> was found right where the page said to look.
 
-### Ce qui reste inféré
+### What remains inferred
 
-La **position** de l'octet System (`slot[3]`) est établie, mais aucun keycode System n'est câblé
-dans cette disposition : rien ne l'a exercé. Les sept octets de souris restent nuls — ce clavier
-n'a pas de souris.
+The **position** of the System byte (`slot[3]`) is established, but no System keycode is wired
+in this layout: nothing has exercised it. The seven mouse bytes remain zero — this keyboard
+has no mouse.
 
 
-## Compensation AZERTY — création, et les deux portes qui manquaient au coeur SMK
+## AZERTY compensation — design, and the two doors missing from SMK core
 
-`Fn + Ctrl gauche` (`LAYOUT_AZ`) fait traduire chaque frappe par le clavier : les capuchons portent
-l'**US International**, l'hôte est réglé en **AZERTY français (Windows fr-FR)**. Aucun équivalent
-d'usine. Voir `src/keyboards/aula-f75/aula_layout.c`.
+`Fn + Left Ctrl` (`LAYOUT_AZ`) makes the keyboard translate every keystroke: the keycaps bear
+**US International** legends, while the host is set to **French AZERTY (Windows fr-FR)**. No factory
+equivalent. See `src/keyboards/aula-f75/aula_layout.c`.
 
-### Ce que l'hôte français sait déjà faire — et qui a évité d'écrire une table de composition
+### What the French host already knows how to do — saving us a composition table
 
-Trois des cinq touches mortes d'US International se contentent de celle de l'hôte : le clavier
-l'émet et **c'est l'hôte qui compose** -- zéro état, zéro table de combinaisons.
+Three of the five US International dead keys can simply use the host's own dead key: the keyboard
+emits it and **the host performs the composition** -- zero state, zero combination table.
 
-| Touche morte US Intl | Équivalent fr-FR émis | Donne | Symbole nu |
+| US Intl dead key | Emitted fr-FR equivalent | Produces | Bare symbol |
 | --- | --- | --- | --- |
-| `^` (Maj+6) | `KC_LEFT_BRACKET` | `â ê î ô û` | `^` ✔ |
+| `^` (Shift+6) | `KC_LEFT_BRACKET` | `â ê î ô û` | `^` ✔ |
 | `` ` `` | AltGr + `KC_7` | `à è ù` | `` ` `` ✔ |
-| `~` (Maj+`` ` ``) | AltGr + `KC_2` | `ñ ã õ` | `~` ✔ |
-| `"` (Maj+`'`) | Maj + `KC_LEFT_BRACKET` | `ä ë ï ö ü ÿ` | **`¨` ✘** |
+| `~` (Shift+`` ` ``) | AltGr + `KC_2` | `ñ ã õ` | `~` ✔ |
+| `"` (Shift+`'`) | Shift + `KC_LEFT_BRACKET` | `ä ë ï ö ü ÿ` | **`¨` ✘** |
 
-**Deux ont demandé une machine à états**, et la seconde n'a été trouvée qu'à l'essai sur
-l'appareil :
+**Two required a state machine**, and the second was only caught during live testing on
+the device:
 
-* **l'accent aigu**, parce que le fr-FR n'en a aucun -- `é` y est une touche à part entière. D'où la
-  résolution en dur `e → KC_2`, `c → KC_9`, `Espace → KC_4`, et le repli d'US International
-  (l'apostrophe puis le caractère) pour tout le reste. `á í ó ú ý` ne sont **pas produisibles** sur
-  cette disposition cible.
-* **le tréma**, parce que le fr-FR en a une vraie — la composition marchait — mais que **son symbole
-  nu est `¨` et non `"`**. C'est la seule des quatre dont le caractère seul diffère de celui d'US
-  International, donc la seule qui ne pouvait pas être un passe-plat. Le guillemet vit sur `KC_3`
-  (non shifté) en AZERTY : `"` + `Espace` l'émet directement, `"` + lettre passe par la touche morte
-  de l'hôte.
+* **the acute accent**, because fr-FR has none -- `é` is a dedicated key there. Hence the
+  hardcoded resolution `e → KC_2`, `c → KC_9`, `Space → KC_4`, and the US International fallback
+  (apostrophe followed by the character) for everything else. `á í ó ú ý` **cannot be produced** on
+  this target layout.
+* **the diaeresis (umlaut)**, because fr-FR has a real one — composition worked — but **its bare
+  symbol is `¨` rather than `"`**. It is the only one of the four whose standalone character differs from US
+  International, and thus the only one that couldn't be a pass-through. The double quote lives on `KC_3`
+  (unshifted) in AZERTY: `"` + `Space` emits it directly, while `"` + letter goes through the host's
+  dead key.
 
-⚠️ **Aucune analyse statique n'aurait trouvé ça.** La table de l'hôte composait correctement ; c'est
-le cas dégénéré -- la touche morte *sans* caractère à composer -- qui diverge. Il a fallu le taper.
+⚠️ **No static analysis would have caught this.** The host's composition table worked properly; it is
+the degenerate case -- the dead key *without* a composable character -- that diverges. It had to be typed.
 
-### `weak_mods` était un mécanisme à moitié construit
+### `weak_mods` was a half-built mechanism
 
-`src/smk/report.c` lit `weak_mods` dans les **deux** chemins d'émission (6KRO et NKRO) pour le
-joindre à `real_mods`... mais **aucun setter n'était exporté**, et aucun masque n'existait. Le
-mécanisme était inatteignable. Deux ajouts, du même registre que les `extern` déjà posés dans
-`matrix.h` :
+`src/smk/report.c` reads `weak_mods` in **both** transmission paths (6KRO and NKRO) to OR it
+into `real_mods`... but **no setter was exported**, and no mask existed. The
+mechanism was unreachable. Two additions, in the same vein as the `extern` declarations already placed in
+`matrix.h`:
 
 ```c
-void set_weak_mods(uint8_t mods);   /* la porte qui manquait */
-void set_mods_mask(uint8_t mask);   /* ET sur real_mods, 0xFF au repos */
+void set_weak_mods(uint8_t mods);   /* the missing door */
+void set_mods_mask(uint8_t mask);   /* ANDed with real_mods, 0xFF at rest */
 ```
 
-Le masque est indispensable et ne porte que sur `real_mods` : il sert à **retirer** du rapport un
-modificateur que le doigt tient vraiment. Sur un hôte AZERTY, le `!` est **sans Maj** alors que le
-clavier le porte en `Maj+1` — sans masque, la touche sortirait `1`.
+The mask is essential and only applies to `real_mods`: it serves to **strip** a modifier from the report
+that the finger is physically holding down. On an AZERTY host, `!` is **unshifted** whereas the
+keycap has it on `Shift+1` — without a mask, pressing the key would output `1`.
 
-⚠️ **Le masque doit être appliqué aux DEUX chemins.** Oublier le NKRO ne se verrait qu'en NKRO,
-c'est-à-dire dans le mode **par défaut** de ce firmware.
+⚠️ **The mask must be applied to BOTH paths.** Forgetting NKRO would only show up in NKRO,
+which happens to be the **default** mode of this firmware.
 
-### La garde des raccourcis se lit sur `real_mods`, jamais sur le rapport
+### The shortcut guard reads `real_mods`, never the report
 
-Quand un modificateur **autre que Maj** est tenu, seule la position de la touche est traduite : rien
-n'est injecté ni masqué. `Ctrl+A` devient `Ctrl+KC_Q`, `Ctrl+1` reste `Ctrl+1`.
+When any modifier **other than Shift** is held, only the key position is translated: nothing
+is injected or masked. `Ctrl+A` becomes `Ctrl+KC_Q`, `Ctrl+1` stays `Ctrl+1`.
 
-La décision se prend sur `get_mods()` — l'état **physique** — et **avant toute écriture**. Une garde
-qui lirait le rapport se déclencherait sur sa **propre** injection d'AltGr, que Windows voit comme
-`Ctrl+Alt` : le caractère suivant d'un roulement, ou la répétition automatique, basculerait tout seul
-dans la voie des raccourcis.
+The decision is made on `get_mods()` — the **physical** state — and **before any write**. A guard
+that read the report would trigger on its **own** AltGr injection, which Windows sees as
+`Ctrl+Alt`: the next character in a rollover, or auto-repeat, would spontaneously flip
+into the shortcut path.
 
-Les bits ne se devinent pas : `MOD_BIT(code) = 1 << (code & 7)`, donc `LAlt` vaut `0x04` et **AltGr
-(`RAlt`) vaut `0x40`**. Masquer le mauvais casserait `Alt+Tab` en mode AZERTY.
+The bits are not guesswork: `MOD_BIT(code) = 1 << (code & 7)`, so `LAlt` is `0x04` and **AltGr
+(`RAlt`) is `0x40`**. Masking the wrong one would break `Alt+Tab` in AZERTY mode.
 
-### Pourquoi le relâchement doit se souvenir du keycode émis
+### Why key release must remember the emitted keycode
 
-Le suivi (`az_t_us[]` / `az_t_kc[]`) ne sert pas qu'à compter. Le relâchement doit retirer du rapport
-le keycode **réellement émis**, pas le retraduire : lâcher Maj avant la touche suffit à changer la
-traduction. `Maj+1` émet `!` = `KC_SLASH` ; un relâchement retraduit verrait l'état sans Maj et
-retirerait `KC_1` — **touche collée**.
+Tracking (`az_t_us[]` / `az_t_kc[]`) isn't just for counting. Releasing a key must remove from the report
+the keycode that was **actually emitted**, not re-translate it: releasing Shift before the key is enough to change the
+translation. `Shift+1` emits `!` = `KC_SLASH`; a re-translated release would see the unshifted state and
+remove `KC_1` — leaving a **stuck key**.
 
-### La file d'émission, et pourquoi elle ne sert qu'au repli
+### The transmit queue, and why it is only used for the fallback
 
-La voie normale garde la tenue naturelle : l'appui tient le keycode traduit, donc la **répétition
-automatique** de l'hôte fonctionne, et l'injection au repos est celle du dernier appui, rendue quand
-la dernière touche traduite est relâchée.
+The normal path preserves natural key hold: pressing holds the translated keycode, so the host's **auto-repeat**
+works, and the resting injection is that of the last press, cleared when
+the last translated key is released.
 
-Le repli de l'accent aigu, lui, doit émettre **deux** caractères pour un seul appui — impossible en
-synchrone, l'hôte sonde toutes les millisecondes (`bInterval = 1`) et un appui suivi de son
-relâchement dans le même passage ne serait jamais vu. D'où la file, jouée par `aula_layout_task()`
-avec le même `HOLD`/`GAP` qu'`aula_encoder.c`. Tant qu'elle joue, **tout appui passe par elle** :
-sinon un caractère naturel passerait devant un caractère synthétique encore en vol.
+The acute accent fallback, however, must emit **two** characters for a single press — impossible
+synchronously, as the host polls every millisecond (`bInterval = 1`) and a press followed by its
+release in the same pass would never be seen. Hence the queue, played back by `aula_layout_task()`
+with the same `HOLD`/`GAP` timing as `aula_encoder.c`. While it is playing, **every press goes through it**:
+otherwise a natural character would jump ahead of a synthetic character still in flight.
 
-### Le témoin, et le conflit qu'il a révélé
+### The indicator, and the conflict it exposed
 
-Le témoin permanent est un **état de repos** du voyant d'état — et `status_rest()` en avait déjà un :
-la batterie faible. **Deux états de repos sur une LED blanche unique ne se distinguent pas.** La
-priorité est donc tranchée dans `aula_status.h`, pas au clavier :
+The permanent indicator is a **resting state** of the status LED — and `status_rest()` already had one:
+low battery. **Two resting states on a single white LED cannot be told apart.** The
+priority is therefore settled in `aula_status.h`, not on the keyboard:
 
 ```
-batterie faible  >  AZERTY actif  >  éteint
+low battery  >  AZERTY active  >  off
 ```
 
-Au passage, la porte de rendu d'`indicators_update_step()` ne contenait **aucune** condition sur le
-voyant d'état : tous ses motifs étaient invisibles rétroéclairage éteint — justement l'état dans
-lequel on les regarde. `aula_status_lit()` la corrige pour les douze motifs, pas seulement les trois
-nouveaux.
+In passing, the rendering gate in `indicators_update_step()` contained **no** condition for the
+status LED: all its patterns were invisible when the backlight was turned off — the exact state in
+which you need to see them. `aula_status_lit()` fixes this for all twelve patterns, not just the three
+new ones.
 
-### `€` sur `Fn + E`
+### `€` on `Fn + E`
 
-`AltGr + KC_E`, indépendant du mode : c'est `€` sur tout hôte français. ⚠️ Sur un hôte US
-International, `€` est `AltGr + 5` et ce raccourci sortirait un `e`.
+`AltGr + KC_E`, regardless of mode: that produces `€` on any French host. ⚠️ On a US
+International host, `€` is `AltGr + 5` and this shortcut would output an `e`.
 
 
-## `AULA_FX_LAKE` — l'onde qui part de la touche frappée
+## `AULA_FX_LAKE` — the wave radiating from the struck key
 
-⚠️ **Cet effet n'est PAS une transcription.** Rien d'équivalent n'existe dans le firmware d'usine :
-son onde concentrique `0x746A` part d'un centre **fixe**, tabulé en `CODE 0x2959`, et son moteur
-réactif `0x64F1` allume la touche frappée **sans la propager**. Celui-ci combine les deux, et c'est
-une création — demandée comme « une vague de lumière, comme si je tapais sur un lac plat ».
+⚠️ **This effect is NOT a transcription.** Nothing like it exists in the factory firmware:
+its concentric wave `0x746A` radiates from a **fixed** center tabulated at `CODE 0x2959`, and its
+reactive engine `0x64F1` lights up the struck key **without propagating it**. This effect combines both, and is
+an original creation — requested as "a wave of light, as if tapping on a flat lake".
 
-### Le mécanisme
+### The mechanism
 
-Quatre **gouttes** simultanées, seize octets de XDATA. Chacune retient son origine, son âge en
-trames et sa teinte de départ :
+Four simultaneous **drops**, sixteen bytes of XDATA. Each remembers its origin, its age in
+frames, and its starting hue:
 
 ```c
 static __xdata uint8_t drop_col[4], drop_row[4], drop_age[4], drop_hue[4];
 ```
 
-- **à la frappe** — `led_react_poll()` appelle `lake_drop()` : emplacement libre, sinon la goutte la
-  plus ancienne est remplacée. Le point d'impact s'allume immédiatement, l'âge part à 1.
-- **à chaque trame** — l'âge avance d'un cran ; la goutte est libérée à 25, quand l'onde a quitté le
-  clavier.
-- **à chaque cellule** — la cellule est rallumée à fond si sa **distance** à une origine vaut
-  exactement l'âge de cette goutte. C'est le front de l'onde.
+- **on keystroke** — `led_react_poll()` calls `lake_drop()`: uses a free slot, otherwise the oldest
+  drop is replaced. The impact point lights up immediately, age starts at 1.
+- **on every frame** — age advances by one step; the drop is freed at 25, once the wave has left the
+  keyboard.
+- **on every cell** — the cell is relit to full intensity if its **distance** to an origin equals
+  that drop's exact age. That forms the wavefront.
 
-La **décroissance du plan d'intensité**, déjà en place, fait la traîne derrière le front. Rien à
-ajouter : le sillage tombe tout seul.
+The **intensity plane decay**, already in place, creates the wake behind the front. Nothing to
+add: the trail fades on its own.
 
-### Deux choix qui font la différence visuelle
+### Two choices that make the visual difference
 
-**La distance pèse les lignes DEUX FOIS les colonnes.** La géométrie générée place les colonnes tous
-les 17 crans et les lignes tous les 42 : un pas de ligne vaut environ deux pas et demi de colonne.
-Sans pondération, l'onde serait un losange écrasé au lieu d'un cercle.
+**Distance weights rows TWICE as much as columns.** The generated geometry places columns every
+17 units and rows every 42: one row step equals roughly two and a half column steps.
+Without weighting, the wave would be a squashed diamond instead of a circle.
 
 ```c
 return (uint8_t)(dc + (uint8_t)(dr << 1));
 ```
 
-**La traîne décroît trois fois plus vite qu'ailleurs — 24 au lieu de 8.** À 8 par trame, la traîne
-dure 32 trames alors que l'onde met 25 trames à traverser le clavier : le sillage rattraperait le
-front et on verrait un disque qui s'allume, pas une ride. À 24, la traîne fait une dizaine de trames.
+**The wake decays three times faster than elsewhere — 24 instead of 8.** At 8 per frame, the wake
+lasts 32 frames whereas the wave takes 25 frames to cross the keyboard: the wake would catch up with the
+front and you would see an expanding lit disk, not a ripple. At 24, the wake is about ten frames wide.
 
-La teinte glisse aussi en s'éloignant, `drop_hue + âge × 3` : sur les 24 crans du trajet, un tiers de
-roue. Deux frappes rapprochées partent de teintes différentes puisque chacune prend `led_phase` au
-moment de l'impact.
+The hue also shifts as it travels outward, `drop_hue + age × 3`: over the 24 steps of travel, one third of
+the color wheel. Two rapid keystrokes start from different hues since each samples `led_phase` at
+the moment of impact.
 
-### Le coût, et pourquoi il tient dans l'ISR
+### The cost, and why it fits inside the ISR
 
-Le contrôle du front se fait **une cellule à la fois**, dans `led_regen_one()` — quatre
-soustractions et quatre comparaisons par sous-trame. Pas de balayage des quatre-vingt-dix cellules
-d'un coup, qui aurait pesé dans un créneau de 400 µs.
+Checking the wavefront is done **one cell at a time**, inside `led_regen_one()` — four
+subtractions and four comparisons per subframe. No full scan of all ninety cells
+at once, which would have weighed heavily in a 400 µs slot.
 
-Coût total : **+550 octets de flash, +16 octets de XDATA**, la marge en RAM interne et la pile
-inchangées.
+Total cost: **+550 bytes of flash, +16 bytes of XDATA**, internal RAM margin and stack
+unchanged.
 
-### C'est l'effet par défaut
+### It is the default effect
 
-`indicators_apply_defaults()` sélectionne `AULA_FX_LAKE`, et la validation y retombe aussi quand un
-réglage enregistré est hors bornes.
+`indicators_apply_defaults()` selects `AULA_FX_LAKE`, and validation also falls back to it when a
+saved setting is out of bounds.
 
-## La couche Fn d'usine, décodée — et ce qu'elle confirme
+## The factory Fn layer, decoded — and what it confirms
 
-`CODE 0xCC00` est la **couche de base**, `CODE 0xD000` la **couche Fn** : quatre octets par touche,
-indexés `colonne × 6 + ligne`. La preuve tient en une position : l'index 44 (colonne 7, ligne 2, la
-touche **U**) porte l'usage `0x18` = U dans la première, et `0x46` = **Impr.écran** dans la seconde.
+`CODE 0xCC00` is the **base layer**, `CODE 0xD000` is the **Fn layer**: four bytes per key,
+indexed as `col × 6 + row`. The proof fits in a single position: index 44 (column 7, row 2, the
+**U** key) carries usage `0x18` = U in the first, and `0x46` = **Print Screen** in the second.
 
-C'est un utilisateur du clavier qui a mis sur la piste — « Fn + U faisait capture d'écran ». Le dump
-lui donne raison à l'octet près.
+A user of the keyboard provided the lead — "Fn + U used to take a screenshot". The dump
+proves them right to the exact byte.
 
-### Ce que la couche Fn valide, indépendamment
+### What the Fn layer independently validates
 
-Les enregistrements de `b0 = 0x07` sont ceux du **répartiteur de raccourcis** `0x412C`, dont `b3` est
-la clé. Leur contenu recoupe **exactement** la table `0x4136` décodée séparément :
+Records with `b0 = 0x07` belong to the **shortcut dispatcher** `0x412C`, where `b3` is
+the lookup key. Their contents match **to the letter** the `0x4136` table decoded separately:
 
-| Position | `b3` | Clé de la table `0x4136` | Rôle déjà établi |
+| Position | `b3` | Key in table `0x4136` | Previously established role |
 | --- | --- | --- | --- |
-| Fn + `Échap` | `0x04` | `0x41B3` | **réinitialisation d'usine** (appui long) |
-| Fn + `1` | `0x05` | `0x41C8` | emplacement Bluetooth 1 |
-| Fn + `2` | `0x06` | `0x41FE` | emplacement Bluetooth 2 |
-| Fn + `3` | `0x07` | `0x4233` | emplacement Bluetooth 3 |
-| Fn + `` ` `` | `0x08` | `0x426A` | **relance d'appairage** |
+| Fn + `Esc` | `0x04` | `0x41B3` | **factory reset** (long press) |
+| Fn + `1` | `0x05` | `0x41C8` | Bluetooth slot 1 |
+| Fn + `2` | `0x06` | `0x41FE` | Bluetooth slot 2 |
+| Fn + `3` | `0x07` | `0x4233` | Bluetooth slot 3 |
+| Fn + `` ` `` | `0x08` | `0x426A` | **re-enter pairing** |
 
-Cinq clés, cinq arms, dans le même ordre. La table des raccourcis avait été lue depuis le
-répartiteur inline ; la voilà confirmée depuis les **données de disposition**, une source qui n'a
-rien à voir.
+Five keys, five arms, in the exact same order. The shortcut table had been read from the
+inline dispatcher; here it is confirmed from the **layout data**, a completely unrelated
+source.
 
-De même, `b0 = 0x08` renvoie au répartiteur de classe `0xA674` sur `b1`, et les positions collent :
-`b1 = 3` avec `b2` à 1 ou 2 sur Fn + `Haut`/`Bas` et Fn + `F5`/`F6`, `b1 = 4` avec `b2` à 1 ou 2 sur
-Fn + `Droite`/`Gauche`. Deux paires « + / − » sur deux classes distinctes, exactement la forme
-attendue pour la luminosité et la vitesse. Et Fn + `F4` porte `b1 = 8`, la classe dont le répartiteur
-fait `lcall 0x91D3` — **la restauration des couleurs par défaut**.
+Similarly, `b0 = 0x08` dispatches to the class dispatcher `0xA674` on `b1`, and the positions match:
+`b1 = 3` with `b2` set to 1 or 2 on Fn + `Up`/`Down` and Fn + `F5`/`F6`, `b1 = 4` with `b2` set to 1 or 2 on
+Fn + `Right`/`Left`. Two "+ / −" pairs on two distinct classes, the exact shape
+expected for brightness and speed. And Fn + `F4` carries `b1 = 8`, the class whose dispatcher
+executes `lcall 0x91D3` — **restoring default colors**.
 
-### Correction : `b0 = 0x0D` est la touche Fn elle-même
+### Correction: `b0 = 0x0D` is the Fn key itself
 
-Cette page attribuait à `0x0D` « deux bits d'état tenus », en notant que les bits `0x44` et `0x43`
-sont ceux que l'arm de l'effet `0x2D` teste. L'origine est maintenant claire : **la position c8 l5
-porte `b0 = 0x0D` dans les DEUX couches**, et c8 l5 est la touche **Fn**.
+This page previously attributed "two held state bits" to `0x0D`, noting that bits `0x44` and `0x43`
+are the ones tested by the arm of effect `0x2D`. The origin is now clear: **position c8 r5
+carries `b0 = 0x0D` in BOTH layers**, and c8 r5 is the **Fn** key.
 
-`0x0D` est donc le **maintien de couche**, et les bits `0x44`/`0x43` sont l'état « Fn est tenue ».
-L'effet `0x2D` ne réagit pas à un drapeau obscur : il réagit à ce que l'utilisateur tienne Fn.
+`0x0D` is therefore **layer hold**, and bits `0x44`/`0x43` are the "Fn is held" state.
+Effect `0x2D` does not react to some obscure flag: it reacts to the user holding Fn.
 
-### Le relevé complet de la couche Fn d'usine
+### Complete inventory of the factory Fn layer
 
-| Touche | Fn + … |
+| Key | Fn + … |
 | --- | --- |
-| `Échap` | raccourci `0x04` — **réinitialisation d'usine**, appui long |
-| `` ` `` | raccourci `0x08` — **relance d'appairage** |
-| `1` `2` `3` | raccourcis `0x05` `0x06` `0x07` — emplacements Bluetooth |
-| `F1` | consumer — navigateur, accueil |
-| `F2` | consumer — courriel |
-| `F3` | classe 4, usage `0x2B` (Tab) |
-| `F4` | classe 8 — **restaure les couleurs par défaut** (`0x91D3`) |
-| `F5` `F6` | classe 3, paramètres 2 et 1 |
-| `F7` `F8` `F9` | consumer — piste précédente, lecture/pause, piste suivante |
-| `F10` | consumer — muet |
-| `F11` `F12` | consumer — volume − et + |
-| `Tab` | classe 2 |
-| `Q` `W` `E` | raccourcis `0x19` `0x18` `0x1A` |
-| `G` `B` | raccourcis `0x0A` `0x11` |
-| **`U`** | **Impr.écran** |
-| **`I`** | **Arrêt défil** |
+| `Esc` | shortcut `0x04` — **factory reset**, long press |
+| `` ` `` | shortcut `0x08` — **re-enter pairing** |
+| `1` `2` `3` | shortcuts `0x05` `0x06` `0x07` — Bluetooth slots |
+| `F1` | consumer — browser, home |
+| `F2` | consumer — mail |
+| `F3` | class 4, usage `0x2B` (Tab) |
+| `F4` | class 8 — **restore default colors** (`0x91D3`) |
+| `F5` `F6` | class 3, parameters 2 and 1 |
+| `F7` `F8` `F9` | consumer — previous track, play/pause, next track |
+| `F10` | consumer — mute |
+| `F11` `F12` | consumer — volume − and + |
+| `Tab` | class 2 |
+| `Q` `W` `E` | shortcuts `0x19` `0x18` `0x1A` |
+| `G` `B` | shortcuts `0x0A` `0x11` |
+| **`U`** | **Print Screen** |
+| **`I`** | **Scroll Lock** |
 | **`O`** | **Pause** |
-| `\` | classe 0 via `b0 = 0x08` |
-| `Suppr` | Inser |
-| `Fin` | Origine |
-| `Haut` `Bas` | classe 3, paramètres 1 et 2 |
-| `Gauche` `Droite` | classe 4, paramètres 2 et 1 |
+| `\` | class 0 via `b0 = 0x08` |
+| `Del` | Insert |
+| `End` | Home |
+| `Up` `Down` | class 3, parameters 1 and 2 |
+| `Left` `Right` | class 4, parameters 2 and 1 |
 
-### Ce que le portage en a repris
+### What the port adopted from it
 
-**Trois touches ajoutées et flashées** : `Fn + U` → Impr.écran, `Fn + I` → Arrêt défil,
-`Fn + O` → Pause. Elles manquaient, et elles sont exactement celles de l'usine.
+**Three keys added and flashed**: `Fn + U` → Print Screen, `Fn + I` → Scroll Lock,
+`Fn + O` → Pause. They were missing, and they match the factory layout.
 
-**Ce qui manque encore**, et qui est de la fonctionnalité, pas de la transcription : la
-réinitialisation d'usine sur `Fn + Échap`, la relance d'appairage sur ``Fn + ` ``, la restauration
-des couleurs sur `Fn + F4`, et les raccourcis de `Q`, `W`, `E`, `G`, `B`, `Tab`, `\` dont la
-sémantique demanderait d'ouvrir les arms correspondants. La donnée est là ; la décision ne l'est pas.
+**What is still missing**, which is a matter of features rather than transcription:
+factory reset on `Fn + Esc`, re-pairing on ``Fn + ` ``, color restoration
+on `Fn + F4`, and the shortcuts on `Q`, `W`, `E`, `G`, `B`, `Tab`, `\` whose
+semantics would require dissecting the corresponding dispatcher arms. The data is there; the product decision is not.
 
-> **Note d'emplacement.** Le portage met la luminosité sur `Fn + [` / `]` et la vitesse sur
-> `Fn + ←` / `→`. L'usine met la luminosité sur `Fn + Haut` / `Bas` et la vitesse sur
-> `Fn + Gauche` / `Droite`. Ce sont deux choix, pas une erreur — mais si l'on veut l'ergonomie
-> d'origine, elle est maintenant relevée.
+> **Layout note.** The port puts brightness on `Fn + [` / `]` and speed on
+> `Fn + ←` / `→`. The factory puts brightness on `Fn + Up` / `Down` and speed on
+> `Fn + Left` / `Right`. These are two design choices, not a bug — but if the original
+> ergonomics are desired, they are now documented.
 
-> ## ✅ 2026-09-11 — premier flash réussi, bootloader préservé
+> ## ✅ 2026-09-11 — first successful flash, bootloader preserved
 >
-> **Du code de ce dépôt a tourné sur l'appareil.** La carte `aula-f75-probe` — USB et retour ISP,
-> **aucun GPIO piloté** — a été écrite avec `sinowisp write -d aula-f75 --force`, et vérifiée par une
-> relecture complète :
+> **Code from this repository ran on the device.** The `aula-f75-probe` board target — USB and ISP return,
+> **no GPIOs driven** — was flashed using `sinowisp write -d aula-f75 --force`, and verified by a
+> full readback:
 >
-> | Vérification | Résultat |
+> | Check | Result |
 > | --- | --- |
-> | énumération | `258a:010c` **`product="SMK Keyboard"`** |
-> | retour en ISP | **trois fois de suite** |
-> | bootloader | octets `61440`–`65535` **identiques** à `assets/f75_bootloader.bin` |
-> | zone applicative | **zéro octet** de différence avec l'image voulue |
-> | vue JTAG réelle | `0x0000 = 02 F0 00` → **le bootloader**, `0xEFFB = 02 00 DE` → l'entrée de SMK |
+> | enumeration | `258a:010c` **`product="SMK Keyboard"`** |
+> | return to ISP | **three times in a row** |
+> | bootloader | bytes `61440`–`65535` **identical** to `assets/f75_bootloader.bin` |
+> | application area | **zero byte** difference from the intended image |
+> | real JTAG view | `0x0000 = 02 F0 00` → **the bootloader**, `0xEFFB = 02 00 DE` → SMK entry point |
 >
-> Le vecteur de reset pointe sur le bootloader d'usine et le tremplin sur notre firmware : la
-> structure d'usine, avec notre code au bout. `sinowisp` pose le tremplin lui-même depuis le vecteur
-> de reset — il n'y avait rien à faire.
+> The reset vector points to the factory bootloader and the trampoline points to our firmware: the
+> factory structure, with our code at the end. `sinowisp` places the trampoline itself from the reset
+> vector — nothing extra had to be done.
 >
-> **Tout le reste de cette page reste non vérifié sur matériel.** La sonde ne pilote aucun GPIO : la
-> matrice, le rétroéclairage, la radio, la veille et la polarité PWM n'ont été exercés par rien. Les
-> « transcrit », « établi » et « vérifié » de ce document parlent du dump et du désassemblage, pas de
-> l'appareil.
+> **Everything else on this page remains unverified on hardware.** The probe drives no GPIOs: the
+> matrix, backlight, radio, sleep, and PWM polarity have not been exercised by anything. The terms
+> "transcribed", "established", and "verified" in this document refer to the dump and disassembly, not
+> the physical device.
 
-> **État : portage incomplet, non compilable, jamais flashé.**
-> Le brochage n'est pas établi. `kbdef.h` refuse volontairement de compiler.
+> **Status: incomplete port, does not compile, never flashed.**
+> The pinout is not established. `kbdef.h` intentionally refuses to compile.
 
-## Identité
+## Identity
 
 | | |
 | --- | --- |
-| MCU | SinoWealth **SH68F90A**, marquage IC **BYK916** |
-| USB | **258A:010C** — lus dans la flash d'usine, descripteur device en `0x5FCE` |
-| Flash | 61 440 o firmware + 4 096 o bootloader ISP |
-| Sans fil | **BK3632** Beken, relié par **EUART0** |
-| Grille LED | **6 lignes × 15 colonnes** = 90 positions, 80 touches |
+| MCU | SinoWealth **SH68F90A**, IC marking **BYK916** |
+| USB | **258A:010C** — read from factory flash, device descriptor at `0x5FCE` |
+| Flash | 61,440 B firmware + 4,096 B ISP bootloader |
+| Wireless | Beken **BK3632**, connected via **EUART0** |
+| LED grid | **6 rows × 15 columns** = 90 positions, 80 keys |
 
-⚠️ À ne pas confondre avec l'**AULA F75 Ultra** (`FFFE:00A9`), qui est un Westberry WB32FQ95
-ARM Cortex-M et relève de QMK.
+⚠️ Not to be confused with the **AULA F75 Ultra** (`FFFE:00A9`), which uses a Westberry WB32FQ95
+ARM Cortex-M and runs QMK.
 
-## Ce qui est établi
+## What is established
 
-| Élément | Valeur | Preuve |
+| Item | Value | Evidence |
 | --- | --- | --- |
-| VID / PID | `0x258A` / `0x010C` | descripteur device lu en flash `0x5FC6`, VID/PID en `0x5FCE` |
-| Grille LED | 6 × 15 = 90 | `num_leds` lu en direct par le SDK OpenRGB ; index = colonne × 6 + ligne ; index max 89 |
-| Nombre de touches | 80 | 80 LED nommées `Key: …` ; la disposition en place 80 sur 90, soit 10 trous |
-| Disposition | 75 % ANSI | dérivée de `aula_f75_layout` (OpenRGB), recoupée par le compte de trous |
-| Transport sans fil | EUART0 | ISR vecteur 13 = `_INT_EUART0`, `SCON` 0xD8 / `SBUF` 0xAA, half-duplex via `P0CR` + P0.2 |
+| VID / PID | `0x258A` / `0x010C` | device descriptor read in flash at `0x5FC6`, VID/PID at `0x5FCE` |
+| LED grid | 6 × 15 = 90 | `num_leds` read live by the OpenRGB SDK; index = col × 6 + row; max index 89 |
+| Key count | 80 | 80 LEDs named `Key: …`; the layout places 80 out of 90, leaving 10 holes |
+| Layout | 75% ANSI | derived from `aula_f75_layout` (OpenRGB), cross-checked against the hole count |
+| Wireless transport | EUART0 | ISR vector 13 = `_INT_EUART0`, `SCON` 0xD8 / `SBUF` 0xAA, half-duplex via `P0CR` + P0.2 |
 
-## Brochage — ÉTABLI
+## Pinout — ESTABLISHED
 
-Recoupé par quatre sources indépendantes. **Le firmware compile** :
-15 208 o de ROM sur 60 416 (25,1 %), 835 o de XRAM sur 4 096.
+Cross-checked across four independent sources. **The firmware compiles**:
+15,208 B of ROM out of 60,416 (25.1%), 835 B of XRAM out of 4,096.
 
 ### Sources
 
-1. **Init GPIO consolidée du firmware d'usine**, `fcn @ 0xA7EC` :
+1. **Consolidated GPIO init in the factory firmware**, `fcn @ 0xA7EC`:
    `P0CR=0x9C  P1CR=0x3F  P2CR=0x3F  P3CR=0x3F  P4CR=0x4D  P5CR=0x87  P6CR=0xFF  P7CR=0x60`
-   (bit à 1 = sortie, cf. `GPIO_OUTPUT` dans `platform/sh68f90/gpio.h`)
-2. **Table de saut de sélection de colonne** `@ 0x72F4` : 20 emplacements, 15 peuplés, les 5
-   derniers pointant tous sur le handler nul. Chaque handler relâche la colonne précédente
-   (`setb`) puis sélectionne la suivante (`clr`) — l'emplacement 0 relâche `P4.3`, ce qui ferme
-   la boucle et fixe `P4.3` comme dernière colonne.
-3. **Routine de lecture des lignes** `@ 0x73A6` :
+   (bit set to 1 = output, see `GPIO_OUTPUT` in `platform/sh68f90/gpio.h`)
+2. **Column selection jump table** `@ 0x72F4`: 20 slots, 15 populated, the last 5
+   all pointing to the null handler. Each handler releases the previous column
+   (`setb`) then selects the next one (`clr`) — slot 0 releases `P4.3`, which closes
+   the loop and establishes `P4.3` as the last column.
+3. **Row reading routine** `@ 0x73A6`:
    `mov a,P5 ; add a,ACC ; anl a,#0x30 ; mov r7,a ; mov a,P7 ; anl a,#0x0F ; orl a,r7 ; orl a,#0xC0`
-4. **Portage indépendant** [`tiagoluizo/smk@aula-f75-port`](https://github.com/tiagoluizo/smk/tree/aula-f75-port),
-   qui aboutit au même brochage par une analyse séparée.
+4. **Independent port** [`tiagoluizo/smk@aula-f75-port`](https://github.com/tiagoluizo/smk/tree/aula-f75-port),
+   which arrives at the exact same pinout through a separate analysis.
 
-### Résultat
+### Result
 
-| | Broches |
+| | Pins |
 | --- | --- |
-| **Lignes** (entrées, actives basses) | `P7.0` `P7.1` `P7.2` `P7.3` `P5.3` `P5.4` |
-| **Colonnes** (sorties, actives basses, dans l'ordre de scan) | `P6.0`…`P6.7`, `P5.0` `P5.1` `P5.2` `P5.7`, `P4.0` `P4.2` `P4.3` |
-| **Rétroéclairage** | 18 sorties PWM = 6 lignes LED × R/G/B : `PWM00`-`PWM05` (P3), `PWM10`-`PWM15` (P2), `PWM20`-`PWM25` (P1) |
+| **Rows** (inputs, active low) | `P7.0` `P7.1` `P7.2` `P7.3` `P5.3` `P5.4` |
+| **Columns** (outputs, active low, in scan order) | `P6.0`…`P6.7`, `P5.0` `P5.1` `P5.2` `P5.7`, `P4.0` `P4.2` `P4.3` |
+| **Backlight** | 18 PWM outputs = 6 LED rows × R/G/B: `PWM00`-`PWM05` (P3), `PWM10`-`PWM15` (P2), `PWM20`-`PWM25` (P1) |
 
-L'octet de lignes place la ligne N sur le bit N (`P7 & 0x0F` pour les lignes 0-3, `P5` décalé d'un
-cran et masqué `0x30` pour les lignes 4-5), bits inutilisés forcés à 1 — exactement la convention
-attendue par `src/smk/matrix.c`, qui inverse ensuite l'échantillon.
+The row byte places row N on bit N (`P7 & 0x0F` for rows 0-3, `P5` shifted by one
+bit and masked with `0x30` for rows 4-5), with unused bits forced to 1 — the exact convention
+expected by `src/smk/matrix.c`, which then inverts the sample.
 
-**Question 15 vs 16 colonnes : tranchée.** La table `@ 0x72F4` dimensionne 20 emplacements mais
-n'en peuple que 15. C'est bien **15** colonnes physiques.
+**15 vs 16 columns question: settled.** The table `@ 0x72F4` sizes 20 slots but
+only populates 15. There really are **15** physical columns.
 
-## Ce qui reste NON établi
+## What remains UNESTABLISHED
 
-| Élément | État |
+| Item | Status |
 | --- | --- |
-| Correspondance matrice de touches ↔ grille LED | ✅ **vérifiée** par capture HID indépendante — voir ci-dessous |
-| Ordre de chargement des 18 canaux PWM | ✅ **relevé et implémenté** (`aula_rgb.c`) |
-| Correspondance canal ↔ (ligne, couleur) | ✅ **établie via le driver OpenRGB** |
-| Câblage du rendu dans la boucle SMK | ✅ **résolu** — sous-trames LED de `tick.c`, voir ci-dessous |
-| Rotation d'encodeur | ✅ **implémentée** — quadrature `P0.5`/`P0.6`, volume ± (`src/keyboards/aula-f75/aula_encoder.c`) |
-| Broches au rôle inconnu | ❓ `P0.0` `P0.1` `P4.1` `P4.4` `P5.5` `P5.6` `P7.7` — `P7.4`/`P4.5` sont le sélecteur de connexion, `P4.7` la ligne « module prêt » |
-| Veille | ✅ **implémentée**, USB **et radio** — transcrite du firmware d'usine, non testée sur matériel |
-| Sans-fil 2,4 GHz / Bluetooth | ⚠️ **écrit et compilé** (`aula_rf.c`, EUART0), **jamais exécuté** — voir ci-dessous |
+| Key matrix ↔ LED grid mapping | ✅ **verified** by independent HID capture — see below |
+| Loading order of the 18 PWM channels | ✅ **extracted and implemented** (`aula_rgb.c`) |
+| Channel ↔ (row, color) mapping | ✅ **established via the OpenRGB driver** |
+| Wiring rendering into the SMK loop | ✅ **resolved** — LED subframes in `tick.c`, see below |
+| Encoder rotation | ✅ **implemented** — quadrature on `P0.5`/`P0.6`, volume ± (`src/keyboards/aula-f75/aula_encoder.c`) |
+| Pins with unknown roles | ❓ `P0.0` `P0.1` `P4.1` `P4.4` `P5.5` `P5.6` `P7.7` — `P7.4`/`P4.5` are the connection mode switch, `P4.7` the "module ready" line |
+| Sleep | ✅ **implemented**, USB **and radio** — transcribed from factory firmware, untested on hardware |
+| 2.4 GHz / Bluetooth wireless | ⚠️ **written and compiled** (`aula_rf.c`, EUART0), **never executed** — see below |
 
-## Matrice : 81 touches, pas 80 — l'encodeur
+## Matrix: 81 keys, not 80 — the encoder
 
-Une **capture HID physique indépendante**
+An **independent physical HID capture**
 ([tiagoluizo/smk](https://github.com/tiagoluizo/smk/blob/aula-f75-port/docs/superpowers/evidence/2026-08-07-aula-f75-keymap-capture.md))
-a mappé la matrice 6×15 sur des usages HID uniques `0x04..0x5D`. Confrontée rangée par rangée à la
-disposition dérivée d'OpenRGB, elle **correspond position par position** — avec une différence :
+mapped the 6×15 matrix to unique HID usages `0x04..0x5D`. Compared row by row against the
+layout derived from OpenRGB, it **matches position for position** — with one difference:
 
-**Il y a 81 commutateurs, pas 80.** La position `[ligne 0][colonne 14]` est l'**appui d'encodeur**.
-C'est une vraie position de matrice, invisible pour OpenRGB parce qu'elle n'a **pas de LED** — d'où
-90 LED pour 81 touches, et 9 coordonnées réellement inutilisées.
+**There are 81 switches, not 80.** Position `[row 0][col 14]` is the **encoder press**.
+It is a real matrix position, invisible to OpenRGB because it has **no LED** — hence
+90 LEDs for 81 keys, and 9 genuinely unused coordinates.
 
-La **rotation** est hors matrice. Poller `@ 0x7928`, appelé depuis le tick :
+**Rotation** is outside the matrix. Poller `@ 0x7928`, called from the tick:
 
 ```asm
 0x792b   mov  a, P0
 0x792f   swap a          ; P0.5 -> bit1, P0.6 -> bit2
 0x7930   rrc  a          ; -> bit0, -> bit1
-0x7931   anl  a, #0x03   ; garde les deux phases
+0x7931   anl  a, #0x03   ; keep the two phases
 ```
 
-→ **phases sur `P0.5` et `P0.6`**, tous deux en entrée sous `P0CR = 0x9C`. Vérifié ici, et
-cohérent avec l'init GPIO relevée indépendamment. Non implémentée dans ce portage.
+→ **phases on `P0.5` and `P0.6`**, both configured as inputs under `P0CR = 0x9C`. Verified here, and
+consistent with the independently extracted GPIO init. Not implemented in this port.
 
-## RGB : pourquoi le rendu de l'Air60 n'est pas réutilisable
+## RGB: why the Air60 rendering cannot be reused
 
-Les deux claviers n'ont pas la **même topologie de matrice LED**, et c'est ça qui bloque, pas un
-détail de câblage.
+The two keyboards do not share the **same LED matrix topology**, and that is the blocker, not a
+wiring detail.
 
 | | NuPhy Air60 | AULA F75 |
 | --- | --- | --- |
-| Colonnes LED | canaux **PWM** (`LED_PWM_C0` = `PWM40`, …) | colonnes de matrice en **GPIO simple**, sélecteurs de multiplexage |
-| Lignes LED | broches GPIO simples (`RGB_R0R`, `RGB_R0G`, …) | les **18 canaux PWM** = 6 lignes × R/G/B |
+| LED columns | **PWM** channels (`LED_PWM_C0` = `PWM40`, …) | matrix columns in **plain GPIO**, multiplex selectors |
+| LED rows | plain GPIO pins (`RGB_R0R`, `RGB_R0G`, …) | the **18 PWM channels** = 6 rows × R/G/B |
 
-C'est exactement l'inverse. Le rendu par défaut de SMK (`src/user/indicators_render.c`) est un
-stub vide, et celui de l'Air60 (`layouts/default/indicators.c`) est écrit pour sa topologie.
-**Ce portage n'a donc aucun RGB** — les `LED_PWM_C0..C17` de `kbdef.h` sont déclarés mais inutilisés
-tant qu'un `indicators.c` propre n'est pas écrit.
+It is the exact opposite. SMK's default renderer (`src/user/indicators_render.c`) is an
+empty stub, and the Air60's (`layouts/default/indicators.c`) is written for its own topology.
+**This port therefore has no RGB** — `LED_PWM_C0..C17` in `kbdef.h` are declared but unused
+until a dedicated `indicators.c` is written.
 
-### Ordre de chargement des canaux — relevé
+### Channel loading order — extracted
 
-`fcn @ 0x6E61` lit **36 octets consécutifs** du framebuffer (base XRAM `0x05A2` + colonne × 36) et
-les écrit dans les registres `DUTY2`, en **gros-boutiste** (poids fort d'abord), en alternant les
-deux DPTR via `INSCON` :
+`fcn @ 0x6E61` reads **36 consecutive bytes** from the framebuffer (XRAM base `0x05A2` + col × 36) and
+writes them into the `DUTY2` registers, in **big-endian** order (high byte first), alternating the
+two DPTRs via `INSCON`:
 
-| Octets | Canaux | Broches |
+| Bytes | Channels | Pins |
 | --- | --- | --- |
 | 0-11 | `PWM20`…`PWM25` | P1.0…P1.5 |
 | 12-23 | `PWM10`…`PWM15` | P2.0…P2.5 |
 | 24-29 | **`PWM03`, `PWM04`, `PWM05`** | P3.3…P3.5 |
 | 30-35 | **`PWM00`, `PWM01`, `PWM02`** | P3.0…P3.2 |
 
-**Une seule irrégularité, et elle est délibérée : rotation de 3 dans le groupe P3** — `PWM03-05`
-sont chargés *avant* `PWM00-02`. Les adresses ont été recoupées avec la carte XDATA `0xFF80-0xFFFF`
-du datasheet SH68F90 CV2.0.
+**Only one irregularity, and it is deliberate: a rotation by 3 within the P3 group** — `PWM03-05`
+are loaded *before* `PWM00-02`. The addresses were cross-checked against the `0xFF80-0xFFFF` XDATA map
+in the SH68F90 CV2.0 datasheet.
 
-### Correspondance canal ↔ (ligne, couleur) — établie par le driver OpenRGB
+### Channel ↔ (row, color) mapping — established via the OpenRGB driver
 
-**Le code d'OpenRGB *est* le protocole documenté** — inutile de sniffer l'USB.
-`SinowealthKeyboard10cController::SetLEDsDirect` construit un feature report de **520 octets** :
+**OpenRGB's code *is* the documented protocol** — no need to sniff USB.
+`SinowealthKeyboard10cController::SetLEDsDirect` builds a **520-byte** feature report:
 
 ```c
 buf[0x00] = 0x06;                      // Report ID 6
-buf[0x01] = 0x08;                      // commande : écriture de la table de couleurs
-buf[0x04] = 0x01;                      // octets d'adresse
-buf[0x06] = 0x7A; buf[0x07] = 0x01;    // longueur = 0x017A = 378
-buf[0x08 + i*3] = R, G, B;             // 3 octets par LED, i = indice LED
+buf[0x01] = 0x08;                      // command: write color table
+buf[0x04] = 0x01;                      // address bytes
+buf[0x06] = 0x7A; buf[0x07] = 0x01;    // length = 0x017A = 378
+buf[0x08 + i*3] = R, G, B;             // 3 bytes per LED, i = LED index
 ```
 
-Deux corrections à [l'article de xevrion](https://xevrion.dev/blogs/aula-f75-linux-reverse-engineering) :
-la commande est **`0x08`**, pas `0x0A`, et les couleurs font **3 octets** par LED, pas 4.
+Two corrections to [xevrion's blog post](https://xevrion.dev/blogs/aula-f75-linux-reverse-engineering):
+the command is **`0x08`**, not `0x0A`, and colors are **3 bytes** per LED, not 4.
 
-L'indice LED est celui de la table de disposition, soit **`colonne × 6 + ligne`**. Par colonne,
-l'hôte envoie donc 18 octets : `ligne0 R,G,B`, `ligne1 R,G,B`, … D'où **`canal = ligne × 3 + couleur`**,
-et en combinant avec l'ordre de chargement :
+The LED index is that of the layout table, i.e., **`col × 6 + row`**. Per column,
+the host therefore sends 18 bytes: `row0 R,G,B`, `row1 R,G,B`, … Hence **`channel = row × 3 + color`**,
+and combining this with the loading order:
 
-| Canaux | Lignes | Broches |
+| Channels | Rows | Pins |
 | --- | --- | --- |
-| 0-5 | lignes 0 et 1 | `P1.0`…`P1.5` (`PWM20`…`PWM25`) |
-| 6-11 | lignes 2 et 3 | `P2.0`…`P2.5` (`PWM10`…`PWM15`) |
-| 12-14 | ligne 4 | `P3.3`…`P3.5` (`PWM03`…`PWM05`) |
-| 15-17 | ligne 5 | `P3.0`…`P3.2` (`PWM00`…`PWM02`) |
+| 0-5 | rows 0 and 1 | `P1.0`…`P1.5` (`PWM20`…`PWM25`) |
+| 6-11 | rows 2 and 3 | `P2.0`…`P2.5` (`PWM10`…`PWM15`) |
+| 12-14 | row 4 | `P3.3`…`P3.5` (`PWM03`…`PWM05`) |
+| 15-17 | row 5 | `P3.0`…`P3.2` (`PWM00`…`PWM02`) |
 
-**Deux lignes par port, six broches chacun.** La régularité du résultat est en soi un argument, et
-elle explique la rotation apparente du groupe P3 relevée dans la table de chargement.
+**Two rows per port, six pins each.** The regularity of the result is an argument in itself, and
+it explains the apparent rotation of the P3 group noted in the loading table.
 
-**Ce n'est plus une inférence.** Le convertisseur d'usine `0x765B` lit le framebuffer 8 bits en
-`0x0152 + colonne × 18 + ligne × 3 + couleur` et écrit le tampon 16 bits en
-`0x05A2 + colonne × 36 + ligne × 6 + couleur × 2` : le **même** indexage `(ligne, couleur)` des deux
-côtés, sans permutation. Et la table de phases `CODE 0x2922`, indexée elle aussi `ligne × 3 +
-couleur`, se retrouve octet pour octet dans les `DUTY1` posés à l'init, permutés par exactement
-l'ordre de chargement ci-dessus. La correspondance est lue, pas supposée ; l'essai sur matériel que
-demandait la rédaction précédente n'est plus nécessaire.
+**This is no longer an inference.** The factory converter `0x765B` reads the 8-bit framebuffer at
+`0x0152 + col × 18 + row × 3 + color` and writes the 16-bit buffer at
+`0x05A2 + col × 36 + row × 6 + color × 2`: the **exact same** `(row, color)` indexing on both
+sides, without permutation. And the phase table `CODE 0x2922`, also indexed as `row × 3 +
+color`, matches byte for byte the `DUTY1` values set at init, permuted by the exact
+loading order above. The mapping is read directly, not assumed; the hardware test required
+by the previous draft of this page is no longer necessary.
 
-### L'inadéquation d'architecture avec SMK — levée
+### Architectural mismatch with SMK — resolved
 
-Le rendu par colonne exige de recharger les 18 duties **à chaque avance de colonne**. Dans le
-firmware d'usine, c'est l'ISR `_INT_PWM0` qui possède l'avance de colonne — et qui en profite pour
-lire les lignes de la matrice au passage (`0x73A6`).
+Column-by-column rendering requires reloading all 18 duties **on every column advance**. In the
+factory firmware, the `_INT_PWM0` ISR owns the column advance — and takes the opportunity to
+read the matrix rows along the way (`0x73A6`).
 
-Cette page a longtemps conclu qu'il fallait choisir entre « l'ISR reprend la main sur les colonnes
-comme en usine » et « le rechargement se greffe dans la boucle de scan », et que ce choix ne se
-validait pas sans matériel. **Les deux branches étaient fausses, et l'ordonnanceur qu'il fallait
-existait déjà dans SMK.**
+This page long concluded that we had to choose between "letting the ISR take over the columns
+like the factory firmware" and "hooking the reload into the scan loop", and that this choice could not
+be validated without hardware. **Both branches were wrong, and the scheduler we needed
+already existed in SMK.**
 
-`src/smk/tick.c` alterne, depuis l'ISR Timer2, **un balayage de matrice** puis
-`LED_SUBFRAMES_PER_SCAN` **sous-trames LED** :
+`src/smk/tick.c` alternates, from the Timer2 ISR, **one matrix scan** followed by
+`LED_SUBFRAMES_PER_SCAN` **LED subframes**:
 
 ```c
 void tick_dispatch(void) {
@@ -845,153 +844,153 @@ void tick_dispatch(void) {
 }
 ```
 
-Le portage pose `LED_SUBFRAMES_PER_SCAN = MATRIX_COLS` : quinze sous-trames, une par colonne LED,
-entre deux balayages de touches. Le rendu ne se greffe donc pas *dans* le scan — il vit à côté,
-dans le créneau que `tick.c` lui réserve (`RELOAD_LED_SUBFRAME` = 400 µs contre ~320 µs de
-balayage). `matrix.c` n'est pas touché d'une ligne, et `pwm_interrupt_handler` reste vide.
+The port sets `LED_SUBFRAMES_PER_SCAN = MATRIX_COLS`: fifteen subframes, one per LED column,
+between two key scans. Rendering therefore does not hook *into* the scan — it lives alongside it,
+in the time slot that `tick.c` reserves for it (`RELOAD_LED_SUBFRAME` = 400 µs vs. ~320 µs for a
+scan). `matrix.c` is untouched, and `pwm_interrupt_handler` remains empty.
 
-La cohabitation électrique, elle, était déjà résolue : `matrix_scan_full()` encadre son balayage
-par `indicators_pwm_disable()` et `indicators_pwm_enable()` **parce que le courant des LED se
-couple dans la détection de ligne**. Il suffisait d'implémenter les deux.
+Electrical coexistence, meanwhile, was already solved: `matrix_scan_full()` brackets its scan
+with `indicators_pwm_disable()` and `indicators_pwm_enable()` **because LED current
+couples into row sensing**. All it took was implementing both functions.
 
-Un précédent existait dans l'arbre et n'avait pas été vu : le **genesis-thor-300** partage lui aussi
-ses colonnes de matrice avec son multiplexage LED, pose `LED_SUBFRAMES_PER_SCAN MATRIX_COLS`, et
-mesure son budget — *« one effect evaluation per subframe: six, one per row, does not fit and
-starves the USB interrupt »*. Le portage reprend sa structure, une seule évaluation d'effet par
-sous-trame, en remplaçant son tramage de trames entières par du vrai PWM.
+A precedent existed in the tree and had gone unnoticed: the **genesis-thor-300** also shares
+its matrix columns with its LED multiplexing, sets `LED_SUBFRAMES_PER_SCAN MATRIX_COLS`, and
+measures its budget — *"one effect evaluation per subframe: six, one per row, does not fit and
+starves the USB interrupt"*. The port reuses its structure, one single effect evaluation per
+subframe, replacing its whole-frame dithering with true hardware PWM.
 
-#### La polarité, tranchée sur le dump
+#### Polarity, settled from the dump
 
-Cette section posait la polarité comme indécidable et le portage la concentrait dans une constante
-`AULA_RGB_DUTY_INVERTED`. **La question était décidable, et la réponse est l'inverse de celle qui
-avait été retenue.** Trois relevés indépendants la verrouillent.
+This section previously treated polarity as undecidable and the port isolated it in a constant
+`AULA_RGB_DUTY_INVERTED`. **The question was decidable, and the answer is the opposite of what
+had been chosen.** Three independent findings lock it down.
 
-**1. `DUTY1` est écrit, une seule fois, et vaut une constante par canal.** Sur les 36 références aux
-registres `DUTY1` de l'image entière (`PWMnnDUTY1H` en `0xFFB8`–`0xFFC9`, `DUTY1L` en
-`0xFFA0`–`0xFFB1`), **les 36 sont dans la routine d'init `0x6713`–`0x68CD`, et zéro ailleurs**. Le
-chargeur de colonne ne module que `DUTY2`. Les 18 valeurs :
+**1. `DUTY1` is written once, and holds a per-channel constant.** Out of all 36 references to
+the `DUTY1` registers across the entire image (`PWMnnDUTY1H` at `0xFFB8`–`0xFFC9`, `DUTY1L` at
+`0xFFA0`–`0xFFB1`), **all 36 are in the init routine `0x6713`–`0x68CD`, and zero elsewhere**. The
+column loader only modulates `DUTY2`. The 18 values:
 
-| Banc | Canaux | `DUTY1H` | `DUTY1L` |
+| Bank | Channels | `DUTY1H` | `DUTY1L` |
 | --- | --- | --- | --- |
 | PWM0 | `PWM00`…`PWM05` | `0x00` | `C3 C4 C5 C0 C1 C2` |
 | PWM1 | `PWM10`…`PWM15` | `0x00` | `BA BB BC BD BE BF` |
 | PWM2 | `PWM20`…`PWM25` | `0x00` | `B4 B5 B6 B7 B8 B9` |
 
-Ni `0`, ni `0x04B0` : dix-huit valeurs consécutives `0xB4`–`0xC5`, une par canal.
+Neither `0` nor `0x04B0`: eighteen consecutive values `0xB4`–`0xC5`, one per channel.
 
-**2. La même table existe en flash, et sa permutation est celle du chargeur.** `CODE 0x2922` tient
-18 octets, `0xB4 + indice`, indexés `ligne × 3 + couleur`. Trié, cet ensemble est **exactement**
-celui des `DUTY1` ci-dessus ; la permutation entre les deux est **exactement** l'ordre de chargement
-de `fcn @ 0x6E61` (`buf[0..5]→PWM20..25`, `[6..11]→PWM10..15`, `[12..14]→PWM03..05`,
-`[15..17]→PWM00..02`). Ce recoupement confirme au passage la correspondance canal ↔ (ligne, couleur)
-et la rotation du groupe P3, jusque-là déduites de l'ordre du driver OpenRGB.
+**2. The same table exists in flash, and its permutation matches the loader.** `CODE 0x2922` holds
+18 bytes, `0xB4 + index`, indexed as `row × 3 + color`. Sorted, this set is **identical** to
+the `DUTY1` values above; the permutation between the two is **identical** to the loading order
+of `fcn @ 0x6E61` (`buf[0..5]→PWM20..25`, `[6..11]→PWM10..15`, `[12..14]→PWM03..05`,
+`[15..17]→PWM00..02`). Along the way, this cross-check confirms the channel ↔ (row, color) mapping
+and the P3 group rotation, previously deduced from the OpenRGB driver's ordering.
 
-**3. La conversion 8 → 16 bits — l'ancien « seul vrai trou » — est en `0x765B`–`0x770C`.** Une seule
-fonction touche les deux bases : elle écrit le framebuffer 8 bits (`0x0152 + colonne × 18 +
-ligne × 3 + couleur`) puis, en écriture directe, le tampon 16 bits (`0x05A2 + colonne × 36 +
-ligne × 6`, **gros-boutiste**). Son arithmétique, en `0x76C3` :
+**3. The 8 → 16-bit conversion — the former "only real gap" — is at `0x765B`–`0x770C`.** A single
+function touches both bases: it writes the 8-bit framebuffer (`0x0152 + col × 18 +
+row × 3 + color`) and then, directly, the 16-bit buffer (`0x05A2 + col × 36 +
+row × 6`, **big-endian**). Its arithmetic, at `0x76C3`:
 
 ```
-76C3  mov  a,r3           ; la valeur 8 bits
+76C3  mov  a,r3           ; the 8-bit value
 76C4  mov  b,#0x04
 76C7  mul  ab             ; r6:r7 = v x 4
-76CB  mov  a,r5           ; la ligne
+76CB  mov  a,r5           ; the row
 76CC  mov  b,#0x03
 76CF  mul  ab
-76D0  add  a,#0x22        ; dptr = 0x2922 + ligne x 3
+76D0  add  a,#0x22        ; dptr = 0x2922 + row x 3
 76D5  addc a,#0x29
-76DA  movc a,@a+dptr      ; la phase du canal
-76DD  add  a,r7           ; r6:r7 += phase   (addition 16 bits)
+76DA  movc a,@a+dptr      ; the channel phase
+76DD  add  a,r7           ; r6:r7 += phase   (16-bit addition)
 ```
 
-Soit :
+That is:
 
-> **`DUTY2 = (valeur << 2) + phase[ligne × 3 + couleur]`**, avec `DUTY1` figé sur cette même phase.
+> **`DUTY2 = (value << 2) + phase[row × 3 + color]`**, with `DUTY1` fixed at that exact same phase.
 
-**Conséquence, par monotonicité.** Ni le datasheet ni `src/platform/sh68f90/pwm.h` ne disent
-laquelle des deux arêtes ouvre l'impulsion — on n'en a pas besoin. `DUTY1` est figé et `DUTY2` croît
-avec la valeur ; sous la lecture opposée, la valeur 1 donnerait une impulsion de 1196 crans et la
-valeur 255 une de 180, soit une luminosité **décroissante** avec la valeur, discontinue en zéro.
-Absurde. L'impulsion va donc de `DUTY1` à `DUTY2`, sa largeur vaut `valeur << 2`, et le rapport
-cyclique est **direct** : 0 = éteint (impulsion nulle, `DUTY2 = DUTY1`), 255 = 1020/1200 soit 85 %
-de la période. Le décalage de phase, un cran par canal, étale les fronts montants des 18 voies
-au lieu de les faire coïncider ; il disparaît du résultat lumineux.
+**Consequence, by monotonicity.** Neither the datasheet nor `src/platform/sh68f90/pwm.h` states
+which of the two edges opens the pulse — and we don't need them to. `DUTY1` is fixed and `DUTY2` grows
+with the value; under the opposite reading, value 1 would yield a pulse of 1196 ticks and
+value 255 a pulse of 180, meaning brightness would **decrease** with the value, with a discontinuity at zero.
+Absurd. The pulse therefore spans from `DUTY1` to `DUTY2`, its width is `value << 2`, and the duty
+cycle is **non-inverted (direct)**: 0 = off (zero width, `DUTY2 = DUTY1`), 255 = 1020/1200 or 85%
+of the period. The phase offset, one tick per channel, staggers the rising edges of the 18 channels
+instead of having them coincide; it is invisible in the light output.
 
-L'indice qui allait vers le sens direct — `user_matrix_sinks_off()` tire les 18 broches au niveau
-bas — était donc le bon, et la conclusion « anode commune, le PWM fait office de sink » de cette
-page était fausse. `AULA_RGB_DUTY_INVERTED` a disparu du portage : il n'y a plus de choix à faire.
+The clue pointing toward direct polarity — `user_matrix_sinks_off()` pulls all 18 pins low —
+was therefore right, and this page's earlier conclusion ("common anode, PWM acts as sink")
+was wrong. `AULA_RGB_DUTY_INVERTED` has been removed from the port: there is no longer a choice to make.
 
-**Un seul écart assumé avec l'usine : l'écrêtage.** À valeur 255 la somme vaut jusqu'à
-`1020 + 197 = 1217`, soit 17 crans au-delà de la période. L'usine ne l'écrête pas ; le portage si,
-parce que `led_effect_rgb()` produit bel et bien 255 et qu'un `DUTY2` supérieur à la période n'a pas
-de comportement défini par le datasheet. L'écrêtage ne mord qu'à partir de la valeur 251, et
-seulement sur les trois canaux de la ligne 5.
+**A single deliberate departure from the factory firmware: clamping.** At value 255, the sum reaches up to
+`1020 + 197 = 1217`, or 17 ticks beyond the period. The factory firmware does not clamp it; the port does,
+because `led_effect_rgb()` genuinely produces 255 and a `DUTY2` greater than the period has
+undefined behavior in the datasheet. Clamping only kicks in from value 251 upward, and
+only on the three channels of row 5.
 
-### Ce qui est établi côté PWM
+### What is established on the PWM side
 
-- Le MCU a **25 canaux** : PWM0 (00-05), PWM1 (10-15), PWM2 (20-25), PWM3 (30-33), PWM4 (40-42).
-- Les **18** utilisés pour le RGB sont PWM0/1/2, confirmés par `P1CR=P2CR=P3CR=0x3F` dans l'init
-  d'usine.
-- La correspondance broche↔canal est déduite du NuPhy Air60 : `PWM0x↔P3_x`, `PWM1x↔P2_x`,
-  `PWM2x↔P1_x`, `PWM4x↔P5_x`. **Déduite, pas confirmée par datasheet.**
-- **Période PWM d'usine : `0x04B0` = 1200**, lue en `0x6707` (`PWM0PERDH=0x04`) et `0x670D`
-  (`PWM0PERDL=0xB0`). Le portage `tiagoluizo` reprogramme la sienne à `0x0400` = 1024 et calcule
-  ses rapports cycliques en conséquence (`0x0400 - (v << 2)`) — cohérent chez lui, mais **ce n'est
-  pas la valeur d'usine**, et son inversion est contredite par le relevé de `DUTY1` ci-dessus. Son
-  facteur `v << 2`, en revanche, est exactement celui de l'usine.
-- Rapport cyclique **direct** : `DUTY2 = (v << 2) + phase`, `DUTY1` = phase, donc largeur
-  d'impulsion `v << 2` — 0 = éteint, 255 = 85 % de la période. Établi sur le dump (voir ci-dessus) ;
-  une rédaction antérieure de cette page concluait « inversé », c'était faux.
-- `PWM00CON` d'usine = `0x89` (`0x68D3`) = `PWM_MODE_ENABLE | PWM_SS | diviseur 1`.
+- The MCU has **25 channels**: PWM0 (00-05), PWM1 (10-15), PWM2 (20-25), PWM3 (30-33), PWM4 (40-42).
+- The **18** used for RGB are PWM0/1/2, confirmed by `P1CR=P2CR=P3CR=0x3F` in the factory
+  init.
+- The pin↔channel mapping is deduced from the NuPhy Air60: `PWM0x↔P3_x`, `PWM1x↔P2_x`,
+  `PWM2x↔P1_x`, `PWM4x↔P5_x`. **Deduced, not confirmed by datasheet.**
+- **Factory PWM period: `0x04B0` = 1200**, read at `0x6707` (`PWM0PERDH=0x04`) and `0x670D`
+  (`PWM0PERDL=0xB0`). The `tiagoluizo` port reprograms its period to `0x0400` = 1024 and computes
+  its duty cycles accordingly (`0x0400 - (v << 2)`) — internally consistent, but **not
+  the factory value**, and its inversion is contradicted by the `DUTY1` findings above. Its
+  `v << 2` scaling factor, on the other hand, is the exact factory factor.
+- **Direct (non-inverted)** duty cycle: `DUTY2 = (v << 2) + phase`, `DUTY1` = phase, hence pulse
+  width `v << 2` — 0 = off, 255 = 85% of the period. Established from the dump (see above);
+  an earlier draft of this page concluded "inverted", which was wrong.
+- Factory `PWM00CON` = `0x89` (`0x68D3`) = `PWM_MODE_ENABLE | PWM_SS | prescaler 1`.
 
-## `fcn.0000AF99` — publication de l'effet RGB, protégée contre l'USB
+## `fcn.0000AF99` — publishing the RGB effect, protected against USB
 
-Appelée depuis `main()` (`0x9197`) et depuis `fcn.000005EA`, la grosse fonction périodique.
+Called from `main()` (`0x9197`) and from `fcn.000005EA`, the large periodic function.
 
 ```asm
-0xaf99   jnb  0x2c.7, 0xafc3     ; rien a faire si le drapeau n'est pas pose
-0xaf9c   clr  0x2c.7             ; acquitte
-0xaf9e   anl  IEN1, #0xfe        ; masque EUSB -- l'interruption USB
+0xaf99   jnb  0x2c.7, 0xafc3     ; nothing to do if the flag is not set
+0xaf9c   clr  0x2c.7             ; acknowledge
+0xaf9e   anl  IEN1, #0xfe        ; mask EUSB -- the USB interrupt
 0xafa1   mov  dptr,#0x0e24 ; movx a,@dptr
-0xafa5   cjne a, #0x20, 0xafb6   ; cas particulier si l'effet vaut 32
-0xafa8     mov r4,#0xca ; rrc a  ; 202 et 101
+0xafa5   cjne a, #0x20, 0xafb6   ; special case if effect equals 32
+0xafa8     mov r4,#0xca ; rrc a  ; 202 and 101
 0xafb3     lcall 0xaac1
 0xafb6   clr  0x24.5
 0xafb8   mov  dptr,#0x0e24 ; movx a,@dptr
-0xafbc   mov  dptr,#0x009d ; movx @dptr,a    ; publie l'effet
-0xafc0   orl  IEN1, #0x01        ; demasque EUSB
+0xafbc   mov  dptr,#0x009d ; movx @dptr,a    ; publish the effect
+0xafc0   orl  IEN1, #0x01        ; unmask EUSB
 0xafc3   ret
 ```
 
-`IEN1` bit 0 = **`EUSB`**, confirmé deux fois : header SMK (`#define _EUSB (1u << 0)`) et datasheet
+`IEN1` bit 0 = **`EUSB`**, confirmed twice: SMK header (`#define _EUSB (1u << 0)`) and datasheet
 (`IEN1 A9H : - ES0 EPWM4 EPWM3 EPWM2 EPWM1 EPWM0 EUSB`).
 
-**C'est une section critique.** `0x0E24` porte l'effet *en attente*, `0x009D` l'effet *courant*, et
-la copie se fait USB masqué parce que le chemin USB touche aussi `0x009D`. Le réglage par les
-touches et le réglage par l'hôte se disputent la même variable ; cette fonction arbitre.
+**This is a critical section.** `0x0E24` holds the *pending* effect, `0x009D` the *current* effect, and
+the copy is performed with USB masked because the USB path also touches `0x009D`. Key-driven settings
+and host-driven settings contend for the same variable; this function arbitrates.
 
-### `0xA4BD` — le second poseur de `0x2C.7`, résolu
+### `0xA4BD` — the second setter of `0x2C.7`, resolved
 
-`0x2C.7` (« publier l'effet ») a deux producteurs. Le premier, `0x0A71`, est le chemin
-utilisateur déjà documenté. Voici le second.
+`0x2C.7` ("publish effect") has two producers. The first, `0x0A71`, is the user path
+already documented. Here is the second.
 
-#### Comment on y arrive : un dispatcher à table de sauts sur `XRAM 0x0D17`
+#### How we get there: a jump-table dispatcher on `XRAM 0x0D17`
 
-`0xA674` :
+`0xA674`:
 
 ```asm
 mov dptr,#0x0d15 ; movx a,@dptr ; jnz 0xa67d
-jb  0x2a.3, sortie
+jb  0x2a.3, exit
 mov dptr,#0x0d17 ; movx a,@dptr
-cjne a,#0x0a, .+3 ; jnc sortie      ; rejette 0x0D17 >= 10
+cjne a,#0x0a, .+3 ; jnc exit        ; reject 0x0D17 >= 10
 mov dptr,#0xa68d
 mov r0,a ; add a,r0 ; add a,r0      ; index x 3
 jmp @a+dptr
 ```
 
-Table de 10 entrées de 3 octets en `0xA68D` :
+Table of 10 3-byte entries at `0xA68D`:
 
-| `0x0D17` | cible |
+| `0x0D17` | target |
 | --- | --- |
 | 0, 9 | `ljmp 0x83D2` |
 | 1 | — |
@@ -1001,33 +1000,33 @@ Table de 10 entrées de 3 octets en `0xA68D` :
 | **5, 6, 7** | **`ljmp 0xA468`** |
 | 8 | `0xA6D2` |
 
-`XRAM 0x0D17` est donc un index 0 à 9, et les valeurs 5, 6 et 7 partagent le même handler —
-d'où le fait que `0xA468` les re-teste une par une en interne. Chaque autre branche est gardée
-par `jb 0x2a.5` et `jb 0x23.3` ; la branche 5/6/7 ne l'est pas, parce que `0xA468` gère lui-même
-le verrou `0x2A.5`. Voir plus bas ce que `0x0D17` est réellement.
+`XRAM 0x0D17` is therefore an index from 0 to 9, and values 5, 6, and 7 share the same handler —
+which is why `0xA468` re-tests them one by one internally. Every other branch is guarded
+by `jb 0x2a.5` and `jb 0x23.3`; branch 5/6/7 is not, because `0xA468` manages the
+`0x2A.5` lock itself. See below for what `0x0D17` actually is.
 
-### `XRAM 0x0D17` — la classe d'action d'une touche, lue dans une table en flash
+### `XRAM 0x0D17` — a key's action class, read from a flash table
 
-`0x0D17` n'est pas une variable que le firmware calcule : c'est un **champ extrait d'une table**.
+`0x0D17` is not a variable computed by the firmware: it is a **field extracted from a table**.
 
-#### L'idiome d'extraction
+#### The extraction idiom
 
-Onze sites écrivent `0x0D17`, tous avec le même prologue. Les deux accesseurs le décodent :
+Eleven sites write `0x0D17`, all with the exact same prologue. The two accessors decode it:
 
 ```asm
-fcn.00004DEC:                  ; charge 4 octets de CODE @ DPTR
+fcn.00004DEC:                  ; load 4 bytes of CODE @ DPTR
     clr a  ; movc a,@a+dptr ; mov r4,a
     mov a,#1 ; movc a,@a+dptr ; mov r5,a
     mov a,#2 ; movc a,@a+dptr ; mov r6,a
     mov a,#3 ; movc a,@a+dptr ; mov r7,a
 
-fcn.00004DC5:                  ; r4:r5:r6:r7 >>= r0   (decalage de r0 BITS, sur 32 bits)
-    mov a,r0 ; jz fin
-boucle: rrc sur r4, r5, r6, r7 ; djnz r0, boucle
+fcn.00004DC5:                  ; r4:r5:r6:r7 >>= r0   (shift by r0 BITS, across 32 bits)
+    mov a,r0 ; jz done
+loop: rrc on r4, r5, r6, r7 ; djnz r0, loop
 ```
 
-`fcn.00004DC5` prend donc un nombre de **bits**, pas d'octets : `r0 = 8` et `r0 = 16` extraient
-respectivement l'octet 2 et l'octet 1 d'un enregistrement de 4 octets. Dans `fcn.00007ECA` :
+`fcn.00004DC5` therefore takes a number of **bits**, not bytes: `r0 = 8` and `r0 = 16` extract
+byte 2 and byte 1 of a 4-byte record, respectively. In `fcn.00007ECA`:
 
 ```asm
 mov B,#4 ; mov a,r3 ; mul ab
@@ -1038,19 +1037,19 @@ mov r0,#0x08 ; lcall fcn.00004DC5 ; movx [0x0d16], r7
 mov r0,#0x10 ; lcall fcn.00004DC5 ; movx [0x0d17], r7
 ```
 
-| Variable | Décalage | Octet de l'enregistrement |
+| Variable | Shift | Record byte |
 | --- | --- | --- |
 | `0x0D15` | 0 | b3 |
 | `0x0D16` | 8 | b2 |
 | `0x0D17` | **16** | **b1** |
 | — | 24 | b0 |
 
-L'index vient de `XRAM 0x02E0`, écrit par `fcn.00003108` (`0x3190`) depuis le compteur
-d'événements `IDATA 0x09`.
+The index comes from `XRAM 0x02E0`, written by `fcn.00003108` (`0x3190`) from the event
+counter `IDATA 0x09`.
 
-#### La table `0xCE00` — vérifiée sur le dump
+#### Table `0xCE00` — verified on the dump
 
-Extrait des 40 premières entrées de `assets/f75_firmware.bin` :
+Excerpt from the first 40 entries of `assets/f75_firmware.bin`:
 
 | idx | offset | b0 b1 b2 b3 | `0x0D17` | dispatch |
 | --- | --- | --- | --- | --- |
@@ -1065,252 +1064,252 @@ Extrait des 40 premières entrées de `assets/f75_firmware.bin` :
 | 17 | `0xCE44` | `00 08 00 00` | 8 | `lcall 0x91D3` |
 | 36 | `0xCE90` | `08 03 02 00` | 3 | `0x8C0F` |
 
-**Sur toutes les entrées non nulles, `b1` vaut 0, 1, 2, 3, 4 ou 8 — jamais ≥ 10.** La borne
-`cjne a,#0x0A ; jnc sortie` du dispatcher n'est jamais violée par la table d'usine. C'est une
-validation empirique du décodage : si l'octet extrait avait été le mauvais, la distribution
-n'aurait aucune raison de tomber dans les bornes.
+**Across all non-null entries, `b1` is 0, 1, 2, 3, 4, or 8 — never ≥ 10.** The
+`cjne a,#0x0A ; jnc exit` bound in the dispatcher is never violated by the factory table. This is an
+empirical validation of the decoding: if the wrong byte had been extracted, the distribution
+would have no reason to fall within bounds.
 
-Et quand `b1 == 0`, **`b3` contient un code d'usage HID clavier** : `0x29` Échap, `0x35`
-backquote, `0x2B` Tab, `0x39` Verr.Maj, `0x04`–`0x1D` les lettres, `0x1E`–`0x23` les chiffres.
-Deux entrées portent `b0 = 0x02` — le bit **LeftShift** du champ modificateurs HID.
+And when `b1 == 0`, **`b3` contains a keyboard HID usage code**: `0x29` Esc, `0x35`
+grave/backtick, `0x2B` Tab, `0x39` Caps Lock, `0x04`–`0x1D` letters, `0x1E`–`0x23` digits.
+Two entries carry `b0 = 0x02` — the **LeftShift** bit of the HID modifier byte.
 
-#### Lecture
+#### Interpretation
 
-L'enregistrement est donc `[modificateurs, classe d'action, paramètre, usage HID]` :
+The record is therefore `[modifiers, action class, parameter, HID usage]`:
 
-| Octet | Variable | Rôle |
+| Byte | Variable | Role |
 | --- | --- | --- |
-| b0 | — | modificateurs HID (`0x02` = LeftShift observé) |
-| b1 | `0x0D17` | **classe d'action**, index du dispatcher `0xA68D` |
-| b2 | `0x0D16` | paramètre (routé vers `0x031F` quand la classe vaut 9) |
-| b3 | `0x0D15` | code d'usage HID |
+| b0 | — | HID modifiers (`0x02` = LeftShift observed) |
+| b1 | `0x0D17` | **action class**, index into dispatcher `0xA68D` |
+| b2 | `0x0D16` | parameter (routed to `0x031F` when class equals 9) |
+| b3 | `0x0D15` | HID usage code |
 
-Le dispatcher `0xA674` teste d'ailleurs `0x0D15` en premier (`jnz`), et `0x83D2` — la classe 0 —
-refait le même test avant de partir sur le chemin d'émission en `0x845F`. Classe 0 = « émettre
-cet usage HID » ; les classes 1 à 8 sont des actions spéciales, dont 5/6/7 l'effet temporaire
-décrit plus haut.
+Dispatcher `0xA674` actually tests `0x0D15` first (`jnz`), and `0x83D2` — class 0 —
+repeats the exact same test before branching to the transmission path at `0x845F`. Class 0 = "emit
+this HID usage"; classes 1 through 8 are special actions, including 5/6/7 for the temporary effect
+described above.
 
-> *Inféré :* que cette table soit la **table de remap** du clavier. Ce qui est établi, c'est sa
-> structure, son adressage, l'extraction, et le fait que `b3` contienne des usages HID.
+> *Inferred:* that this table is the keyboard's **remap table**. What is established is its
+> structure, its addressing, the extraction, and the fact that `b3` holds HID usages.
 
-#### Conséquence : la table est réinscriptible
+#### Consequence: the table is rewritable
 
-`0xCE00` tombe dans la **page 103**, en plein dans la zone IAP `0xC600`–`0xEBFF` établie plus
-haut — et la page 103 est justement l'une des sept pages non vierges du dump. Le firmware peut
-donc réécrire cette table par sa propre routine `fcn.0000AAC1`, sans passer par l'ISP.
+`0xCE00` falls inside **page 103**, right in the middle of the IAP zone `0xC600`–`0xEBFF` established
+earlier — and page 103 happens to be one of the seven non-blank pages in the dump. The firmware can
+therefore rewrite this table using its own routine `fcn.0000AAC1`, without going through ISP.
 
-C'est le point d'entrée le plus prometteur pour un remap : il ne demande ni de reflasher le
-firmware, ni de porter quoi que ce soit — seulement d'atteindre la bonne commande du protocole
-de configuration. **Non tenté : rien n'a été flashé.**
+This is the most promising entry point for key remapping: it requires neither reflashing the
+firmware nor porting anything — only reaching the right command in the configuration
+protocol. **Not attempted: nothing has been flashed.**
 
-#### `fcn @ 0xA468` — deux transitions symétriques autour de l'effet `0x2D`
+#### `fcn @ 0xA468` — two symmetrical transitions around effect `0x2D`
 
-Le tout est verrouillé par `0x2A.5`, et sort immédiatement si `0x28.2` est posé.
+The whole routine is locked by `0x2A.5`, and exits immediately if `0x28.2` is set.
 
-**Entrée, `0xA483`** — si `0x0D17 ∈ {5, 7}`, effet courant `0x009D == 0x20`, verrou libre :
+**Entry, `0xA483`** — if `0x0D17 ∈ {5, 7}`, current effect `0x009D == 0x20`, lock free:
 
 ```asm
-setb 0x24.5      ; drapeau teste par euart0.parse (0x0632, 0x07A5)
-setb 0x2a.5      ; verrou « effet temporaire actif »
+setb 0x24.5      ; flag tested by euart0.parse (0x0632, 0x07A5)
+setb 0x2a.5      ; lock "temporary effect active"
 setb 0x24.1
 setb 0x27.7
-movx [0x0e24], a ; a == 0x20 : l'effet a restaurer, dans « effet en attente »
-movx [0x009d], #0x2d   ; effet courant force a 0x2D
+movx [0x0e24], a ; a == 0x20: the effect to restore, stored in "pending effect"
+movx [0x009d], #0x2d   ; current effect forced to 0x2D
 ```
 
-**Sortie, `0xA4BD`** — si (`0x0D17 == 7` ou `== 6`), effet courant `== 0x2D`, verrou posé :
+**Exit, `0xA4BD`** — if (`0x0D17 == 7` or `== 6`), current effect `== 0x2D`, lock set:
 
 ```asm
-setb 0x2c.7      ; publier l'effet      <-- le second producteur
-clr  0x2a.5      ; libere le verrou
+setb 0x2c.7      ; publish effect      <-- the second producer
+clr  0x2a.5      ; release lock
 clr  0x24.5
 movx [0x08c0], [0x0d18]
 movx [0x08c1], #0x00
 movx [0x08c2], #0x02
-setb 0x27.4      ; sonnette
-clr  0x2c.0      ; reautorise le parsing EUART0
+setb 0x27.4      ; doorbell
+clr  0x2c.0      ; re-enable EUART0 parsing
 ```
 
-L'effet `0x2D` est donc un **effet temporaire** : le firmware range l'effet courant `0x20` dans
-`0x0E24`, bascule sur `0x2D` tant que le mode le justifie, puis republie en sortant. C'est le
-même mécanisme « effet en attente → effet courant » que le chemin utilisateur, déclenché par un
-changement de mode au lieu d'une touche.
+Effect `0x2D` is therefore a **temporary effect**: the firmware stashes the current effect `0x20` into
+`0x0E24`, switches to `0x2D` for as long as the mode warrants it, and republishes upon exit. It uses the
+exact same "pending effect → current effect" mechanism as the user path, triggered by a
+mode change rather than a keystroke.
 
-#### `clr 0x2C.0` — ce que la sortie débloque
+#### `clr 0x2C.0` — what exiting unblocks
 
-`isr.timer2` teste ce bit en `0xA504` :
+`isr.timer2` tests this bit at `0xA504`:
 
 ```asm
-jb 0x2c.0, 0xa51c      ; saute par-dessus le `lcall euart0.parse` de 0xA519
+jb 0x2c.0, 0xa51c      ; jumps over the `lcall euart0.parse` at 0xA519
 ```
 
-Tant que `0x2C.0` est posé, **les trames EUART0 reçues ne sont pas analysées**. La sortie du
-mode temporaire les réautorise. Le lien entre le RGB et le sans-fil passe donc aussi par là.
+As long as `0x2C.0` is set, **received EUART0 frames are not parsed**. Exiting the
+temporary mode re-enables parsing. The link between RGB and wireless therefore runs through here as well.
 
-#### `0x08C0` n'est pas un tampon RGB : c'est un rapport HID
+#### `0x08C0` is not an RGB buffer: it is a HID report
 
-Huit sites écrivent la même structure de 3 octets en `0x08C0` puis posent `0x27.4` (`0x84D6`,
-`0x8900`, `0x8CE5`, `0x8F94`, `0x9412`, `0xA4C3`, `0xB041`, plus `0x05AB`). C'est un idiome
-partagé, pas une particularité de ce chemin.
+Eight sites write the same 3-byte structure to `0x08C0` and then set `0x27.4` (`0x84D6`,
+`0x8900`, `0x8CE5`, `0x8F94`, `0x9412`, `0xA4C3`, `0xB041`, plus `0x05AB`). It is a shared
+idiom, not a quirk of this path.
 
-`fcn.00006ACF` est le **seul** consommateur de `0x27.4` — un dispatcher qui parcourt les
-drapeaux en attente par ordre de priorité :
+`fcn.00006ACF` is the **only** consumer of `0x27.4` — a dispatcher that walks the
+pending flags in priority order:
 
 ```asm
-jnb  0x27.4, suivant
+jnb  0x27.4, next
 setb 0x26.7
 clr  0x27.4
 movx [0x0f0c], #0x02
-movx [0x08bf], #0x03          ; a = 2 puis inc a
+movx [0x08bf], #0x03          ; a = 2 then inc a
 movx [0x0f0f], #0x01
 movx [0x0f10], #0x08
 mov  a, #0xbf
 ljmp 0x6c07
 ```
 
-`0x0F0F..0x0F11 = 01 08 BF` est un **pointeur générique** vers `0x08BF` — l'adresse même du
-tampon écrit juste au-dessus. Le drapeau suivant (`0x2A.6`) suit le même schéma avec
-`01 09 80` → `0x0980`. Et l'octet 0 du tampon vaut `0x0F0C + 1` : **3** ici, **4** pour le
-suivant. Ce sont des **Report ID HID**.
+`0x0F0F..0x0F11 = 01 08 BF` is a **generic pointer** to `0x08BF` — the exact address of the
+buffer written right above. The next flag (`0x2A.6`) follows the same pattern with
+`01 09 80` → `0x0980`. And byte 0 of the buffer equals `0x0F0C + 1`: **3** here, **4** for the
+next one. These are **HID Report IDs**.
 
-Le « message » de `0xA4BD` est donc le rapport HID `03 <0x0D18> 00 02` poussé vers l'hôte —
-la notification d'un changement d'état, pas une couleur.
+The "message" from `0xA4BD` is therefore the HID report `03 <0x0D18> 00 02` pushed to the host —
+a state-change notification, not a color.
 
-### Comment le firmware choisit un effet
+### How the firmware selects an effect
 
-Chaîne complète, du réglage à l'application :
+Complete chain, from setting to application:
 
 ```
-octet de config, quartet HAUT (4 bits)
+config byte, HIGH nibble (4 bits)
         |  swap a ; anl a,#0x0f          @ 0x07F8
         v
-   XRAM 0x038D      sous-index d'effet, 0..15
+   XRAM 0x038D      effect sub-index, 0..15
         |  add a,#0x20                   @ 0x0A77
         v
-   XRAM 0x0E24      effet EN ATTENTE
+   XRAM 0x0E24      PENDING effect
         |  setb 0x2C.7 ; lcall 0xAF99    @ 0x0A71, 0x0A7D
         v
-   XRAM 0x009D      effet COURANT        (copie USB masqué)
+   XRAM 0x009D      CURRENT effect       (copied with USB masked)
         |
         v
-   tables 0xA8BC / 0xA8D5   ->  paramètres du mode
+   tables 0xA8BC / 0xA8D5   ->  mode parameters
 ```
 
-**Le sous-index tient sur un quartet**, extrait par `swap a ; anl a,#0x0f` : d'où **16 effets
-possibles**, décalés en **32..47** par le `+ 0x20`. Cela explique le `cjne a, #0x20` de
-`fcn.0000AF99` : ce n'est pas une valeur magique, c'est la **borne basse de la plage**.
+**The sub-index fits in a nibble**, extracted via `swap a ; anl a,#0x0f`: hence **16 possible
+effects**, shifted into **32..47** by `+ 0x20`. That explains the `cjne a, #0x20` in
+`fcn.0000AF99`: it is not a magic value, it is the **lower bound of the range**.
 
-Trois chemins écrivent `0x0E24` :
+Three paths write `0x0E24`:
 
-| Site | Rôle |
+| Site | Role |
 | --- | --- |
-| `0x0A79` | **chemin utilisateur** — `0x038D + 32`, puis publication immédiate |
-| `0x9184` | **restauration au démarrage** — relit `0x009D` juste après `fn.fx_init` (`0xA283`), dans `main()` |
-| `0xA48B` | **chemin du tick** — teste `0x009D == 0x20` puis pose quatre drapeaux (`0x24.5`, `0x2A.5`, `0x24.1`, `0x27.7`) |
+| `0x0A79` | **user path** — `0x038D + 32`, followed by immediate publication |
+| `0x9184` | **boot restore** — re-reads `0x009D` right after `fn.fx_init` (`0xA283`), in `main()` |
+| `0xA48B` | **tick path** — tests `0x009D == 0x20` then sets four flags (`0x24.5`, `0x2A.5`, `0x24.1`, `0x27.7`) |
 
-`0x038D` est lu à 18 endroits et écrit à 3 (`0x02B3`, `0x034E`, `0x07FC`). Les lectures le comparent
-à `8` (`0x0B1F`), lui ajoutent `-2` (`0x0DB5`), ou le décrémentent — ce sont les navigations
-« effet suivant / précédent ».
+`0x038D` is read at 18 locations and written at 3 (`0x02B3`, `0x034E`, `0x07FC`). The reads compare it
+to `8` (`0x0B1F`), add `-2` to it (`0x0DB5`), or decrement it — these are the
+"next / previous effect" navigation actions.
 
-À côté, `0x038E` et `0x038F` forment un petit bloc de configuration écrit dans la foulée
-(`0x038E = 0`, `0x038F = r5`), non identifié.
+Alongside it, `0x038E` and `0x038F` form a small configuration block written right after
+(`0x038E = 0`, `0x038F = r5`), unidentified.
 
-### L'ordonnanceur d'animation — `0x1AF0` et la table `0x1B13`
+### The animation scheduler — `0x1AF0` and table `0x1B13`
 
-Choisir un effet ne l'anime pas. L'animation est cadencée par un ordonnanceur situé à la fin de la
-grande fonction RGB (Ghidra `0x1108`–`0x1DC2`, r2 `fcn.00001111`), et **aucun des deux outils ne
-l'avait sorti** : le corps est atteint par saut calculé, donc r2 le laisse hors fonction et Ghidra
-laisse les octets indéfinis. Il se lit au désassemblage, depuis une ancre sûre.
+Selecting an effect does not animate it. Animation is paced by a scheduler located at the end of the
+large RGB function (Ghidra `0x1108`–`0x1DC2`, r2 `fcn.00001111`), and **neither tool had
+surfaced it**: the body is reached via a computed jump, so r2 leaves it outside any function and Ghidra
+leaves the bytes undefined. It can be read in disassembly starting from a known anchor.
 
-#### Les trois variables
+#### The three variables
 
-| Adresse | Rôle | Écrit par |
+| Address | Role | Written by |
 | --- | --- | --- |
-| `0x0300:0x0301` | **tic d'animation**, 16 bits gros-boutiste | incrémenté par `isr.pwm4` (`0x8188`), remis à zéro par `0x1D69` |
-| `0x08BB:0x08BC` | **période** de l'effet courant | `0x1AE2`, juste avant l'aiguillage : poids fort = 0, poids faible = `r7` |
-| `0x097C` | compteur secondaire | incrémenté par `isr.pwm4` (`0x8196`) |
+| `0x0300:0x0301` | **animation tick**, 16-bit big-endian | incremented by `isr.pwm4` (`0x8188`), reset to zero by `0x1D69` |
+| `0x08BB:0x08BC` | **period** of the current effect | `0x1AE2`, right before the dispatch: high byte = 0, low byte = `r7` |
+| `0x097C` | secondary counter | incremented by `isr.pwm4` (`0x8196`) |
 
-`isr.pwm4` incrémente `0x0301` et ne touche `0x0300` que sur débordement — c'est bien un compteur
-16 bits, et la période tenant sur `r7` reste **inférieure à 256**.
+`isr.pwm4` increments `0x0301` and only touches `0x0300` on overflow — so it really is a 16-bit
+counter, and since the period fits in `r7`, it remains **under 256**.
 
-> `0x08BC` n'est atteint par aucun `mov dptr, #0x08bc` : il n'est lu que par `inc dptr`. Chercher
-> l'adresse d'un octet haut d'un mot 16 bits ne donne rien — c'est le piège du pointeur calculé,
-> déjà rencontré sur le bloc de réglages.
+> `0x08BC` is never reached by any `mov dptr, #0x08bc`: it is only read via `inc dptr`. Searching for
+> the address of the low byte of a 16-bit word yields nothing — this is the computed-pointer trap,
+> already encountered on the settings block.
 
-#### Ce qui précède l'aiguillage — la table `0x1744`, dix-neuf semeurs
+#### What precedes the dispatch — table `0x1744`, nineteen seeders
 
-L'aiguillage décrit ci-dessous n'est pas le point d'entrée. Il est précédé d'un **second
-répartiteur**, en `0x1741`, qui branche sur `[0x0ED0]` — l'effet **demandé** — et non sur `0x0896`,
-l'effet **actif**. C'est le même répartiteur inline `0x4E45` que le conteneur `0x08` reçu, et les
-entrées se lisent de la même façon : `(adresse_hi, adresse_lo, clé)`, terminateur `00 00`, puis
-l'adresse par défaut — ici **`0x1AEA`**, c'est-à-dire *l'aiguillage lui-même*. Un effet sans semeur
-tombe donc directement dans le rendu.
+The dispatch described below is not the entry point. It is preceded by a **second
+dispatcher**, at `0x1741`, which branches on `[0x0ED0]` — the **requested** effect — rather than `0x0896`,
+the **active** effect. It uses the same inline dispatcher `0x4E45` as the received `0x08` container, and
+entries are read the same way: `(addr_hi, addr_lo, key)`, terminator `00 00`, followed by
+the default address — here **`0x1AEA`**, i.e., *the rendering dispatch itself*. An effect without a seeder
+therefore falls straight through into rendering.
 
-##### Le squelette, identique aux dix-neuf
+##### The skeleton, identical across all nineteen
 
 ```asm
-20 21 03        jb  0x21, +3          ; le bit de ressemis est-il pose ?
-02 1a ea        ljmp 0x1AEA           ; non -> aiguillage de rendu, sans rien semer
-c2 21           clr 0x21              ; oui : consommer la demande
-d2 22           setb 0x22             ; autoriser le rendu
-c2 32 / c2 55   clr ...               ; remettre a zero les bits d'etat de l'effet
-12 xx xx        lcall <SEMEUR>        ; propre a l'effet
-90 0d 9d e0     a = [0x0D9D]          ; la VITESSE
-90 xx xx        dptr = <table de periode propre a l'effet>
-02 1a e0        ljmp 0x1AE0           ; movc, puis [0x08BB:0x08BC] = periode, puis aiguillage
+20 21 03        jb  0x21, +3          ; is the reseed bit set?
+02 1a ea        ljmp 0x1AEA           ; no -> rendering dispatch, without seeding anything
+c2 21           clr 0x21              ; yes: consume the request
+d2 22           setb 0x22             ; enable rendering
+c2 32 / c2 55   clr ...               ; clear the effect's state bits
+12 xx xx        lcall <SEEDER>        ; specific to the effect
+90 0d 9d e0     a = [0x0D9D]          ; the SPEED
+90 xx xx        dptr = <effect-specific period table>
+02 1a e0        ljmp 0x1AE0           ; movc, then [0x08BB:0x08BC] = period, then dispatch
 ```
 
-Le bit `0x21` est celui que `0x16EC` lève quand l'effet change, et `0x0D9D` est la vitesse. Trois
-faits en découlent, qu'aucune autre partie de cette page ne donnait :
+Bit `0x21` is the one raised by `0x16EC` when the effect changes, and `0x0D9D` is the speed. Three
+facts follow from this, which no other part of this page provided:
 
-- **le semeur ne tourne qu'une fois par changement d'effet**, pas à chaque trame ;
-- **la période dépend de l'effet ET de la vitesse**, par une table à deux entrées ;
-- **quatre effets ont en plus un travail par trame** avant l'aiguillage (voir plus bas).
+- **the seeder only runs once per effect change**, not on every frame;
+- **the period depends on BOTH the effect and the speed**, via a two-dimensional lookup;
+- **four effects also perform per-frame work** prior to the dispatch (see below).
 
-##### La table
+##### The table
 
-| Effet | Arm | Bits remis à zéro | Semeur | Table de période |
+| Effect | Arm | Cleared bits | Seeder | Period table |
 | --- | --- | --- | --- | --- |
-| `0x00` | `0x1781` | `0x32`, `0x55` | `0xEDE7(0)` puis `0xEE6A` | — |
+| `0x00` | `0x1781` | `0x32`, `0x55` | `0xEDE7(0)` then `0xEE6A` | — |
 | `0x01` | `0x179A` | `0x55` | `0xEF85` | — |
 | `0x02` | `0x17AC` | `0x32`, `0x55` | `0xEFB8` | index 2 |
 | `0x03` | `0x17C4` | `0x32`, `0x55` | `0xEFB8` | index 3 |
-| `0x04` | `0x17DC` | *(dans le semeur)* | `0xA94A` | index 4 |
+| `0x04` | `0x17DC` | *(inside seeder)* | `0xA94A` | index 4 |
 | `0x05` | `0x183D` | `0x55` | `0xEF32` | index 0 |
-| `0x06` | `0x1853` | *(dans le semeur)* | `0xEE62` + `0xA791` | index 5 |
-| `0x07` | `0x1866` | *(dans le semeur)* | `0xA94A` | index 6 |
-| `0x08` | `0x18F3` | *(dans le semeur)* | `0xEE62` + `0xEF4D` | — |
+| `0x06` | `0x1853` | *(inside seeder)* | `0xEE62` + `0xA791` | index 5 |
+| `0x07` | `0x1866` | *(inside seeder)* | `0xA94A` | index 6 |
+| `0x08` | `0x18F3` | *(inside seeder)* | `0xEE62` + `0xEF4D` | — |
 | `0x0A` | `0x1902` | `0x55`, `0x32` | `0x50E2` | index 8 |
 | `0x0B` | `0x191A` | `0x55`, `0x32` | `0xEFB8` | index 9 |
 | `0x0C` | `0x1932` | `0x55`, `0x32` | `0xEE6A` | index 10 |
 | `0x0D` | `0x19C6` | `0x55`, `0x32` | `0xA846` | index 11 |
-| `0x0F` | `0x1A9D` | `0x32`, `0x55` | **`0xACA3`** — le transposeur | index 12 |
+| `0x0F` | `0x1A9D` | `0x32`, `0x55` | **`0xACA3`** — the transposer | index 12 |
 | `0x10` | `0x1AB4` | `0x32`, `0x55` | `0xEFBE` | index 13 |
 | `0x11` | `0x1ACB` | `0x32`, `0x55` | `0xEF85` | index 14 |
 | `0x20` | `0x19DE` | `0x55` | `0x95A4(0)` | — |
 | `0x26` | `0x19F2` | `0x55` | `0x50E2` | — |
 | `0x2D` | `0x1A04` | — | `0x94E6` | — |
-| *défaut* | `0x1AEA` | — | — | — |
+| *default* | `0x1AEA` | — | — | — |
 
-**Les clés `0x09` et `0x0E` sont absentes**, exactement comme les entrées 9 et 14 de la table de
-rendu `0x1B13`. Deux tables indépendantes qui manquent les deux mêmes effets : ces deux emplacements
-sont vides dans le firmware d'usine, ce n'est pas une lacune de lecture.
+**Keys `0x09` and `0x0E` are absent**, just like entries 9 and 14 in the rendering table
+`0x1B13`. Two independent tables skipping the exact same two effects: those two slots
+are empty in the factory firmware, not a gap in our reading.
 
-##### Les tables de période — `CODE 0x2FE9`, quinze tables de cinq octets
+##### The period tables — `CODE 0x2FE9`, fifteen 5-byte tables
 
-Indexées par la vitesse `[0x0D9D]`, de 0 (lente) à 4 (rapide). La période va dans `[0x08BB:0x08BC]`,
-et le gestionnaire de rendu ne travaille que lorsque le tic l'atteint.
+Indexed by speed `[0x0D9D]`, from 0 (slow) to 4 (fast). The period goes into `[0x08BB:0x08BC]`,
+and the rendering handler only runs when the tick reaches it.
 
-| Index | Adresse | Valeurs | Effet |
+| Index | Address | Values | Effect |
 | --- | --- | --- | --- |
 | 0 | `0x2FE9` | `120 100 80 50 20` | `0x05` |
-| 1 | `0x2FEE` | `60 50 40 30 20` | **jamais référencée** |
+| 1 | `0x2FEE` | `60 50 40 30 20` | **never referenced** |
 | 2 | `0x2FF3` | `45 35 25 15 5` | `0x02` |
 | 3 | `0x2FF8` | `45 35 25 15 6` | `0x03` |
 | 4 | `0x2FFD` | `80 60 40 20 8` | `0x04` |
 | 5 | `0x3002` | `20 15 10 5 1` | `0x06` |
 | 6 | `0x3007` | `88 68 48 28 8` | `0x07` |
-| 7 | `0x300C` | `115 100 85 60 30` | **jamais référencée** |
+| 7 | `0x300C` | `115 100 85 60 30` | **never referenced** |
 | 8 | `0x3011` | `120 90 70 45 1` | `0x0A` |
 | 9 | `0x3016` | `30 24 18 12 6` | `0x0B` |
 | 10 | `0x301B` | `32 24 18 16 6` | `0x0C` |
@@ -1319,263 +1318,263 @@ et le gestionnaire de rendu ne travaille que lorsque le tic l'atteint.
 | 13 | `0x302A` | `46 36 26 16 6` | `0x10` |
 | 14 | `0x302F` | `50 40 30 20 8` | `0x11` |
 
-Une recherche de toutes les charges `mov dptr` visant `0x2FE9`–`0x3033` sur l'image entière donne
-quatorze sites : les treize arms ci-dessus, plus `0xAC25` qui réutilise l'index 0. **Les index 1
-et 7 ne sont chargés nulle part.** Six effets n'ont aucune table (`0x00`, `0x01`, `0x08`, `0x20`,
-`0x26`, `0x2D`) : leur cadence est portée par leur propre moteur.
+A search for all `mov dptr` loads targeting `0x2FE9`–`0x3033` across the entire image yields
+fourteen sites: the thirteen arms above, plus `0xAC25` which reuses index 0. **Indices 1
+and 7 are not loaded anywhere.** Six effects have no table (`0x00`, `0x01`, `0x08`, `0x20`,
+`0x26`, `0x2D`): their cadence is handled by their own engine.
 
-##### Les quatre arms qui travaillent à chaque trame
+##### The four arms that work on every frame
 
-`0x04`, `0x07`, `0x0C` et `0x2D` ne se contentent pas de semer. Après la période, et **à chaque
-passage**, ils lisent la dernière touche vue et la projettent sur la grille :
+`0x04`, `0x07`, `0x0C`, and `0x2D` do more than just seed. After setting the period, and **on every
+pass**, they read the last seen key and project it onto the grid:
 
 ```c
-if ([0x0EE1] == 0) {                       /* une touche est en attente */
-    id = CODE[0xC500 + [0x0EE0]];          /* index de grille col*6+ligne -> id col*8+ligne */
-    [0x0ED1] = id & 7;                     /* ligne */
-    [0x0ED2] = id >> 3;                    /* colonne */
+if ([0x0EE1] == 0) {                       /* a key is pending */
+    id = CODE[0xC500 + [0x0EE0]];          /* grid index col*6+row -> id col*8+row */
+    [0x0ED1] = id & 7;                     /* row */
+    [0x0ED2] = id >> 3;                    /* column */
     ...
 }
 ```
 
-C'est la même table `0xC500` dont cette page tire la carte de présence, lue ici pour ce qu'elle est
-vraiment : **une conversion d'index de grille vers l'identifiant d'usine**, `0xFF` pour les six
-emplacements sans touche.
+This is the same `0xC500` table from which this page derives the presence map, read here for what it
+really is: **a conversion from grid index to factory ID**, with `0xFF` for the six
+keyless slots.
 
-| Arm | Ce qu'il fait de la touche |
+| Arm | What it does with the key |
 | --- | --- |
-| `0x04` | pose le bit `1 << ligne` dans **deux** cartes : `0x013B + col` et `0x0001 + col` |
-| `0x07` | pose ce bit dans les **quatre** : `0x08C6`, `0x02E8`, `0x013B`, `0x0001`, toutes `+ col` |
-| `0x0C` | teste d'abord le `0xFF`, puis lit `CODE[0x2EED + ligne*21 + col]` et `CODE[0x2F6B + …]` dans `[0x0ED5]`/`[0x0ED6]`, et appelle `0x5114` |
-| `0x2D` | même lecture des deux tables, puis, si les bits `0x44` et `0x43` sont posés, appelle `0x8A1A` avec `[0x0ED5]*6 + 0x17 + [0x0ED6]` |
+| `0x04` | sets bit `1 << row` in **two** maps: `0x013B + col` and `0x0001 + col` |
+| `0x07` | sets this bit in **all four**: `0x08C6`, `0x02E8`, `0x013B`, `0x0001`, all `+ col` |
+| `0x0C` | tests for `0xFF` first, then reads `CODE[0x2EED + row*21 + col]` and `CODE[0x2F6B + …]` into `[0x0ED5]`/`[0x0ED6]`, and calls `0x5114` |
+| `0x2D` | same read of both tables, then, if bits `0x44` and `0x43` are set, calls `0x8A1A` with `[0x0ED5]*6 + 0x17 + [0x0ED6]` |
 
-Les quatre cartes de `0x04` et `0x07` sont exactement celles que cette page attribue à l'automate à
-quatre directions des effets 4, 7 et 13 — **et l'arm `0x07` les alimente toutes les quatre alors que
-l'arm `0x04` n'en alimente que deux**, ce qui distingue enfin deux effets que la table de rendu fait
-pourtant pointer sur le même moteur `0x5BE9`.
+The four maps in `0x04` and `0x07` are the exact ones this page attributes to the four-direction
+automaton of effects 4, 7, and 13 — **and arm `0x07` feeds all four whereas
+arm `0x04` only feeds two**, which finally distinguishes two effects that the rendering table
+otherwise points to the exact same engine `0x5BE9`.
 
-Et `0x2EED` réapparaît ici par une voie indépendante, avec son pas de 21 octets par ligne : la base
-corrigée de la table A est confirmée une seconde fois.
+And `0x2EED` reappears here through an independent path, with its stride of 21 bytes per row: the
+corrected base of table A is confirmed a second time.
 
-##### Ce que le portage en tire — c'est fait
+##### What the port takes from this — done
 
-`indicators.c` cadençait ses animations avec un diviseur inventé, `16 >> led_speed`, et une
-décroissance `4 << led_speed`. Les deux sont remplacés par la donnée d'usine.
+`indicators.c` previously paced its animations with an invented divider, `16 >> led_speed`, and a
+decay of `4 << led_speed`. Both have been replaced with the factory data.
 
-**L'unité est la milliseconde.** Le tic de systick d'usine vaut 1 ms, et l'ancre est le raccourci de
-réinitialisation : son compteur doit atteindre **3000** tics (`0x870C`), et un appui long, c'est trois
-secondes.
+**The unit is the millisecond.** The factory systick is 1 ms, and the anchor is the factory reset
+shortcut: its counter must reach **3000** ticks (`0x870C`), and a long press is three
+seconds.
 
-**La correspondance effet → table vient du répartiteur `0x1744`**, pas d'une appréciation : chaque
-semeur charge sa table, et le moteur atteint par le gestionnaire de rendu identifie l'effet d'usine
-que le portage transcrit.
+**The effect → table mapping comes from dispatcher `0x1744`**, not guesswork: each
+seeder loads its table, and the engine reached by the rendering handler identifies which factory effect
+the port transcribes.
 
-| Notre effet | Effet d'usine | Moteur | Table |
+| Our effect | Factory effect | Engine | Table |
 | --- | --- | --- | --- |
-| `FX_RADIAL` | 1 | `0x746A` | aucune — période **fixe 10**, en dur dans `0x1B61` |
+| `FX_RADIAL` | 1 | `0x746A` | none — **fixed period 10**, hardcoded at `0x1B61` |
 | `FX_HORIZONTAL` | 2 | `0x7C12` | `0x2FF3` |
 | `FX_VERTICAL` | 11 | `0x6C9B` | `0x3016` |
 | `FX_SOLID` | 3 | `0x9DA4` | `0x2FF8` |
 | `AULA_FX_REACTIVE` | 12 | `0x64F1` | `0x301B` |
 | `AULA_FX_RAIN` | 5 | `0x9B2B` | `0x2FE9` |
-| `AULA_FX_TWINKLE` | 8 | `0xAC1C` | **aucune** — *choix* : celle de l'autre scintillement |
+| `AULA_FX_TWINKLE` | 8 | `0xAC1C` | **none** — *choice*: reuse the other twinkle's table |
 | `AULA_FX_SNAKE` | 10 | `0x8DDF` | `0x3011` |
-| `AULA_FX_SNAKE_RGB` | `0x26` | `0x1D05` | **aucune** — *choix* : celle du serpent, même moteur |
+| `AULA_FX_SNAKE_RGB` | `0x26` | `0x1D05` | **none** — *choice*: reuse snake's table, same engine |
 | `AULA_FX_RIPPLE` | 17 | `0x746A` | `0x302F` |
 | `AULA_FX_KEYWAVE` | 15 | `0x82A5` | `0x3025` |
 | `AULA_FX_VRAINBOW` | 16 | `0x9659` | `0x302A` |
-| `AULA_FX_GAMING` | `0x20` | `0x95A4` | **aucune** — image fixe, *choix* |
+| `AULA_FX_GAMING` | `0x20` | `0x95A4` | **none** — static image, *choice* |
 
-Trois lignes sur treize sont un choix, signalé comme tel dans le code ; les dix autres sont les
-octets du dump.
+Three rows out of thirteen are a design choice, noted as such in the code; the other ten are the
+exact bytes from the dump.
 
-**La porte de trame accumule des millisecondes**, sans division : chaque balayage ajoute `38` et
-soustrait la période quand elle est atteinte. Les périodes fractionnaires sont donc respectées —
-la pluie à la vitesse 0 tombe toutes les **3,16** trames, pas 3.
+**The frame gate accumulates milliseconds**, without division: each scan adds `38` and
+subtracts the period when reached. Fractional periods are therefore honored —
+rain at speed 0 falls every **3.16** frames, not 3.
 
-**La décroissance devient une constante, et c'est la bonne.** Le rendu d'usine calcule
-`base × intensité >> 5` : l'intensité ne porte que **trente-et-un** niveaux, et `0x64F1` en retire
-**un par trame rendue**. Sur notre plan de 0 à 255, cela fait `255 / 31 = 8`, indépendant de la
-vitesse — toute la réponse à `SPD_UP`/`SPD_DN` passe désormais par la période, exactement comme en
-usine. La décroissance est en conséquence conditionnée à la trame, plus au balayage.
+**Decay becomes a constant, and it is the right one.** The factory renderer computes
+`base × intensity >> 5`: intensity only carries **thirty-one** levels, and `0x64F1` subtracts
+**one per rendered frame**. On our 0–255 plane, that equals `255 / 31 = 8`, independent of
+speed — all response to `SPD_UP`/`SPD_DN` now goes through the period, just like in the
+factory firmware. Decay is consequently gated on the frame, no longer on the scan.
 
-##### Ce que cette architecture ne peut pas rendre
+##### What this architecture cannot render
 
-L'usine redessine le panneau entier à chaque trame et descend à **1 ms**. Ici une trame coûte un
-balayage de régénération — quinze sous-trames de 400 µs plus un créneau de balayage, six fois, soit
-**38,5 ms**. Toute période inférieure est ramenée à une trame :
+The factory firmware redraws the entire panel on every frame and goes down to **1 ms**. Here, one frame costs a
+full regeneration scan — fifteen 400 µs subframes plus one scan slot, six times, i.e.
+**38.5 ms**. Any shorter period is clamped to one frame:
 
-| Effet | Balayages par trame, vitesses 0 → 4 |
+| Effect | Scans per frame, speeds 0 → 4 |
 | --- | --- |
-| `RAIN` | 3,16 · 2,63 · 2,11 · 1,32 · 1,00 |
-| `SNAKE` | 3,16 · 2,37 · 1,84 · 1,18 · 1,00 |
-| `RIPPLE` | 1,32 · 1,05 · 1,00 · 1,00 · 1,00 |
-| les neuf autres | ≈ 1 partout |
+| `RAIN` | 3.16 · 2.63 · 2.11 · 1.32 · 1.00 |
+| `SNAKE` | 3.16 · 2.37 · 1.84 · 1.18 · 1.00 |
+| `RIPPLE` | 1.32 · 1.05 · 1.00 · 1.00 · 1.00 |
+| the other nine | ≈ 1 across the board |
 
-Le gradient survit là où l'usine est lente, il s'écrase là où elle est rapide. **C'est notre
-plancher, pas le sien.**
+The gradient survives where the factory is slow, and flattens out where it is fast. **That is our
+floor, not theirs.**
 
-C'est aussi pourquoi `led_speeds[]` continue de faire varier le **pas de phase** alors que l'usine
-garde un pas fixe : notre cadence ne peut varier que d'un facteur trois, et sans le pas variable
-`SPD_UP` et `SPD_DN` ne se verraient presque plus. Ce point-là est un choix, assumé dans le code.
+That is also why `led_speeds[]` continues to vary the **phase step** whereas the factory
+keeps a fixed step: our frame rate can only vary by a factor of three, and without a variable step,
+`SPD_UP` and `SPD_DN` would barely be noticeable. That point is a deliberate choice, documented in the code.
 
-Et le gain est réel : à la vitesse la plus lente, le portage passait une trame toutes les **616 ms**
-contre les **46 ms** de l'usine — seize fois trop lent. Il est maintenant à 38,5 ms.
+And the gain is real: at the slowest speed, the port previously advanced one frame every **616 ms**
+versus the factory's **46 ms** — sixteen times too slow. It now runs at 38.5 ms.
 
-#### L'aiguillage
+#### The dispatch
 
 ```asm
 0x1AE2  mov dptr,#0x08BB ; clr a ; movx @dptr,a ; inc dptr ; mov a,r7 ; movx @dptr,a
-0x1AEA  jb  0x24.2, 0x1AF0        ; sinon, rien
+0x1AEA  jb  0x24.2, 0x1AF0        ; otherwise, nothing
 0x1AED  ljmp 0x1DC2
-0x1AF0  mov dptr,#0x0896 ; movx a,@dptr    ; a = effet courant
-0x1AF4  add a,#0xE0 ; jnz +3 ; ljmp 0x1DAB ; effet 0x20
-0x1AFB  add a,#0xFA ; jnz +3 ; ljmp 0x1D05 ; effet 0x26
-0x1B02  add a,#0x26                        ; a restaure
-0x1B04  cjne a,#0x12,$+3 ; jc 0x1B0C ; ljmp 0x1DC2   ; borne : 18 effets
+0x1AF0  mov dptr,#0x0896 ; movx a,@dptr    ; a = current effect
+0x1AF4  add a,#0xE0 ; jnz +3 ; ljmp 0x1DAB ; effect 0x20
+0x1AFB  add a,#0xFA ; jnz +3 ; ljmp 0x1D05 ; effect 0x26
+0x1B02  add a,#0x26                        ; a restored
+0x1B04  cjne a,#0x12,$+3 ; jc 0x1B0C ; ljmp 0x1DC2   ; bound: 18 effects
 0x1B0C  mov dptr,#0x1B13 ; mov r0,a ; add a,r0 ; add a,r0   ; a = 3 x idx
 0x1B12  jmp @a+dptr
 ```
 
-La chaîne `add a,#0xE0 / add a,#0xFA / add a,#0x26` cumule à zéro : les deux premiers termes
-testent `0x20` et `0x26` sans détruire l'accumulateur. **Ce n'est pas un calcul, c'est deux
-`if` déguisés** — un idiome de compilateur qui trompe la lecture rapide.
+The chain `add a,#0xE0 / add a,#0xFA / add a,#0x26` sums to zero: the first two terms
+test `0x20` and `0x26` without clobbering the accumulator. **It is not arithmetic, it is two
+disguised `if` statements** — a compiler idiom that fools a quick reading.
 
-#### La table `0x1B13` — dix-huit gestionnaires
+#### Table `0x1B13` — eighteen handlers
 
-Chaque gestionnaire compare le tic à la période, et n'agit que si `tic ≥ période` ; sinon il part
-sur `0x1DC2` (`ret`). Quand il agit, il appelle le rendu puis saute à la queue commune `0x1D69`,
-qui **remet le tic à zéro**.
+Each handler compares the tick to the period, and only acts if `tick ≥ period`; otherwise it jumps
+to `0x1DC2` (`ret`). When it acts, it calls the renderer and then jumps to the shared tail `0x1D69`,
+which **resets the tick to zero**.
 
-| idx | Gestionnaire | Seuil | Compteur `0x097C` | Rendu |
+| idx | Handler | Threshold | Counter `0x097C` | Renderer |
 | --- | --- | --- | --- | --- |
-| 0 | `0x1B49` | immédiat **100** | — | `0xEE6A` |
-| 1 | `0x1B61` | immédiat **10** | — | `0x746A`, pas `0x08C3` borné à 9 |
+| 0 | `0x1B49` | immediate **100** | — | `0xEE6A` |
+| 1 | `0x1B61` | immediate **10** | — | `0x746A`, step `0x08C3` bounded to 9 |
 | 2 | `0x1B8D` | `0x08BB` | — | **`0x7C12`** |
 | 3 | `0x1BAB` | `0x08BB` | — | `0x9DA4` |
 | 4 | `0x1BC9` | `0x08BB` | ≥ 16 → `0x64F1` | `0x5BE9` |
 | 5 | `0x1BF5` | `0x08BB` | ≥ 11 → `0x64F1` | `0x9B2B` |
 | 6 | `0x1C21` | `0x08BB` | — | `0x60C9` |
 | 7 | `0x1C3F` | `0x08BB` | ≥ 16 → `0x64F1` | `0x5BE9` |
-| 8 | `0x1C6B` | — | — | `ljmp 0xAC1C` (tremplin) |
-| 9 | `0x1DC2` | — | — | **`ret` — effet inactif** |
+| 8 | `0x1C6B` | — | — | `ljmp 0xAC1C` (trampoline) |
+| 9 | `0x1DC2` | — | — | **`ret` — inactive effect** |
 | 10 | `0x1C6E` | `0x08BB` | ≥ 16 → `0x64F1` | `0x8DDF` |
 | 11 | `0x1C9A` | `0x08BB` | — | `0x6C9B` |
 | 12 | `0x1CBC` | `0x08BB` | — | `0x64F1` |
 | 13 | `0x1CDA` | `0x08BB` | ≥ 3 → `0x64F1` | `0x5BE9` |
-| 14 | `0x1DC2` | — | — | **`ret` — effet inactif** |
+| 14 | `0x1DC2` | — | — | **`ret` — inactive effect** |
 | 15 | `0x1D51` | `0x08BB` | — | `0x82A5` |
 | 16 | `0x1D71` | `0x08BB` | — | `ljmp 0x9659` |
-| 17 | `0x1D8D` | `0x08BB` | — | corps en ligne |
+| 17 | `0x1D8D` | `0x08BB` | — | inline body |
 
-#### Les huit moteurs manquants — décodés
+#### The eight missing engines — decoded
 
-Cette page listait huit gestionnaires « non décodés ». Ils le sont. Le tableau ci-dessus les
-nomme ; voici ce qu'ils font, et ce que leur lecture a rapporté au passage.
+This page previously listed eight handlers as "undecoded". They are now decoded. The table above
+names them; here is what they do, and what reading them revealed along the way.
 
-| idx | Moteur | Effet visible |
+| idx | Engine | Visible effect |
 | --- | --- | --- |
-| 5 | `0x9B2B` | **pluie** : une gouttelette descend chaque colonne, une ligne par trame ; une colonne tirée au hasard est relancée quand elle dort ; la traînée vient du fondu `0x64F1` |
-| 8 | `0xAC1C` → `0x4EA9`/`0x62E6` | **scintillement** : des touches tirées au hasard passées à pleine intensité |
-| 10 | `0x8DDF` | **serpent** : un point parcourt la grille en boustrophédon, inverse son sens horizontal au bord et descend d'une ligne, inverse son sens vertical en haut et en bas |
-| 15 | `0x82A5` | **vague** sur une seconde palette de 128 teintes, phase par touche avancée d'un cran par trame (`0xEDA2`) |
-| 16 | `0x9659` | **arc-en-ciel vertical** : teinte `+25` par ligne modulo 192, base défilante — six lignes couvrent 150 des 192 entrées |
-| 17 | `0x1D8D` | l'onde concentrique du moteur 1 (`0x746A`), **paramètre figé à 9** — pas un moteur distinct |
-| `0x20` | `0x1DAB` → `0x95A4` | **mode gaming** : image statique de `CODE 0xCA00`, plans rouge et vert nuls |
-| `0x26` | `0x1D05` → `0x8DDF` | le serpent en **mode couleur 7** (teinte aléatoire) avec luminosité forcée à 4 |
+| 5 | `0x9B2B` | **rain**: a droplet falls down each column, one row per frame; a randomly chosen column is relaunched when idle; the trail comes from the `0x64F1` fade |
+| 8 | `0xAC1C` → `0x4EA9`/`0x62E6` | **twinkle**: randomly chosen keys set to full intensity |
+| 10 | `0x8DDF` | **snake**: a dot traverses the grid in boustrophedon, reverses its horizontal direction at the edge and steps down one row, reverses its vertical direction at the top and bottom |
+| 15 | `0x82A5` | **wave** over a second 128-hue palette, per-key phase advanced by one step per frame (`0xEDA2`) |
+| 16 | `0x9659` | **vertical rainbow**: hue `+25` per row modulo 192, scrolling base — six rows span 150 of the 192 entries |
+| 17 | `0x1D8D` | the concentric wave of engine 1 (`0x746A`), **parameter fixed at 9** — not a separate engine |
+| `0x20` | `0x1DAB` → `0x95A4` | **gaming mode**: static image from `CODE 0xCA00`, red and green planes zeroed |
+| `0x26` | `0x1D05` → `0x8DDF` | the snake in **color mode 7** (random hue) with brightness forced to 4 |
 
-##### Le modèle de rendu à deux plans
+##### The two-plane rendering model
 
-C'est la trouvaille structurante, et elle vaut pour tous les moteurs, pas seulement les huit :
+This is the key architectural finding, and it holds across all engines, not just the eight:
 
-- **`XRAM 0x0428`** — la **couleur de base** de chaque touche, `colonne × 18 + ligne × 3 + composante`.
-- **`XRAM 0x0017`** — l'**intensité** de chaque touche, `colonne × 6 + ligne`, 126 octets.
-- **`fcn @ 0x62E6`** — le rendu : `base × intensité >> 5` vers `0x0152`, qui part ensuite au PWM.
+- **`XRAM 0x0428`** — the **base color** of each key, `col × 18 + row × 3 + component`.
+- **`XRAM 0x0017`** — the **intensity** of each key, `col × 6 + row`, 126 bytes.
+- **`fcn @ 0x62E6`** — the renderer: `base × intensity >> 5` into `0x0152`, which then goes out to PWM.
 
-C'est exactement le modèle que le portage tenait déjà pour le seul moteur réactif. D'où la
-structure retenue : **six effets partagent la même mécanique et ne diffèrent que par leur semeur**
-(touches frappées, gouttelettes, hasard, serpent, serpent multicolore, couronnes).
+This is the exact model the port already used for the reactive engine alone. Hence the
+structure adopted: **six effects share the same mechanics and differ only in their seeder**
+(struck keys, droplets, random, snake, multicolor snake, rings).
 
-##### `0x0428` est un miroir de `0x0152`
+##### `0x0428` is a mirror of `0x0152`
 
-La question restait posée de savoir si ces deux tampons de 378 octets avaient la même forme. Ils
-l'ont : `fcn @ 0x8B29` écrit **la même couleur dans les deux**, avec le **même** indexage
-`colonne × 18 + ligne × 3 + composante`. La correspondance canal ↔ (ligne, couleur) est donc
-vérifiée sur deux chemins d'écriture indépendants, pas un.
+It was previously an open question whether these two 378-byte buffers had the same layout. They
+do: `fcn @ 0x8B29` writes **the exact same color into both**, with the **same** indexing
+`col × 18 + row × 3 + component`. The channel ↔ (row, color) mapping is therefore
+verified across two independent write paths, not just one.
 
-##### L'image « gaming » confirme tout le plan de matrice
+##### The "gaming" image confirms the entire matrix map
 
-Le plan bleu de `CODE 0xCAFC` allume neuf positions : `(c0,l0)`, `(c2,l2)`, `(c1,l3)`, `(c2,l3)`,
-`(c3,l3)`, `(c13,l4)`, `(c12,l5)`, `(c13,l5)`, `(c14,l5)`. Reportées sur
-`layouts/default/layout.c`, ce sont **Échap, W, A, S, D, ↑, ←, ↓, →**. Neuf coïncidences sur une
-voie de données qui n'a rien à voir avec le balayage : c'est la meilleure confirmation disponible
-du plan de matrice complet.
+The blue plane at `CODE 0xCAFC` lights up nine positions: `(c0,r0)`, `(c2,r2)`, `(c1,r3)`, `(c2,r3)`,
+`(c3,r3)`, `(c13,r4)`, `(c12,r5)`, `(c13,r5)`, `(c14,r5)`. Mapped onto
+`layouts/default/layout.c`, these are **Esc, W, A, S, D, ↑, ←, ↓, →**. Nine coincidences on a
+data path completely unrelated to matrix scanning: this is the best available confirmation
+of the complete matrix layout.
 
-##### Trois tables recopiées
+##### Three copied tables
 
-- **Palette secondaire, `CODE 0x2D6D`** — 128 triplets `(R,G,B)`, 384 octets. Distincte de la roue
-  de 192. Ses bornes sont fixées par contiguïté : la roue finit en `0x2D6A`, la carte des couronnes
-  commence en `0x2EED = 0x2D6D + 384`.
-- **Couronnes de l'onde, `CODE 0x2959`** — 9 groupes de 13 identifiants, `0xFF` pour vide.
-  L'encodage est `colonne × 8 + ligne` : la couronne 0 vaut `0x3A` = (colonne 7, ligne 2), le centre
-  que cette page annonçait déjà. **Ce ne sont pas des distances** — la couronne 8 contient `(2,0)`,
-  qu'aucune métrique ne placerait là. C'est un ordre de propagation écrit à la main.
-- **Carte de présence, `CODE 0xC500`** — six emplacements de la grille 6 × 15 n'ont pas de touche.
-  Sa ligne 4 permute les colonnes, **exactement** comme la ligne 4 de la table `0x2EED` : deux
-  relevés indépendants qui butent sur la même particularité de rangée.
+- **Secondary palette, `CODE 0x2D6D`** — 128 `(R,G,B)` triplets, 384 bytes. Distinct from the 192-entry
+  color wheel. Its bounds are fixed by contiguity: the wheel ends at `0x2D6A`, the ring map
+  starts at `0x2EED = 0x2D6D + 384`.
+- **Wave rings, `CODE 0x2959`** — 9 groups of 13 IDs, `0xFF` for empty.
+  The encoding is `col × 8 + row`: ring 0 is `0x3A` = (col 7, row 2), the center
+  this page had already identified. **These are not distances** — ring 8 contains `(2,0)`,
+  which no metric would place there. It is a hand-authored propagation order.
+- **Presence map, `CODE 0xC500`** — six slots in the 6 × 15 grid have no key.
+  Its row 4 permutes the columns, **in the exact same way** as row 4 of table `0x2EED`: two
+  independent findings hitting the exact same row quirk.
 
-##### Le générateur pseudo-aléatoire, `fcn @ 0xA997`
+##### The pseudo-random number generator, `fcn @ 0xA997`
 
-LFSR de Galois sur 32 bits, décalage à droite, masque `0xCC4C4ECE`, état en `XRAM 0x0F67`, réamorcé
-à `0xA5A5` s'il tombe à zéro, seize tours par appel ; suivi de `0x4D52` (division signée) pour le
-modulo. Six appelants, dont la pluie (`rand % 15`) et le mode couleur 7 (`rand % 192`).
+32-bit Galois LFSR, right-shifting, mask `0xCC4C4ECE`, state in `XRAM 0x0F67`, re-seeded
+to `0xA5A5` if it hits zero, sixteen steps per call; followed by `0x4D52` (signed division) for the
+modulo. Six callers, including rain (`rand % 15`) and color mode 7 (`rand % 192`).
 
-Le portage transcrit le **comportement** et substitue le **générateur** : reproduire le polynôme ne
-rendrait pas la même suite sans la même graine ni le même ordre d'appel, et coûterait de la pile
-dans l'ISR pour une propriété observable qui est « une colonne au hasard ».
+The port transcribes the **behavior** and substitutes the **generator**: reproducing the polynomial would not
+yield the same sequence without the same seed and call order, and would cost stack space
+inside the ISR for an observable property that simply amounts to "a random column".
 
-##### La vitesse pilote le mouvement, pas seulement la teinte
+##### Speed drives motion, not just hue
 
-Piège du portage, pas du dump. `led_speeds[]` de SMK ne fait avancer que la phase d'animation, donc
-sans précaution `SPD_UP`/`SPD_DN` changeraient la *couleur* de la pluie et du serpent mais pas leur
-*allure*. Le firmware d'usine, lui, conditionne tout son rendu à `tic ≥ période`, période tirée de
-`CODE 0x2FE9` selon la vitesse.
+A trap in the port, not in the dump. SMK's `led_speeds[]` only advances the animation phase, so
+without care `SPD_UP`/`SPD_DN` would change the *color* of the rain and snake rather than their
+*pace*. The factory firmware, by contrast, gates all its rendering on `tick ≥ period`, where the period is pulled from
+`CODE 0x2FE9` according to the speed.
 
-Le portage gate donc le semeur sur un diviseur de trame `16 >> vitesse` (16, 8, 4, 2, 1) et fait
-suivre la décroissance du plan d'intensité, `4 << vitesse` (4, 8, 16, 32, 64). Le produit reste
-constant : la **traînée garde la même longueur** — environ quatre touches — à toutes les vitesses,
-et seul le mouvement accélère.
+The port therefore gates the seeder on a frame divider `16 >> speed` (16, 8, 4, 2, 1) and scales
+the intensity plane decay accordingly, `4 << speed` (4, 8, 16, 32, 64). Their product stays
+constant: the **trail keeps the same length** — roughly four keys — across all speeds,
+and only the motion speeds up.
 
-##### Le champ de phase de l'effet 15 — l'écrivain de `0x0E49` n'existe pas
+##### The phase field of effect 15 — the writer of `0x0E49` does not exist
 
-Cette page a listé « l'écrivain de `XRAM 0x0E49` » comme point ouvert. **Il n'y en a pas, et c'est la
-réponse** : le plan est une *constante*, pas une variable.
+This page previously listed "the writer of `XRAM 0x0E49`" as an open question. **There isn't one, and that is the
+answer**: the plane is a *constant*, not a variable.
 
-La recherche a d'abord donné un résultat qui ressemblait à une impasse : sur les 126 octets de
-`0x0E49`–`0x0EC6`, **une seule référence dans les 64 Ko de l'image**, et c'est la lecture par le
-transposeur `0xACAC`. Trois formes d'adressage pouvaient encore cacher une écriture ; les trois sont
-éliminées :
+The search initially produced what looked like a dead end: across all 126 bytes of
+`0x0E49`–`0x0EC6`, there is **only a single reference in the entire 64 KB image**, and it is the read by the
+transposer `0xACAC`. Three addressing forms could still have hidden a write; all three are
+ruled out:
 
-| Forme | Verdict |
+| Form | Verdict |
 | --- | --- |
-| `MOV DPTR,#0x0E49` | aucun site — la plage `0x0E4A`–`0x0EC7` n'est référencée nulle part |
-| `ADD A,#0x49` / `ADDC A,#0x0E` | un seul site, `0xACAC`, et c'est une lecture |
-| `MOVX @Ri` (page `P2`) | impossible : `P2` n'est écrit que deux fois, dont une dans le bootloader, et l'autre (`0xA824`) est une mise à zéro de port au démarrage. `P2` vaut 0, donc `MOVX @Ri` ne voit que `0x00xx` |
+| `MOV DPTR,#0x0E49` | no sites — the range `0x0E4A`–`0x0EC7` is not referenced anywhere |
+| `ADD A,#0x49` / `ADDC A,#0x0E` | a single site, `0xACAC`, and it is a read |
+| `MOVX @Ri` (page `P2`) | impossible: `P2` is only written twice, once in the bootloader, and the other (`0xA824`) zeroes the port at boot. `P2` is 0, so `MOVX @Ri` only ever sees `0x00xx` |
 
-Le démarrage donne la réponse. `startup_c51` (`0x9C74`) efface **les 4 096 octets de XDATA**
-(`0x9C7A`–`0x9C86`) puis saute au décompacteur d'initialiseurs Keil, qui lit la table de `CODE 0x9FDE`.
-Cette table ne compte que **trois enregistrements** :
+The boot sequence gives the answer. `startup_c51` (`0x9C74`) clears **all 4,096 bytes of XDATA**
+(`0x9C7A`–`0x9C86`) and then jumps to the Keil initializer unpacker, which reads the table at `CODE 0x9FDE`.
+That table has **only three records**:
 
-| Enregistrement | Contrôle | Taille | Destination |
+| Record | Control | Size | Destination |
 | --- | --- | --- | --- |
-| `0x9FDE` | `0x41` | 1 o | `XDATA 0x08C4` |
-| `0x9FE2` | `0x41` | 1 o | `XDATA 0x0C36` |
-| `0x9FE6` | `0x60` | **126 o** | **`XDATA 0x0E49`**, données en `CODE 0x9FEA` |
+| `0x9FDE` | `0x41` | 1 B | `XDATA 0x08C4` |
+| `0x9FE2` | `0x41` | 1 B | `XDATA 0x0C36` |
+| `0x9FE6` | `0x60` | **126 B** | **`XDATA 0x0E49`**, data at `CODE 0x9FEA` |
 
-Le décodage est **auto-validant** : le terminateur `0x00` tombe exactement à la fin du troisième
-enregistrement, en `0xA068`. Aucune place pour un décalage d'interprétation.
+The decoding is **self-validating**: the `0x00` terminator lands at the exact end of the third
+record, at `0xA068`. No room for any offset misinterpretation.
 
-Les 126 octets, remis en forme `[ligne][colonne]` avec le pas de 21 qu'emploie `0xACA3` :
+The 126 bytes, reshaped as `[row][col]` with the stride of 21 used by `0xACA3`:
 
 ```
 l0: 52 53 54 55 57 59 5c 62 69 73 78 7c 7f 01 03 | 05 06 07 08 51 51
@@ -1586,156 +1585,156 @@ l4: 45 44 43 42 40 3d 34 27 1b 18 16 13 13 12 12 | 12 11 10 0f 47 46
 l5: 44 42 40 3e 36 30 29 1f 19 17 16 15 14 14 13 | 12 11 11 10 46 45
 ```
 
-Valeurs **1 à 127** — très exactement la plage d'un index dans la palette de 128, ce qui confirme la
-lecture du moteur. Et le champ n'est **pas uniforme** : c'est un **balayage angulaire**. La phase
-croît le long de la première ligne jusqu'à repasser par zéro entre les colonnes 12 et 13, et décroît
-vers le bas à gauche. Une vague qui **tourne**, pas qui translate.
+Values **1 to 127** — the exact range of an index into the 128-entry palette, confirming our
+reading of the engine. And the field is **not uniform**: it is an **angular sweep**. The phase
+increases along the first row until wrapping through zero between columns 12 and 13, and decreases
+downward on the left. A wave that **rotates** rather than translating.
 
-Le portage transpose la table une fois pour toutes à la compilation (`aula_fx_keywave()`, 90 octets
-pour les colonnes utiles) et calcule `phase_de_la_touche + compteur de trames` — strictement
-équivalent à l'avance d'un cran par trame et par touche que fait `0xEDA2`, sans aucun état à tenir.
+The port transposes the table once and for all at compile time (`aula_fx_keywave()`, 90 bytes
+for the active columns) and computes `key_phase + frame_counter` — strictly
+equivalent to the one-step-per-frame-per-key advance performed by `0xEDA2`, with zero state to maintain.
 
-Deux détails qui comptent pour le rendu :
+Two details that matter for rendering:
 
-- **Le transposeur est appelé par effet, pas une fois pour toutes.** `0x1AA8` est précédé d'un
-  `JNB 0x21` et suivi de branches sœurs en `0x1AB2`, `0x1AC4` et `0x1AD0` qui appellent `0xEFBE` et
-  `0xEF85` avec le même prologue : c'est un aiguillage, une branche par effet, chacune ressemant son
-  propre plan. Le champ repart donc du dump **à chaque sélection** de l'effet. Le portage remet la
-  phase à zéro dans `fx_reset()` pour la même raison.
-- **La couture entre la colonne 14 et la colonne 0 est normale.** Le balayage se referme sur lui-même
-  dans l'espace de 21 colonnes grâce aux six colonnes 15–20 (`51 51`, `4f 4f`, `4d 4d`…), qui
-  n'existent pas sur ce clavier. Sur quinze colonnes, la phase saute de `0x03`–`0x13` à `0x52`–`0x44`
-  au bouclage — et le firmware d'usine fait exactement le même saut sur exactement ce matériel. Ce
-  n'est pas un artefact de portage.
+- **The transposer is called per effect, not once and for all.** `0x1AA8` is preceded by a
+  `JNB 0x21` and followed by sibling branches at `0x1AB2`, `0x1AC4`, and `0x1AD0` that call `0xEFBE` and
+  `0xEF85` with the same prologue: it is a dispatcher, one branch per effect, each reseeding its
+  own plane. The field therefore restarts from the dump **on every selection** of the effect. The port resets the
+  phase to zero in `fx_reset()` for the same reason.
+- **The seam between column 14 and column 0 is normal.** The sweep closes back on itself
+  within the 21-column space thanks to the six columns 15–20 (`51 51`, `4f 4f`, `4d 4d`…), which
+  do not exist on this keyboard. Across fifteen columns, the phase jumps from `0x03`–`0x13` to `0x52`–`0x44`
+  on wrap-around — and the factory firmware makes the exact same jump on this exact hardware. It
+  is not a porting artifact.
 
-**L'effet 15 est donc entièrement transcrit.** L'approximation diagonale que le portage assumait est
-retirée.
+**Effect 15 is therefore completely transcribed.** The diagonal approximation that the port previously assumed has been
+removed.
 
-Hors table, les deux effets spéciaux :
+Outside the table, the two special effects:
 
-| Effet | Gestionnaire | Ce qu'il fait |
+| Effect | Handler | What it does |
 | --- | --- | --- |
-| `0x20` | `0x1DAB` | seuil immédiat **100** |
-| `0x26` | `0x1D05` | `0x097C ≥ 5` → force **`0x0D19 = 4`** (luminosité) puis `0x64F1` ; ensuite seuil immédiat **1** |
+| `0x20` | `0x1DAB` | immediate threshold **100** |
+| `0x26` | `0x1D05` | `0x097C ≥ 5` → forces **`0x0D19 = 4`** (brightness) then `0x64F1`; thereafter immediate threshold **1** |
 
-`0x64F1` revient sept fois : c'est le rendu partagé, appelé soit comme sous-étape sur le compteur
-secondaire, soit comme rendu principal (idx 12). Les indices **9 et 14 sont explicitement vides** —
-deux emplacements d'effet réservés et non implémentés.
+`0x64F1` appears seven times: it is the shared renderer, called either as a sub-step on the secondary
+counter or as the main renderer (idx 12). Indices **9 and 14 are explicitly empty** —
+two reserved, unimplemented effect slots.
 
-**Les dix-huit gestionnaires sont désormais tous décodés et portés** (hors les deux vides). Le
-détail des huit derniers suit.
+**All eighteen handlers are now decoded and ported** (excluding the two empty ones). The
+details of the last eight follow.
 
-#### `0x1BA5`, en particulier
+#### `0x1BA5`, in particular
 
-C'est la ligne utile du gestionnaire d'indice **2** :
+This is the active line of the index **2** handler:
 
 ```asm
-0x1B8D  mov dptr,#0x08BB ; movx a,@dptr ; mov r6,a   ; periode, poids fort
-0x1B92  inc dptr ; movx a,@dptr ; mov r7,a           ; periode, poids faible
+0x1B8D  mov dptr,#0x08BB ; movx a,@dptr ; mov r6,a   ; period, high byte
+0x1B92  inc dptr ; movx a,@dptr ; mov r7,a           ; period, low byte
 0x1B95  clr c
 0x1B96  mov dptr,#0x0301 ; movx a,@dptr ; subb a,r7
 0x1B9B  mov dptr,#0x0300 ; movx a,@dptr ; subb a,r6
 0x1BA0  jnc 0x1BA5
-0x1BA2  ljmp 0x1DC2       ; tic < periode : rien a faire
-0x1BA5  lcall 0x7C12      ; rendu de l'effet 2
-0x1BA8  ljmp 0x1D69       ; remise a zero du tic
+0x1BA2  ljmp 0x1DC2       ; tick < period: nothing to do
+0x1BA5  lcall 0x7C12      ; render effect 2
+0x1BA8  ljmp 0x1D69       ; reset tick to zero
 ```
 
-**Qui y saute :** le `jnc` de `0x1BA0`, quand `tic ≥ période`. Et qui atteint le bloc : le saut
-calculé `jmp @a+dptr` de `0x1B12`, via l'entrée 2 de la table `0x1B13`. Aucun `lcall` ni `ljmp`
-direct — c'est pour cela qu'un balayage de références ne trouvait rien.
+**What jumps to it:** the `jnc` at `0x1BA0`, when `tick ≥ period`. And what reaches the block: the computed
+jump `jmp @a+dptr` at `0x1B12`, via entry 2 of the table at `0x1B13`. No direct `lcall` or `ljmp`
+— which is why a cross-reference scan found nothing.
 
-Cela referme la question laissée ouverte sur `fcn.00007C12` : ce n'est pas une routine orpheline,
-c'est **le moteur de rendu de l'effet d'indice 2**, et il relit `0x0896` en `0x7C33` et `0x7C6F`
-pour retrouver sa palette.
+This closes the open question regarding `fcn.00007C12`: it is not an orphan routine,
+it is **the rendering engine for effect index 2**, and it re-reads `0x0896` at `0x7C33` and `0x7C6F`
+to look up its palette.
 
-> **Correction sur Ghidra.** `get_xrefs_to 0x7C12` annonce un `COMPUTED_JUMP` venant de `0x7B24`,
-> le `jmp @a+dptr` de `fcn.00007AAD`. C'est faux : la table de ce saut est en `0x7B25`, elle compte
-> **treize entrées** (`0x7B25`–`0x7B48`) et **aucune ne vaut `0x7C12`** — elles pointent toutes
-> entre `0x7B4C` et `0x7B8A`. La reconstruction de table de Ghidra déborde, et c'est cette
-> destination inventée qui lui fait fusionner `0x7AAD` et `0x7C12` en une seule fonction.
+> **Ghidra correction.** `get_xrefs_to 0x7C12` reports a `COMPUTED_JUMP` coming from `0x7B24`,
+> the `jmp @a+dptr` in `fcn.00007AAD`. That is false: the jump table for that instruction is at `0x7B25`, it has
+> **thirteen entries** (`0x7B25`–`0x7B48`), and **none of them equals `0x7C12`** — they all point
+> between `0x7B4C` and `0x7B8A`. Ghidra's table recovery overflows, and it is this invented
+> target that causes it to merge `0x7AAD` and `0x7C12` into a single function.
 
-### Les deux moteurs de rendu — `0x64F1` et `0x7C12`
+### The two rendering engines — `0x64F1` and `0x7C12`
 
-L'ordonnanceur appelle seize routines de rendu. Deux d'entre elles portent les deux familles
-d'animation, et elles se lisent enfin en C.
+The scheduler calls sixteen rendering routines. Two of them carry the two animation
+families, and they can finally be read in C.
 
-#### D'abord l'outil : `fcn.00004E39`, l'assistant de pointeur Keil
+#### First, the helper: `fcn.00004E39`, the Keil pointer helper
 
 ```asm
 0x4E39  mul ab ; add a,DPL ; mov DPL,a ; mov a,B ; addc a,DPH ; mov DPH,a ; ret
 ```
 
-**`dptr += a × b`**, en sept octets, appelé **94 fois**. Toute indexation de tableau à pas non
-trivial passe par lui. Le décompilateur le rend en `FUN_CODE_4e39(3, ligne)` au milieu d'une
-expression d'adresse : ce n'est pas un appel métier, c'est l'opérateur `[]`. Le nommer
-`dptr_add_mul` rend lisibles d'un coup toutes les décompilations RGB.
+**`dptr += a × b`**, in seven bytes, called **94 times**. All array indexing with a non-trivial
+stride goes through it. The decompiler renders it as `FUN_CODE_4e39(3, row)` in the middle of an
+address expression: it is not a domain function call, it is the `[]` operator. Naming it
+`dptr_add_mul` makes all the RGB decompilations readable at once.
 
-#### `0x64F1` — la décroissance par touche
+#### `0x64F1` — per-key decay
 
-Double boucle sur toute la matrice : `0x0EE2` = colonne **0..14**, `0x0EE3` = ligne **0..5**.
+Double loop over the entire matrix: `0x0EE2` = column **0..14**, `0x0EE3` = row **0..5**.
 
-| Tableau | Adresse | Contenu |
+| Array | Address | Contents |
 | --- | --- | --- |
-| masque d'exclusion | `0x0BFF + colonne` | un octet par colonne ; la touche est traitée si le bit `1 << ligne` est **à zéro** |
-| couleur par touche | `0x0428 + colonne × 18 + ligne × 3` | trois octets ; **378 o alloués** (21 × 18), `0x0428`–`0x05A1` |
-| intensité par touche | `0x0017 + colonne × 6 + ligne` | un octet ; **126 o alloués** (21 × 6) |
+| exclusion mask | `0x0BFF + col` | one byte per column; the key is processed if bit `1 << row` is **zero** |
+| per-key color | `0x0428 + col × 18 + row × 3` | three bytes; **378 B allocated** (21 × 18), `0x0428`–`0x05A1` |
+| per-key intensity | `0x0017 + col × 6 + row` | one byte; **126 B allocated** (21 × 6) |
 
-Pour chaque touche retenue :
+For each selected key:
 
 ```c
-composante = (couleur[i] * intensité) >> 5;     /* i = 0,1,2 */
-rgb_key_suppressed(ligne, colonne);
-if (!supprimée) { rgb_apply_brightness(); rgb_pixel_write(); }
+component = (color[i] * intensity) >> 5;     /* i = 0,1,2 */
+rgb_key_suppressed(row, col);
+if (!suppressed) { rgb_apply_brightness(); rgb_pixel_write(); }
 
-if (g_palette_effect_idx == 13)  intensité = (intensité < 2) ? 0 : intensité - 2;
-else                             if (intensité) intensité -= 1;
+if (g_palette_effect_idx == 13)  intensity = (intensity < 2) ? 0 : intensity - 2;
+else                             if (intensity) intensity -= 1;
 ```
 
-**C'est le moteur réactif** : chaque touche porte sa propre couleur et sa propre intensité, et
-l'intensité **décroît d'un cran par trame** — de deux crans pour l'effet 13, qui s'éteint donc deux
-fois plus vite. Le `>> 5` fait de l'intensité une échelle sur **32 niveaux**.
+**This is the reactive engine**: each key holds its own color and its own intensity, and
+the intensity **decays by one step per frame** — by two steps for effect 13, which therefore fades out twice
+as fast. The `>> 5` makes the intensity a **32-level** scale.
 
-Les trois tableaux ne sont atteints que par pointeur calculé : `dptr_refs` sur `0x0428`, `0x0017`
-ou `0x0BFF` ne renvoie **rien**. Ils n'ont été trouvés que par la décompilation.
+The three arrays are only reached via computed pointers: `dptr_refs` on `0x0428`, `0x0017`,
+or `0x0BFF` returns **nothing**. They were only found through decompilation.
 
-> **Correction.** J'avais écrit `0x0C17` pour le tableau d'intensité. C'est **`0x0017`** :
-> `mul ab (b=6) ; add a,#0x17 ; clr a ; addc a,#0x00` — l'octet de poids fort est **nul**. Le `0x0C`
-> venait du masque d'exclusion voisin (`add a,#0xFF ; addc a,#0x0C`), qui lui est bien en `0x0BFF`.
-> Le `CONCAT11` du décompilateur écrit ces deux cas presque pareil ; seules les constantes du
-> désassemblage les séparent.
+> **Correction.** I had previously written `0x0C17` for the intensity array. It is **`0x0017`**:
+> `mul ab (b=6) ; add a,#0x17 ; clr a ; addc a,#0x00` — the high byte is **zero**. The `0x0C`
+> came from the neighboring exclusion mask (`add a,#0xFF ; addc a,#0x0C`), which really is at `0x0BFF`.
+> The decompiler's `CONCAT11` renders these two cases almost identically; only the constants in the
+> disassembly separate them.
 
-> **Taille corrigée.** J'avais annoncé 270 et 90 octets, d'après la boucle de `0x64F1` qui ne
-> parcourt que quinze colonnes. L'allocation réelle en fait **vingt et une**, comme la table LED :
-> `rgb_clear_key_state` (`0x9078`) les efface toutes deux jusqu'à `0x15`. Le tampon couleur finit
-> donc en `0x05A1`, **juste avant** le tampon de trame PWM en `0x05A2` — les deux sont contigus.
+> **Corrected size.** I had reported 270 and 90 bytes, based on the loop in `0x64F1` which only
+> iterates over fifteen columns. The actual allocation is **twenty-one** columns, just like the LED table:
+> `rgb_clear_key_state` (`0x9078`) clears both of them up to `0x15`. The color buffer therefore ends
+> at `0x05A1`, **right before** the PWM frame buffer at `0x05A2` — the two are contiguous.
 
-#### `0x7C12` — le dégradé défilant (effet d'indice 2)
+#### `0x7C12` — scrolling gradient (effect index 2)
 
-Une seule boucle, sur les colonnes **0..14** — pas d'état par touche. La couleur est choisie une
-fois par colonne, selon le mode de couleur `0x011C` :
+A single loop over columns **0..14** — no per-key state. The color is chosen once
+per column, according to the color mode `0x011C`:
 
 | `0x011C` | Source |
 | --- | --- |
-| `< 7` | la palette de l'effet : `CODE 0xC800 + [0x0896] × 21 + mode × 3` |
-| `== 7` | la **roue de teintes** : `CODE 0x2B2A + phase × 3` |
-| `> 7` | aucune couleur écrite |
+| `< 7` | the effect palette: `CODE 0xC800 + [0x0896] × 21 + mode × 3` |
+| `== 7` | the **hue wheel**: `CODE 0x2B2A + phase × 3` |
+| `> 7` | no color written |
 
-La roue compte **192 entrées de trois octets** (`0x2B2A`–`0x2D69`), et la phase avance de **11 par
-colonne** avec repli modulo 192 (`add a,#0x0B` puis, si `≥ 0xC0`, `add a,#0x40`). C'est cela qui
-produit l'arc-en-ciel réparti sur le clavier.
+The wheel has **192 three-byte entries** (`0x2B2A`–`0x2D69`), and the phase advances by **11 per
+column** wrapping modulo 192 (`add a,#0x0B` then, if `≥ 0xC0`, `add a,#0x40`). That is what
+produces the rainbow spread across the keyboard.
 
-Ensuite `fcn.0000A17B([0x08C3], 0xC480)` applique la position de défilement, puis
-`rgb_apply_brightness`. La boucle interne parcourt les six lignes et ne dessine que si la position
-existe :
+Next, `fcn.0000A17B([0x08C3], 0xC480)` applies the scroll position, followed by
+`rgb_apply_brightness`. The inner loop iterates over the six rows and only draws if the position
+exists:
 
 ```c
-if (CODE[0xC500 + colonne * 6 + ligne] != 0xFF) { ... }
+if (CODE[0xC500 + col * 6 + row] != 0xFF) { ... }
 ```
 
-##### `CODE 0xC500` — la carte de présence des touches
+##### `CODE 0xC500` — the key presence map
 
-Quinze colonnes de six octets, `0xFF` = pas de touche à cette position.
+Fifteen columns of six bytes, `0xFF` = no key at this position.
 
 ```
 col  0 : 00 01 02 03 04 05        col  8 : 40 41 42 43 4c 45
@@ -1748,50 +1747,50 @@ col  6 : 30 31 32 33 3c ff        col 14 : 70 71 72 73 74 75
 col  7 : 38 39 3a 3b 44 ff
 ```
 
-**Six trous sur quatre-vingt-dix positions, donc 84 emplacements**. Les valeurs suivent
-`colonne × 8 + ligne`, avec des exceptions visibles (`0x14` en col 1, `0x0C` en col 12) — ce sont
-des positions déplacées.
+**Six holes out of ninety positions, leaving 84 slots**. The values follow
+`col × 8 + row`, with visible exceptions (`0x14` in col 1, `0x0C` in col 12) — these are
+relocated positions.
 
-#### Les deux tables de couleur n'ont pas le même ordre d'octets
+#### The two color tables do not have the same byte order
 
-Vérifié instruction par instruction, pas déduit du C :
+Verified instruction by instruction, not inferred from C:
 
 | Table | `+0` | `+1` | `+2` |
 | --- | --- | --- | --- |
 | palette `0xC800` | `0x011D` | `0x0000` | `0x0E25` |
-| couleur par touche `0x0428` | `0x011D` | `0x0000` | `0x0E25` |
-| roue de teintes `0x2B2A` | `0x0E25` | `0x0000` | `0x011D` |
+| per-key color `0x0428` | `0x011D` | `0x0000` | `0x0E25` |
+| hue wheel `0x2B2A` | `0x0E25` | `0x0000` | `0x011D` |
 
-**La roue est rangée à l'envers de la palette.** L'octet du milieu est le même dans les trois cas.
-La section suivante établit que `0x011D` est le rouge, `0x0000` le vert et `0x0E25` le bleu : les
-deux premières tables sont donc en `(R,G,B)` et la roue en `(B,G,R)`.
+**The wheel is stored in reverse order compared to the palette.** The middle byte is the same in all three cases.
+The next section establishes that `0x011D` is red, `0x0000` is green, and `0x0E25` is blue: the
+first two tables are therefore in `(R,G,B)` order and the wheel is in `(B,G,R)` order.
 
-#### Laquelle est le rouge — tranché
+#### Which one is red — settled
 
-La question restait ouverte : trois composantes, aucune preuve de leur couleur. La chaîne complète
-la referme, et chaque maillon est vérifié au désassemblage.
+The question remained open: three components, no proof of their color. The complete chain
+closes it, with every link verified in the disassembly.
 
-**Maillon 1 — `rgb_apply_brightness` (`0xA0F0`).** Trois multiplications, chacune suivie d'une
-division par 80 (`mov r5,#0x50 ; lcall math_div16by8`) :
+**Link 1 — `rgb_apply_brightness` (`0xA0F0`).** Three multiplications, each followed by a
+division by 80 (`mov r5,#0x50 ; lcall math_div16by8`):
 
-| Source | Résultat 16 bits |
+| Source | 16-bit result |
 | --- | --- |
 | `0x011D` | `0x0E46:0x0E47` |
 | `0x0000` | `0x0E42:0x0E43` |
 | `0x0E25` | `0x0E3F:0x0E40` |
 
-Le gain vient de `CODE 0x2937 + [0x0D19]`, et vaut au plus 80 : le quotient tient donc sur un
-octet, celui de poids faible.
+The gain comes from `CODE 0x2937 + [0x0D19]`, and is at most 80: the quotient therefore fits in a
+single byte, the low byte.
 
-> **Correction.** Une note antérieure appariait `0x0000, 0x011D, 0x0E25 → 0x0E46, 0x0E42, 0x0E3F`,
-> dans cet ordre. C'est faux : `0x011D` va vers `0x0E46`, `0x0000` vers `0x0E42`. Les deux premières
-> sont croisées — et c'est précisément l'appariement dont dépend toute la suite.
+> **Correction.** An earlier note paired `0x0000, 0x011D, 0x0E25 → 0x0E46, 0x0E42, 0x0E3F`,
+> in that order. That is wrong: `0x011D` goes to `0x0E46`, `0x0000` to `0x0E42`. The first two
+> are crossed — and this is the exact pairing on which everything else depends.
 
-**Maillon 2 — `rgb_pixel_write` (`0x761E`).** Il ne lit que l'octet de poids faible de chaque
-quotient, et les range à trois offsets consécutifs :
+**Link 2 — `rgb_pixel_write` (`0x761E`).** It reads only the low byte of each
+quotient, and stores them at three consecutive offsets:
 
 ```asm
-0x765B  add a,#0x52   ; dptr = 0x0152 + colonne x 18, puis += ligne x 3
+0x765B  add a,#0x52   ; dptr = 0x0152 + col x 18, then += row x 3
 0x7678  mov a,r3      ; r3 = [0x0E47]   -> offset +0
 0x7684  add a,#0x53   ; +1
 0x7695  mov a,r5      ; r5 = [0x0E43]   -> offset +1
@@ -1799,52 +1798,52 @@ quotient, et les range à trois offsets consécutifs :
 0x76C1  mov a,r7      ; r7 = [0x0E40]   -> offset +2
 ```
 
-**Maillon 3 — la table de destination est déjà connue.** `XRAM 0x0152 + colonne × 18 + ligne × 3`,
-soit 21 × 18 = **378 octets** (`0x0152`–`0x02CB`) : exactement la table que la commande hôte `0x08`
-sous-index 2 remplit, et dont l'opcode `0x42` relit 378 octets. Le pilote OpenRGB y écrit
-`buf[0x08 + i*3] = R, G, B` avec `i = colonne × 6 + ligne`.
+**Link 3 — the destination table is already known.** `XRAM 0x0152 + col × 18 + row × 3`,
+i.e. 21 × 18 = **378 bytes** (`0x0152`–`0x02CB`): the exact table populated by host command `0x08`
+sub-index 2, and from which opcode `0x42` reads back 378 bytes. The OpenRGB driver writes
+`buf[0x08 + i*3] = R, G, B` to it with `i = col × 6 + row`.
 
-**Conclusion.** L'offset `+0` de cette table est le rouge, donc :
+**Conclusion.** Offset `+0` of this table is red, therefore:
 
-| Adresse | Composante | Mise à l'échelle |
+| Address | Component | Scaled output |
 | --- | --- | --- |
-| **`0x011D`** | **rouge** | `0x0E46:0x0E47` |
-| **`0x0000`** | **vert** | `0x0E42:0x0E43` |
-| **`0x0E25`** | **bleu** | `0x0E3F:0x0E40` |
+| **`0x011D`** | **red** | `0x0E46:0x0E47` |
+| **`0x0000`** | **green** | `0x0E42:0x0E43` |
+| **`0x0E25`** | **blue** | `0x0E3F:0x0E40` |
 
-Les étiquettes `g_color_r` et `g_color_g` étaient donc **inversées** dans le montage Ghidra ;
-corrigé dans `tools/gh_setup.py`, ainsi que `g_scaled_r` / `g_scaled_g`.
+The labels `g_color_r` and `g_color_g` were therefore **swapped** in the Ghidra setup;
+fixed in `tools/gh_setup.py`, along with `g_scaled_r` / `g_scaled_g`.
 
-Il en découle l'ordre des trois tables :
+From this follows the byte order of the three tables:
 
-| Table | Ordre réel |
+| Table | Actual order |
 | --- | --- |
 | palette `0xC800` | **(R, G, B)** |
-| couleur par touche `0x0428` | **(R, G, B)** |
-| roue de teintes `0x2B2A` | **(B, G, R)** |
+| per-key color `0x0428` | **(R, G, B)** |
+| hue wheel `0x2B2A` | **(B, G, R)** |
 
-La table « rouge vert bleu jaune magenta cyan blanc » de la palette d'usine est donc **correcte**.
+The "red green blue yellow magenta cyan white" table of the factory palette is therefore **correct**.
 
-##### Contrôle : la roue lue en (B, G, R) est un cercle des teintes
+##### Cross-check: the wheel read as (B, G, R) is a hue circle
 
 ```
-phase   0  ->  R=  0 G=  1 B=255     bleu
+phase   0  ->  R=  0 G=  1 B=255     blue
 phase  32  ->  R=  0 G=255 B=248     cyan
-phase  64  ->  R=  1 G=255 B=  0     vert
-phase  96  ->  R=255 G=248 B=  0     jaune
-phase 128  ->  R=255 G=  0 B=  1     rouge
+phase  64  ->  R=  1 G=255 B=  0     green
+phase  96  ->  R=255 G=248 B=  0     yellow
+phase 128  ->  R=255 G=  0 B=  1     red
 phase 160  ->  R=248 G=  0 B=255     magenta
 ```
 
-Six segments de 32 pas, et **les 192 entrées ont toutes un maximum de 255** — saturation constante,
-la signature d'une roue de teintes. Avec un pas de 11 par colonne, les quinze colonnes couvrent
-165 des 192 phases : le dégradé fait presque un tour complet sur la largeur du clavier.
+Six segments of 32 steps, and **all 192 entries have a maximum of 255** — constant saturation,
+the signature of a hue wheel. With a step of 11 per column, the fifteen columns cover
+165 of the 192 phases: the gradient makes almost a full turn across the width of the keyboard.
 
-### Les deux autres moteurs — `0xEE6A` et `0x746A`
+### The other two engines — `0xEE6A` and `0x746A`
 
-#### `0xEE6A` — l'effet d'indice 0 est l'extinction
+#### `0xEE6A` — effect index 0 is "off"
 
-Douze octets, deux appels :
+Twelve bytes, two calls:
 
 ```asm
 0xEE6A  clr a ; mov r3,a ; mov r5,a ; mov r7,a
@@ -1853,618 +1852,617 @@ Douze octets, deux appels :
 0xEE73  ljmp  rgb_clear_key_state   ; (0)
 ```
 
-**`rgb_fill_solid` (`0xADA2`)** prend un triplet dans `r7`/`r5`/`r3`, le pose en `0x0EE3`–`0x0EE5`,
-puis balaie **21 colonnes × 6 lignes** et écrit chaque position via `rgb_key_suppressed` puis la
-chaîne d'écriture (`0x7631`). Elle remet `RSTSTAT` (SFR `0xB1`) à zéro **à chaque itération** — un
-coup de chien de garde, la boucle de 126 positions étant assez longue pour en avoir besoin. Huit
-autres sites l'appellent, tous groupés en `0x8736`–`0x8785` : ce sont les couleurs fixes des
-touches-témoins.
+**`rgb_fill_solid` (`0xADA2`)** takes a triplet in `r7`/`r5`/`r3`, places it in `0x0EE3`–`0x0EE5`,
+then sweeps **21 columns × 6 rows** and writes each position via `rgb_key_suppressed` followed by the
+write chain (`0x7631`). It resets `RSTSTAT` (SFR `0xB1`) to zero **on every iteration** — a
+watchdog kick, as the 126-position loop is long enough to need it. Eight
+other call sites invoke it, all grouped at `0x8736`–`0x8785`: those are the solid colors for the
+indicator keys.
 
-**`rgb_clear_key_state` (`0x9078`)** écrit son argument dans les **deux tableaux du moteur
-réactif** — les trois octets de couleur en `0x0428 + col × 18 + ligne × 3` et l'intensité en
-`0x0017 + col × 6 + ligne` — sur 21 colonnes et 6 lignes.
+**`rgb_clear_key_state` (`0x9078`)** writes its argument into **both arrays of the reactive
+engine** — the three color bytes at `0x0428 + col × 18 + row × 3` and the intensity at
+`0x0017 + col × 6 + row` — across 21 columns and 6 rows.
 
-> Donc l'effet d'indice 0 **n'anime rien** : il éteint la table LED et remet à zéro l'état du
-> moteur réactif, toutes les 100 trames. C'est le mode « rétroéclairage coupé », réaffirmé
-> périodiquement plutôt que posé une fois.
+> So effect index 0 **does not animate anything**: it turns off the LED table and zeroes out the state of the
+> reactive engine every 100 frames. It is the "backlight off" mode, reasserted
+> periodically rather than set once.
 
-#### `0x746A` — l'onde concentrique
+#### `0x746A` — concentric wave
 
-Appelée avec `r7 = [0x08C3]`, le rayon, que le gestionnaire d'indice 1 incrémente à chaque trame et
-**borne à 9**. Ce rayon devient la borne de la boucle externe : `[0x0EE3]` va de 0 à `rayon − 1`.
+Called with `r7 = [0x08C3]`, the radius, which the index 1 handler increments on each frame and
+**clamps to 9**. This radius becomes the upper bound of the outer loop: `[0x0EE3]` runs from 0 to `radius − 1`.
 
-Chaque tour lit un **groupe** de la table `CODE 0x2959`, treize octets par groupe, `0xFF` = case
-vide. Les valeurs sont des positions **empaquetées `colonne × 8 + ligne`** — le même codage que la
-carte `0xC500`.
+Each iteration reads a **group** from the table `CODE 0x2959`, thirteen bytes per group, `0xFF` = empty
+slot. The values are **packed positions `col × 8 + row`** — the same encoding as the
+`0xC500` map.
 
-| Groupe | Positions | Lecture |
+| Group | Positions | Meaning |
 | --- | --- | --- |
-| 0 | 1 | `c7,l2` — **le centre** |
-| 1 | 6 | la couronne immédiate |
+| 0 | 1 | `c7,r2` — **the center** |
+| 1 | 6 | the immediate ring |
 | 2 | 11 | |
-| 3–7 | 11 à 13 | |
-| 8 | 12 | le bord |
+| 3–7 | 11 to 13 | |
+| 8 | 12 | the edge |
 
-Neuf groupes, `0x2959`–`0x29CD`. **C'est une onde qui part du centre du clavier** (colonne 7,
-ligne 2) et gagne une couronne par trame jusqu'au bord. La phase de la roue de teintes avance de
-**13 par couronne**, ce qui colore chaque anneau différemment.
+Nine groups, `0x2959`–`0x29CD`. **It is a wave radiating from the center of the keyboard** (column 7,
+row 2) and expanding by one ring per frame up to the edge. The hue wheel phase advances by
+**13 per ring**, coloring each ring differently.
 
-Les deux tables `CODE 0x2DED` et `CODE 0x2F6B`, indexées `(v & 7) × 21 + (v >> 3)`, sont les mêmes
-que celles de `0x7C12` — la conversion position → coordonnées passées à `rgb_key_suppressed`.
+The two tables `CODE 0x2DED` and `CODE 0x2F6B`, indexed as `(v & 7) × 21 + (v >> 3)`, are the same
+as those used by `0x7C12` — converting position → coordinates passed to `rgb_key_suppressed`.
 
-#### Les deux moteurs ne lisent pas la roue dans le même ordre
+#### The two engines do not read the wheel in the same order
 
-Vérifié au désassemblage des deux côtés :
+Verified in the disassembly on both sides:
 
-| Fonction | `+0` | `+1` | `+2` | Ordre |
+| Function | `+0` | `+1` | `+2` | Order |
 | --- | --- | --- | --- | --- |
 | `0x746A` (`0x74AD`, `0x74C2`, …) | `0x011D` | `0x0000` | `0x0E25` | **(R, G, B)** |
 | `0x7C12` (`0x7CA4`, `0x7CB9`, `0x7CD1`) | `0x0E25` | `0x0000` | `0x011D` | **(B, G, R)** |
 
-Leurs branches *palette* sont pourtant **identiques** — les deux rangent `+0` dans `0x011D`
-(`0x7508` et `0x7C4F`). Seule la branche roue diverge.
+Yet their *palette* branches are **identical** — both store `+0` into `0x011D`
+(`0x7508` and `0x7C4F`). Only the wheel branch diverges.
 
-> Deux lectures possibles : soit c'est délibéré et l'un des deux effets affiche l'arc-en-ciel
-> avec rouge et bleu échangés, soit c'est une étourderie du firmware d'origine. **Le dump ne
-> permet pas de trancher** — il faudrait voir les deux effets tourner. Je le signale parce que
-> quiconque réimplémente ces effets reproduira l'un ou l'autre sans le savoir.
+> Two possible readings: either this is deliberate and one of the two effects displays the rainbow
+> with red and blue swapped, or it is an oversight in the original firmware. **The dump alone
+> cannot settle this** — one would have to see both effects running. I point it out because
+> anyone reimplementing these effects will reproduce one or the other without knowing it.
 
 
-#### `0x0EE4` n'est pas un drapeau partagé
+#### `0x0EE4` is not a shared flag
 
-`0x64F1` y écrit `1` et s'en sert comme **graine du masque** (`1 << ligne`) ; `0x7C12` y écrit `0`
-puis s'en sert comme **phase de la roue de teintes**. Même octet, deux usages sans rapport — un
-recyclage de variable par le compilateur. Conclure à un drapeau d'état partagé aurait été une
-erreur naturelle et fausse.
+`0x64F1` writes `1` to it and uses it as a **mask seed** (`1 << row`); `0x7C12` writes `0` to it
+and then uses it as the **hue wheel phase**. Same byte, two unrelated uses — variable
+reuse by the compiler. Concluding that it was a shared state flag would have been a
+natural and mistaken assumption.
 
-#### `fcn.0000598F` — le filtre d'extinction
+#### `fcn.0000598F` — the suppression filter
 
-Appelée par les deux moteurs avec `(ligne, colonne)`, elle renvoie dans `R4` un « ne pas
-allumer ». Son corps est une longue suite de `if (ligne == a && colonne == b && condition) return`,
-les conditions portant sur `g_transport`, `0x0328` (slot Bluetooth courant), `0x030A`, `0x09BA` et
-une dizaine de bits d'IDATA. **C'est la logique des touches-témoins** : celles qui affichent le
-slot apparié ou le mode de liaison sont retirées de l'animation pour être pilotées à part.
+Called by both engines with `(row, col)`, it returns a "do not light" flag in `R4`.
+Its body is a long sequence of `if (row == a && col == b && condition) return`,
+with conditions testing `g_transport`, `0x0328` (current Bluetooth slot), `0x030A`, `0x09BA`, and
+about ten IDATA bits. **This is the indicator-key logic**: keys that display the
+paired slot or connection mode are excluded from the animation so they can be driven separately.
 
-#### Encore une divergence de bornes
+#### Another boundary discrepancy
 
-r2 donne à `0x64F1` **onze octets** — il coupe à `0x64FB` parce que `0x64FC` est la cible d'un saut
-venant de `0x66F5`. Ghidra donne `0x64F1`–`0x66F8`, soit **520 octets**, et c'est lui qui a raison :
-le corps continue sans `ret`. C'est l'inverse exact du cas `0x7AAD`, où r2 avait raison. **Aucun des
-deux n'est autorité ; il faut regarder le flot.**
+r2 gives `0x64F1` **eleven bytes** — it cuts off at `0x64FB` because `0x64FC` is the target of a jump
+from `0x66F5`. Ghidra gives `0x64F1`–`0x66F8`, i.e. **520 bytes**, and Ghidra is right:
+the body continues without a `ret`. This is the exact opposite of the `0x7AAD` case, where r2 was right. **Neither
+tool is authoritative; you have to follow the control flow.**
 
-### `0x9DA4` et `0x5BE9` — la couleur unique et l'automate
+### `0x9DA4` and `0x5BE9` — solid color cycling and the cellular automaton
 
-#### D'abord `rgb_scroll_step` (`0xA3F4`), que les deux emploient
+#### First, `rgb_scroll_step` (`0xA3F4`), used by both
 
 ```asm
-0xA3F4  jnb 0x24.3, 0xA42D        ; le bit choisit le SENS
-        ; sens avant, pas selon l'effet [0x0896] :
+0xA3F4  jnb 0x24.3, 0xA42D        ; bit selects the DIRECTION
+        ; forward direction, step depends on effect [0x0896]:
         ;   0x0A        -> +20
         ;   0x0B, 0x11  -> +2
-        ;   sinon       -> +1
+        ;   otherwise   -> +1
 0xA421  mov dptr,#0x08C3 ; movx a ; clr c ; subb a,r7
-0xA427  jc  0xA462 ; clr a ; movx @dptr,a     ; si position >= r7, repli a 0
+0xA427  jc  0xA462 ; clr a ; movx @dptr,a     ; if position >= r7, wrap to 0
 ```
 
-Donc **`rgb_scroll_step(n)` avance `g_scroll_pos` (`0x08C3`) modulo `n`**, d'un pas propre à
-l'effet, et `0x24.3` inverse le sens — c'est le réglage « direction » du bloc de configuration.
-`0x9DA4` et `0x746A` l'appellent avec `0xC0` (192, la taille de la roue), `0x7C12` avec `0x80`.
+So **`rgb_scroll_step(n)` advances `g_scroll_pos` (`0x08C3`) modulo `n`**, by an effect-specific
+step, and `0x24.3` reverses the direction — that is the "direction" setting in the configuration block.
+`0x9DA4` and `0x746A` call it with `0xC0` (192, the wheel size), and `0x7C12` with `0x80`.
 
-#### `0x9DA4` — toute la matrice d'une seule couleur (effet d'indice 3)
+#### `0x9DA4` — whole matrix in a single color (effect index 3)
 
-Cent quarante-neuf octets, et la structure la plus simple des quatre moteurs vus jusqu'ici :
+One hundred forty-nine bytes, and the simplest structure of the four engines seen so far:
 
 ```c
 rgb_scroll_step(0xC0);
-teinte = roue[g_scroll_pos];        /* CODE 0x2B2A + pos * 3, ordre (R,G,B) */
-rgb_apply_brightness();             /* une seule fois, hors boucle */
-pour chaque colonne 0..14, chaque ligne 0..5 :
-    si (CODE[0xC500 + col*6 + ligne] != 0xFF)
-        rgb_key_suppressed(...) ; si non supprimee : rgb_pixel_write()
+hue = wheel[g_scroll_pos];          /* CODE 0x2B2A + pos * 3, (R,G,B) order */
+rgb_apply_brightness();             /* only once, outside the loop */
+for each col 0..14, each row 0..5:
+    if (CODE[0xC500 + col*6 + row] != 0xFF)
+        rgb_key_suppressed(...) ; if not suppressed: rgb_pixel_write()
 ```
 
-**La couleur est calculée une fois, avant la boucle** — tout le clavier prend la même teinte, qui
-défile dans la roue. Cet effet **n'interroge jamais `0x011C`** : il ignore le mode de couleur et
-utilise toujours la roue.
+**The color is computed once, before the loop** — the entire keyboard takes on the same hue, which
+cycles through the wheel. This effect **never checks `0x011C`**: it ignores the color mode and
+always uses the wheel.
 
-#### `0x5BE9` — un automate de propagation à quatre directions (effets 4, 7 et 13)
+#### `0x5BE9` — a four-direction propagation automaton (effects 4, 7, and 13)
 
-Deux cent soixante-cinq octets, partagés par trois gestionnaires (`0x1BEF`, `0x1C65`, `0x1D00`).
-Il ne dessine pas une figure : il fait **évoluer un état**, sur **quatre cartes de bits** de quinze
-octets, un octet par colonne, six bits utiles par octet (une ligne par bit).
+Two hundred sixty-five bytes, shared by three handlers (`0x1BEF`, `0x1C65`, `0x1D00`).
+It does not draw a static shape: it **evolves a state** across **four bitmaps** of fifteen
+bytes each, one byte per column, six active bits per byte (one row per bit).
 
-| Base | Sens de propagation | Opération, par trame |
+| Base | Propagation direction | Operation, per frame |
 | --- | --- | --- |
-| `0x0001` | vers la **droite** | `A[0x0F − c] = A[0x0E − c]`, bord remis à zéro |
-| `0x013B` | vers la **gauche** | `B[c − 1] = B[c]`, bord remis à zéro |
-| `0x08C6` | vers le **haut** | `C[c] >>= 1` |
-| `0x02E8` | vers le **bas** | `D[c] <<= 1` |
+| `0x0001` | to the **right** | `A[0x0F − c] = A[0x0E − c]`, edge cleared to zero |
+| `0x013B` | to the **left** | `B[c − 1] = B[c]`, edge cleared to zero |
+| `0x08C6` | **upward** | `C[c] >>= 1` |
+| `0x02E8` | **downward** | `D[c] <<= 1` |
 
-Les bases sont confirmées au désassemblage (`add a,#0xE8 ; addc a,#0x02`, `mov a,#0xC6 ; addc a,#0x08`,
-`mov a,#0x3B ; addc a,#0x01`) — le C seul ne suffisait pas, la correction d'emprunt des `CONCAT11`
-est facile à mal lire.
+The base addresses are confirmed in the disassembly (`add a,#0xE8 ; addc a,#0x02`, `mov a,#0xC6 ; addc a,#0x08`,
+`mov a,#0x3B ; addc a,#0x01`) — the C output alone was not enough, as the borrow adjustment in `CONCAT11`
+is easy to misread.
 
-La trame se déroule en trois phases :
+The frame unfolds in three phases:
 
-1. **Tracer** — union des quatre cartes ; pour chaque bit posé, les tables de position
-   `CODE 0x2DED` et `CODE 0x2F6B` donnent les coordonnées, puis un des chemins de dessin selon un
-   bit d'IDATA : soit `fcn.00005114(1, …)` seul, soit les trois `0x5114(0, …)`, `0xAEB3(0, …)` et
+1. **Draw** — union of the four bitmaps; for each bit set, the position tables
+   `CODE 0x2DED` and `CODE 0x2F6B` yield the coordinates, followed by one of two drawing paths depending on an
+   IDATA bit: either `fcn.00005114(1, …)` alone, or the three calls `0x5114(0, …)`, `0xAEB3(0, …)`, and
    `0x7108(…)`.
-2. **Propager** — les quatre opérations du tableau ci-dessus, plus l'effacement des deux bords
-   (`0x0001` et `0x0149`).
-3. **Recombiner** — `A[c] |= C[c] | D[c]` et `B[c] |= C[c] | D[c]`, ce qui fait repartir les fronts
-   verticaux vers la gauche et la droite : la propagation devient **diagonale**.
+2. **Propagate** — the four operations from the table above, plus clearing the two edges
+   (`0x0001` and `0x0149`).
+3. **Recombine** — `A[c] |= C[c] | D[c]` and `B[c] |= C[c] | D[c]`, which launches the vertical
+   wavefronts back out to the left and right: the propagation becomes **diagonal**.
 
-Si aucun bit n'était posé (`0x0EE7` reste à 1), un drapeau d'IDATA est levé — l'animation signale
-qu'elle est éteinte.
+If no bit was set (`0x0EE7` remains 1), an IDATA flag is raised — the animation signals
+that it has died out.
 
-##### L'effet 13 s'auto-alimente
+##### Effect 13 is self-feeding
 
 ```c
 if (g_palette_effect_idx == 13 && ++[0x08BE] > 5) {
     [0x08BE] = 0;
-    bit = alterne(1, 0x20);                     /* ligne 0 ou ligne 5 */
-    [0x0007] |= bit; [0x0141] |= bit;           /* colonne 6 des quatre cartes */
+    bit = alternate(1, 0x20);                    /* row 0 or row 5 */
+    [0x0007] |= bit; [0x0141] |= bit;            /* column 6 of all four bitmaps */
     [0x02EE] |= bit; [0x08CC] |= bit;
 }
 ```
 
-Toutes les six trames, une graine est injectée **en colonne 6**, alternativement sur la ligne 0 et
-la ligne 5. Les trois autres effets qui partagent ce moteur n'ont pas cette injection : leur graine
-vient d'ailleurs — vraisemblablement d'une frappe. **C'est le moteur des ondes qui se propagent
-depuis les touches**, et l'effet 13 est sa version qui tourne toute seule.
+Every six frames, a seed is injected **at column 6**, alternating between row 0 and
+row 5. The other three effects sharing this engine do not have this injection: their seed
+comes from elsewhere — presumably from a keypress. **This is the engine for ripples propagating
+outward from keys**, and effect 13 is its self-running variant.
 
-> Les quatre `+6` (`0x0007`, `0x0141`, `0x02EE`, `0x08CC`) tombent exactement à `base + 6` pour les
-> quatre bases : c'est le contrôle qui confirme la lecture des bases.
+> The four `+6` addresses (`0x0007`, `0x0141`, `0x02EE`, `0x08CC`) land at `base + 6` for all
+> four bases: a cross-check that confirms the base address readings.
 
-### `0x60C9` et `0x6C9B` — la phase par touche et le dégradé par colonne
+### `0x60C9` and `0x6C9B` — per-key phase and per-column gradient
 
-#### L'outil commun : `fcn.0000EDA2`
+#### The common helper: `fcn.0000EDA2`
 
 ```asm
 0xEDA2  jnb 0x24.3, 0xEDAF
-        inc r5 ; si r5 >= r7 -> r5 = 0          ; sens avant
-0xEDAF  dec r5 ; si debordement -> r5 = r7 - 1  ; sens arriere
+        inc r5 ; if r5 >= r7 -> r5 = 0          ; forward direction
+0xEDAF  dec r5 ; if underflow -> r5 = r7 - 1    ; backward direction
 ```
 
-**Avance une valeur d'un pas, modulo `r7`, dans le sens que donne `0x24.3`.** C'est
-`rgb_scroll_step` appliqué à un octet quelconque au lieu de la position globale — et c'est le même
-bit de direction, donc le réglage utilisateur agit sur les deux.
+**Advances a value by one step, modulo `r7`, in the direction given by `0x24.3`.** It is
+`rgb_scroll_step` applied to an arbitrary byte instead of the global position — and it uses the same
+direction bit, so the user setting affects both.
 
-#### `0x60C9` — chaque touche a sa propre phase (effet d'indice 6)
+#### `0x60C9` — each key has its own phase (effect index 6)
 
-Cinq cent quarante et un octets. Double boucle 15 × 6, et pour chaque touche :
+Five hundred forty-one bytes. A 15 × 6 double loop, and for each key:
 
 ```c
-phase = etat[0x0017 + col*6 + ligne];
-EDA2(phase, mode == 7 ? 0xC0 : 0x60);      /* avance d'un pas, module */
-etat[0x0017 + col*6 + ligne] = phase;
+phase = state[0x0017 + col*6 + row];
+EDA2(phase, mode == 7 ? 0xC0 : 0x60);      /* advance by one step, modulo */
+state[0x0017 + col*6 + row] = phase;
 g_scroll_pos = phase;
-couleur = (mode == 7) ? roue[phase]                     /* modulo 192 */
-                      : palette[fx][mode] puis gain(0x08C3);   /* modulo 96 */
-si position < 15 : rgb_key_suppressed(...) ; sinon rien
-    -> rgb_apply_brightness() ; ecriture par 0x7619
+color = (mode == 7) ? wheel[phase]                     /* modulo 192 */
+                    : palette[fx][mode] then gain(0x08C3);   /* modulo 96 */
+if position < 15: rgb_key_suppressed(...) ; else nothing
+    -> rgb_apply_brightness() ; write via 0x7619
 ```
 
-**Le tableau `0x0017` n'est donc pas « l'intensité » en général** : c'est un octet d'état par
-touche, dont le sens dépend de l'effet. `0x64F1` y range une intensité qui décroît ; `0x60C9` y
-range une phase qui tourne. Le même tableau, deux significations — comme `0x0EE4` plus haut.
+**The array at `0x0017` is therefore not "intensity" in general**: it is a per-key state
+byte whose meaning depends on the effect. `0x64F1` stores a decaying intensity there; `0x60C9`
+stores a rotating phase there. Same array, two meanings — just like `0x0EE4` above.
 
-Résultat visuel : chaque touche parcourt la roue à son propre décalage, et toutes avancent d'un pas
-par trame. Un scintillement, pas un défilement.
+Visual result: each key cycles through the wheel at its own offset, and all of them advance by one step
+per frame. A shimmer, not a scroll.
 
-#### `0x6C9B` — dégradé par colonne (effet d'indice 11)
+#### `0x6C9B` — per-column gradient (effect index 11)
 
-Quatre cent cinquante-quatre octets, deux moitiés quasi identiques selon `0x011C` :
+Four hundred fifty-four bytes, two nearly identical halves selected by `0x011C`:
 
 ```c
-rgb_scroll_step(mode == 7 ? 0xC0 : 0x60);   /* une seule fois */
+rgb_scroll_step(mode == 7 ? 0xC0 : 0x60);   /* once */
 phase = g_scroll_pos;
-pour chaque colonne 0..14 :
-    couleur = (mode == 7) ? roue[phase] : palette[fx][mode] puis gain(phase);
-    phase += (mode == 7) ? 7 : 10;   avec repli sur 0xC0 / 0x60
+for each column 0..14:
+    color = (mode == 7) ? wheel[phase] : palette[fx][mode] then gain(phase);
+    phase += (mode == 7) ? 7 : 10;   wrapping at 0xC0 / 0x60
     rgb_apply_brightness();
-    pour chaque ligne 0..5 : si position < 15 -> 0x5968 puis, si non supprimee, 0x7616
+    for each row 0..5: if position < 15 -> 0x5968 then, if not suppressed, 0x7616
 ```
 
-C'est **la même famille que `0x7C12`** — une couleur par colonne, la phase avançant d'un pas fixe
-d'une colonne à l'autre — avec un pas différent :
+This belongs to **the same family as `0x7C12`** — one color per column, with the phase advancing by a fixed step
+from one column to the next — but with a different step size:
 
-| Effet | Fonction | Pas par colonne | Modulo |
+| Effect | Function | Step per column | Modulo |
 | --- | --- | --- | --- |
 | 2 | `0x7C12` | 11 | 192 |
-| 11 | `0x6C9B` | 7 (roue) / 10 (palette) | 192 / 96 |
+| 11 | `0x6C9B` | 7 (wheel) / 10 (palette) | 192 / 96 |
 
-Sur quinze colonnes : `0x7C12` couvre 165 phases sur 192, `0x6C9B` en couvre 105 — un dégradé plus
-serré, moins d'un tour complet.
+Across fifteen columns: `0x7C12` covers 165 phases out of 192, while `0x6C9B` covers 105 — a tighter
+gradient, less than a full turn.
 
-#### Au passage : l'échelle d'entrées de l'écriture de pixel
+#### By the way: the entry-point ladder of pixel writing
 
-`0x6C9B` n'appelle ni `rgb_key_suppressed` ni `rgb_pixel_write` directement, mais `0x5968` et
-`0x7616`. Ce ne sont pas d'autres routines : ce sont des **points d'entrée plus hauts dans les
-mêmes**.
+`0x6C9B` calls neither `rgb_key_suppressed` nor `rgb_pixel_write` directly, calling `0x5968` and
+`0x7616` instead. These are not separate routines: they are **higher entry points into the
+same functions**.
 
-| Entrée | Ce qu'elle fait avant de tomber dans la suivante |
+| Entry | What it does before falling through to the next |
 | --- | --- |
-| `0x7616` | `mov dptr,#0x0EE4` — prend les coordonnées dans `0x0EE4`/`0x0EE5` |
-| `0x7619` | `movx a,@dptr ; inc dptr` — l'appelant a déjà posé `dptr` |
+| `0x7616` | `mov dptr,#0x0EE4` — reads coordinates from `0x0EE4`/`0x0EE5` |
+| `0x7619` | `movx a,@dptr ; inc dptr` — caller has already set `dptr` |
 | `0x761B` | `mov r7,a ; movx a,@dptr ; mov r5,a` |
-| `0x761E` | charge les trois composantes mises à l'échelle |
-| `0x7631` | ne charge que la troisième |
-| `0x7636` | le corps : bornes, adresse, écriture |
+| `0x761E` | loads all three scaled components |
+| `0x7631` | loads only the third component |
+| `0x7636` | the body: bounds check, address calculation, write |
 
-Chaque appelant entre au niveau qui correspond à ce qu'il a déjà en main. C'est une économie de
-place classique en C51 — et c'est **pourquoi r2 découpe cette zone en une demi-douzaine de
-« fonctions » de deux ou trois octets** : ce sont des étiquettes d'entrée, pas des routines.
-Même explication pour `0x5968`, qui précède `rgb_key_suppressed` et lui prépare la coordonnée lue
-dans `CODE 0x2F6B`.
+Each caller enters at the level matching what it already holds in registers. This is a classic space-saving
+idiom in C51 — and it is **why r2 slices this area into half a dozen two- or three-byte
+"functions"**: they are entry labels, not separate routines.
+The same explanation applies to `0x5968`, which precedes `rgb_key_suppressed` and prepares the coordinate read
+from `CODE 0x2F6B` for it.
 
-#### Et la roue, encore
+#### And the wheel, again
 
-`0x60C9` et `0x6C9B` lisent tous deux `+0` → `0x011D`, donc **(R, G, B)** — vérifié en `0x6CC3`.
-Cela fait **cinq** moteurs en `(R,G,B)` contre **un seul**, `0x7C12`, en `(B,G,R)`. L'hypothèse de
-l'étourderie du firmware prend nettement le dessus sur celle de l'arc-en-ciel volontairement
-inversé.
+`0x60C9` and `0x6C9B` both read `+0` → `0x011D`, i.e. **(R, G, B)** — verified at `0x6CC3`.
+That makes **five** engines using `(R,G,B)` against **a single one**, `0x7C12`, using `(B,G,R)`. The hypothesis of
+a firmware oversight clearly wins out over that of an intentionally reversed
+rainbow.
 
-> **Ce point ne se tranchera jamais sur le dump, et on peut maintenant dire pourquoi.** Les 192
-> triplets de `0x2B2A` ont été extraits et lus : le premier canal part à 255 pendant que le
-> deuxième monte, puis le premier retombe, puis le troisième monte, etc. — un cercle de teintes
-> parfaitement régulier, avec des rampes non linéaires (1, 3, 5, 7, 10, 14, 18, 22, 26, 32, 38,
-> 44…), donc perceptuelles.
+> **This point will never be settled from the dump alone, and we can now explain why.** All 192
+> triplets at `0x2B2A` have been extracted and inspected: the first channel starts at 255 while the
+> second ramps up, then the first ramps down, then the third ramps up, and so on — a perfectly regular
+> hue circle, with non-linear ramps (1, 3, 5, 7, 10, 14, 18, 22, 26, 32, 38,
+> 44…), i.e. perceptually weighted.
 >
-> Or **une roue de teintes est symétrique par échange des canaux extrêmes**. Lue en `(R,G,B)` la
-> table parcourt rouge → jaune → vert → cyan → bleu → magenta ; lue en `(B,G,R)` elle parcourt
-> exactement le même cercle dans l'autre sens. Les deux sont des roues valides et **aucune
-> structure des données ne les distingue** : ce n'est pas un manque d'information sur cette table,
-> c'est une propriété de l'objet.
+> However, **a hue wheel is symmetric under swapping the outer channels**. Read as `(R,G,B)`, the
+> table traverses red → yellow → green → cyan → blue → magenta; read as `(B,G,R)`, it traverses
+> the exact same circle in the opposite direction. Both are valid hue wheels and **no structural
+> property of the data distinguishes them**: this is not a lack of information about this table,
+> it is an intrinsic property of the mathematical object.
 >
-> La question n'est donc pas « quelles couleurs » mais « dans quel sens tourne l'arc-en-ciel », et
-> le coût de se tromper se limite au sens de rotation. Le portage retient `(R,G,B)`, ce que font
-> cinq des six moteurs.
+> The question is therefore not "which colors" but "which way the rainbow rotates", and
+> the cost of getting it wrong is limited to the direction of rotation. The port adopts `(R,G,B)`, matching
+> five of the six engines.
 >
-> **Un second argument, faible mais indépendant, va dans le même sens.** La palette de couleurs
-> fixes de `CODE 0xC800` est lue par les mêmes moteurs, dans le même format, et vaut
-> `ff 00 00 · 00 ff 00 · 00 00 ff · ff ff 00 · ff 00 ff · 00 ff ff · ff ff ff`. Le *jeu* de sept
-> couleurs est lui aussi symétrique par échange R↔B — il ne tranche pas non plus. Mais leur
-> **ordre** parle : lu en `(R,G,B)` c'est rouge, vert, bleu, puis les trois mélanges deux à deux,
-> puis le blanc — l'énumération canonique. Lu en `(B,G,R)` la même table donne bleu, vert, rouge,
-> cyan, magenta, jaune, blanc : un ordre que personne n'écrit spontanément. C'est une convention,
-> pas une preuve ; elle ne fait qu'ajouter son poids au vote des moteurs.
+> **A second, weaker but independent argument points the same way.** The fixed-color
+> palette at `CODE 0xC800` is read by the same engines, in the same format, and contains
+> `ff 00 00 · 00 ff 00 · 00 00 ff · ff ff 00 · ff 00 ff · 00 ff ff · ff ff ff`. The *set* of seven
+> colors is also symmetric under R↔B swap — so that alone does not settle it either. But their
+> **order** speaks: read as `(R,G,B)` it is red, green, blue, then the three pairwise secondary colors,
+> then white — the canonical enumeration. Read as `(B,G,R)`, the same table gives blue, green, red,
+> cyan, magenta, yellow, white: an order nobody writes spontaneously. That is a convention,
+> not a proof; it merely adds its weight to the engines' vote.
 
-#### Le choix de couleur — les huit modes, portés
+#### Color selection — all eight modes, ported
 
-Le rendu d'usine ne passe pas systématiquement par la roue. Chaque effet porte un **mode de couleur**
-sur quatre bits, `b1[3:0]`, verrouillé en `XRAM 0x0897`, et les moteurs se lisent d'une ligne
-(`0x60C9`, `0x6C9B`) :
+The factory renderer does not always go through the hue wheel. Each effect carries a 4-bit **color mode**,
+`b1[3:0]`, latched into `XRAM 0x0897`, and the engines can be summed up in a single line
+(`0x60C9`, `0x6C9B`):
 
 ```c
-couleur = (mode == 7) ? roue[phase] : palette[effet][mode];
+color = (mode == 7) ? wheel[phase] : palette[effect][mode];
 ```
 
-- **modes 0 à 6** — les sept couleurs fixes de `CODE 0xC800`, vingt-et-un octets par effet. Fait
-  notable : **les dix-huit effets portent exactement les mêmes vingt-et-un octets**. L'indexation
-  par effet existe dans le format et ne sert à rien ; une seule table de sept suffit.
-- **mode 7** — l'arc-en-ciel, le seul qui lise la roue de teintes.
+- **modes 0 to 6** — the seven fixed colors at `CODE 0xC800`, twenty-one bytes per effect. Notable
+  fact: **all eighteen effects carry the exact same twenty-one bytes**. Indexing
+  by effect exists in the data format but serves no purpose; a single seven-color table suffices.
+- **mode 7** — rainbow, the only mode that reads the hue wheel.
 
-Le portage ne rendait que le mode 7. Les huit y sont désormais, sous le keycode `CLR_NEXT`. Le mode
-vit dans `user_settings.ul_effect`, l'octet que la structure partagée réserve à l'éclairage
-d'ambiance — que ce clavier n'a pas : le réemployer évite d'allonger `user_settings_t`, ce qui ferait
-retomber **tous** les réglages enregistrés aux valeurs par défaut au premier démarrage, `nvm.c`
-comparant la longueur du bloc.
+Previously, the port only rendered mode 7. All eight modes are now supported under the `CLR_NEXT` keycode. The mode
+lives in `user_settings.ul_effect`, the byte reserved in the shared struct for underglow
+lighting — which this keyboard lacks: reusing it avoids growing `user_settings_t`, which would
+reset **all** saved settings back to defaults on first boot since `nvm.c`
+checks the struct length.
 
-Conséquence directe : `FX_SOLID` ne rend plus un blanc écrit en dur — invention désormais retirée —
-mais la couleur choisie, la roue à la phase courante en arc-en-ciel. Le blanc reste accessible, c'est
-le mode 6.
+Direct consequence: `FX_SOLID` no longer renders a hardcoded white — an invention now removed —
+but the selected color, or the hue wheel at the current phase in rainbow mode. White remains available as
+mode 6.
 
-#### Les trois tables de couleur, vérifiées octet par octet
+#### The three color tables, verified byte for byte
 
-| Table | Adresse | Taille | Rôle |
+| Table | Address | Size | Role |
 | --- | --- | --- | --- |
-| roue de teintes | `CODE 0x2B2A` | 192 × 3 = 576 o | l'arc-en-ciel, mode 7 |
-| seconde roue | `CODE 0x2D6D` | 128 × 3 = 384 o | la vague par touche (effet 15) |
-| couleurs fixes | `CODE 0xC800` | 7 × 3 = 21 o | les modes 0 à 6 |
+| hue wheel | `CODE 0x2B2A` | 192 × 3 = 576 B | rainbow, mode 7 |
+| second wheel | `CODE 0x2D6D` | 128 × 3 = 384 B | per-key wave (effect 15) |
+| fixed colors | `CODE 0xC800` | 7 × 3 = 21 B | modes 0 to 6 |
 
-Les trois sont recopiées **telles quelles** dans le portage, et la comparaison octet par octet avec
-`assets/f75_full_jtag.bin` passe pour les trois. La seconde roue se referme d'elle-même :
-`0x2D6D + 384 = 0x2EED`, exactement la base de la table A du champ de phase — deux relevés
-indépendants qui se touchent sans recouvrement ni trou.
+All three are copied **verbatim** into the port, and a byte-for-byte comparison against
+`assets/f75_full_jtag.bin` passes for all three. The second wheel closes the gap cleanly:
+`0x2D6D + 384 = 0x2EED`, the exact base address of table A of the phase field — two independent
+findings that meet with neither overlap nor gap.
 
-##### `CODE 0x2D6D` n'a qu'un seul lecteur
+##### `CODE 0x2D6D` has only a single reader
 
-Une recherche du motif d'adressage calculé sur l'image entière — `add a,#0x6D` suivi de
-`addc a,#0x2D`, la seule façon d'atteindre cette base — trouve **un site et un seul : `0x8325`**,
-dans le moteur de la vague `0x82A5`. Le portage l'utilise au même endroit, et à aucun autre. Ce
-n'est donc pas une palette générale mais **la roue propre à un effet**.
+Searching the entire image for the computed-addressing pattern — `add a,#0x6D` followed by
+`addc a,#0x2D`, the only way to reach this base — finds **one and only one site: `0x8325`**,
+inside the wave engine `0x82A5`. The port uses it in the exact same place and nowhere else. It
+is therefore not a general-purpose palette, but **the dedicated wheel for a single effect**.
 
-Le moteur confirme la taille par une seconde voie : il avance la phase par touche avec
-`0xEDA2(phase, 0x80)` — **modulo 128**, exactement le nombre d'entrées de la table. Le portage
-replie avec `& 127`.
+The engine confirms the size a second way: it advances the per-key phase via
+`0xEDA2(phase, 0x80)` — **modulo 128**, the exact number of entries in the table. The port
+wraps with `& 127`.
 
-Et les trois octets qui séparent les deux roues, `CODE 0x2D6A` = `ff ff ff`, ne sont lus par
-personne : `0x2B2A + 192 × 3 = 0x2D6A`, `0x2D6A + 3 = 0x2D6D`. Un blanc isolé entre les deux tables,
-qu'aucun index modulo 192 ne peut atteindre.
+And the three bytes separating the two wheels, `CODE 0x2D6A` = `ff ff ff`, are read by
+no one: `0x2B2A + 192 × 3 = 0x2D6A`, `0x2D6A + 3 = 0x2D6D`. An isolated white triplet between the two tables
+that no modulo-192 index can ever reach.
 
-##### Les tables `0x2EED` et `0x2F6B` — la carte spatiale
+##### Tables `0x2EED` and `0x2F6B` — the spatial map
 
-Les deux tables font six lignes de vingt-et-une colonnes, indexées `ligne × 21 + colonne`, et le
-moteur de la vague les lit ainsi : sa boucle parcourt la colonne de 0 à 14, calcule l'effet sur cet
-index, puis **écrit le pixel à la colonne `A[ligne][colonne]` et à la ligne `B[ligne][colonne]`**.
-Elles mappent donc la position de BOUCLE vers la position de SORTIE.
+Both tables consist of six rows of twenty-one columns, indexed as `row × 21 + col`, and the
+wave engine reads them as follows: its loop iterates `col` from 0 to 14, computes the effect on that
+index, and then **writes the pixel at column `A[row][col]` and row `B[row][col]`**.
+They therefore map the LOOP position to the OUTPUT position.
 
-Extraites du dump, elles sont d'une simplicité inattendue :
+Extracted from the dump, they are unexpectedly simple:
 
 ```
 table A, CODE 0x2EED
-  l0 :  0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19 20
-  l1 :  idem
-  l2 :  idem
-  l3 :  idem
-  l4 :  0 12  1  2  3  4  5  6  7  8  9 10 11 13 14 15 16 17 18 19 20   <<<
-  l5 :  idem
+  r0 :  0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19 20
+  r1 :  same
+  r2 :  same
+  r3 :  same
+  r4 :  0 12  1  2  3  4  5  6  7  8  9 10 11 13 14 15 16 17 18 19 20   <<<
+  r5 :  same
 
 table B, CODE 0x2F6B
-  l0 : vingt-et-un zéros ... l5 : vingt-et-un cinq
+  r0 : twenty-one zeros ... r5 : twenty-one fives
 ```
 
-- **`B` est exactement l'index de ligne** : `B[ligne × 21 + colonne] == ligne` sur les 126
-  positions, vérifié. Elle ne transforme rien.
-- **`A` est l'identité sur cinq lignes**, et **la ligne 4 permute** : la position de boucle 1 sort
-  sur la colonne **12**, et les positions 2 à 12 sortent sur les colonnes 1 à 11.
-- **Exactement 90 des 126 entrées de `A` sont inférieures à 15** — les six lignes de quinze
-  colonnes de la matrice. Les six colonnes de 15 à 20 sont du remplissage, et le test `< 15` du
-  moteur est là pour elles ; la boucle s'arrêtant à 14, il ne se déclenche jamais dans ce firmware.
+- **`B` is simply the row index**: `B[row × 21 + col] == row` across all 126
+  positions, verified. It transforms nothing.
+- **`A` is the identity on five rows**, while **row 4 permutes**: loop position 1 outputs
+  to column **12**, and loop positions 2 through 12 output to columns 1 through 11.
+- **Exactly 90 of the 126 entries in `A` are less than 15** — the six rows of fifteen
+  columns of the matrix. The six columns from 15 to 20 are padding, and the `< 15` check in the
+  engine is there for them; since the loop stops at 14, it never triggers in this firmware.
 
-La colonne 12 de la ligne 4, placée spatialement entre les colonnes 0 et 1, est **la place de la
-touche supplémentaire des dispositions ISO** — celle qui suit la touche Maj gauche. La carte la
-réserve même quand la disposition compilée ne la porte pas.
+Column 12 of row 4, placed spatially between columns 0 and 1, is **the slot for the
+extra key on ISO layouts** — the one next to Left Shift. The map reserves space for it
+even when the compiled layout does not populate it.
 
-> **Deux tables d'usine, deux espaces différents.** `CODE 0xC500` porte aussi une permutation sur sa
-> ligne 4, et ce n'est pas la même. Ce n'est pas une contradiction : `0xC500` convertit un **index de
-> balayage** en identifiant de touche pour les arms d'appui, tandis que `0x2EED` convertit une
-> **position de boucle de rendu** en colonne de sortie. Deux conversions, deux usages, aucune raison
-> qu'elles coïncident.
+> **Two factory tables, two different spaces.** `CODE 0xC500` also has a permutation on its
+> row 4, and it is not the same one. This is not a contradiction: `0xC500` converts a **scan
+> index** into a key identifier for keypress handlers, whereas `0x2EED` converts a
+> **render loop position** into an output column. Two conversions, two uses, no reason
+> for them to coincide.
 
-##### Ce que le portage en fait
+##### What the port does with it
 
-La géométrie que `utils/led_geometry_gen` produit pour ce clavier suppose une grille **uniforme** :
+The geometry generated by `utils/led_geometry_gen` for this keyboard assumes a **uniform** grid:
 
 ```c
 static const __code uint8_t axis_x[15] = {0, 17, 34, 51, 68, 85, 102, 119, 136, 153, 170, 187, 204, 221, 238};
 ```
 
-— c'est-à-dire colonne électrique = colonne spatiale. La table A dit que c'est faux sur la ligne 4.
+— meaning electrical column = spatial column. Table A shows that this is false on row 4.
 
-Le portage itérant sur la colonne de **sortie**, il lui faut l'**inverse** de la table A. Il est
-transcrit dans `aula_fx_render_col()`, construit mécaniquement et vérifié dans les deux sens contre
-le dump, et il alimente désormais `led_effect_index()` pour les trois effets géométriques de SMK —
-radiale, dégradé horizontal, dégradé vertical. Sans lui, une touche de la ligne 4 était peinte au
-mauvais endroit.
+Because the port iterates over the **output** column, it needs the **inverse** of table A. That inverse is
+transcribed into `aula_fx_render_col()`, constructed mechanically and verified in both directions against
+the dump, and it now feeds `led_effect_index()` for SMK's three geometric effects —
+radial, horizontal gradient, and vertical gradient. Without it, a key on row 4 was painted in the
+wrong place.
 
-**La table B n'est pas transcrite**, et c'est un résultat, pas un raccourci : recopier 126 octets
-dont on a vérifié qu'ils valent l'index de ligne serait de la donnée morte. La ligne passe telle
-quelle.
+**Table B is not transcribed**, and that is a finding, not a shortcut: copying 126 bytes
+that have been verified to equal the row index would be dead data. The row is passed through
+as-is.
 
-##### Résolu : `0xC500` EST l'inverse de la table A
+##### Resolved: `0xC500` IS the inverse of table A
 
-La réserve notée plus haut — « deux tables d'usine, deux espaces » — tombe. `CODE 0xC500` n'a pas
-90 entrées mais **126**, et sa borne se lit dans le code : la file de touches en `XRAM 0x039F` ne
-retient une entrée que si elle est **inférieure à 126** (`0x1670`), avant de la ranger dans
-`[0x0EE0]` et de poser `[0x0EE1] = 0`. Le portage n'en avait recopié que les 90 premières.
+The caveat noted above — "two factory tables, two spaces" — falls away. `CODE 0xC500` does not have
+90 entries, but **126**, and its bound can be read directly in the code: the key queue at `XRAM 0x039F` only
+accepts an entry if it is **less than 126** (`0x1670`), before storing it in
+`[0x0EE0]` and setting `[0x0EE1] = 0`. The port had only copied the first 90 entries.
 
-Relue sur ses 126 entrées, indexée `colonne × 6 + ligne`, la table décrit **vingt-et-une colonnes** —
-la même largeur que les tables A et B — et va jusqu'à l'identifiant `0xA4`, colonne 20 :
+When read across all 126 entries, indexed as `col × 6 + row`, the table describes **twenty-one columns** —
+the exact same width as tables A and B — and goes up to key ID `0xA4` at column 20:
 
 ```
 c 0: 00 01 02 03 04 05        c14: 70 71 72 73 74 75
-c 1: .. 09 0a 0b 14 0d        c15: 78 79 7a 7b 7c 7d   <<< au-dela de ce clavier
+c 1: .. 09 0a 0b 14 0d        c15: 78 79 7a 7b 7c 7d   <<< beyond this keyboard
 c 2: 10 11 12 13 1c 15        c16: 80 81 82 83 84 85
 ...                           c20: .. a1 a2 .. a4 ..
 ```
 
-**Ce clavier n'a que quinze colonnes** ; les six suivantes appartiennent à un modèle plus large de la
-même famille. C'est exactement ce que teste le `< 15` du moteur de rendu — un garde qui, la boucle
-s'arrêtant à 14, ne se déclenche jamais ici.
+**This keyboard only has fifteen columns**; the next six belong to a wider model from the
+same family. That is exactly what the `< 15` check in the rendering engine tests — a guard which, because the loop
+stops at 14, never triggers here.
 
-Et sur les quinze colonnes utiles, la vérification est sans appel :
+And across the fifteen active columns, the verification is conclusive:
 
-| Vérification | Résultat |
+| Check | Result |
 | --- | --- |
-| `id >> 3` contre l'inverse de la table A | **identique** sur les 90 positions |
-| `id & 7` contre la ligne elle-même | **identique** — le même résultat que la table B |
-| identifiants présents | **84, tous distincts** : une bijection sur les touches réelles |
-| masque de présence par index vs par identifiant | **identique** — la permutation ne déplace jamais une absence |
+| `id >> 3` against the inverse of table A | **identical** across all 90 positions |
+| `id & 7` against the row itself | **identical** — the same result as table B |
+| present IDs | **84, all distinct**: a bijection onto the physical keys |
+| presence mask by index vs. by ID | **identical** — the permutation never moves a missing key |
 
-`0xC500` et `0x2EED` ne sont donc pas deux cartes rivales, ce sont **une carte et son inverse** :
-`0xC500` va de la colonne électrique vers la colonne spatiale, `0x2EED` fait le chemin retour.
+`0xC500` and `0x2EED` are therefore not two competing maps; they are **a map and its inverse**:
+`0xC500` maps from electrical column to spatial column, and `0x2EED` maps the way back.
 
-#### Le champ de phase `0x9FEA`, et ses deux frères
+#### The phase field `0x9FEA`, and its two siblings
 
-##### `0x9FEA` — vérifié, et son transposeur décodé
+##### `0x9FEA` — verified, and its transposer decoded
 
-Le transposeur `0xACA3` se lit instruction par instruction, et il fixe les deux dispositions sans
-ambiguïté :
+The transposer at `0xACA3` can be read instruction by instruction, unambiguously fixing both layouts:
 
 ```asm
 0xACA3  r7 = 0 ; r6 = 0
 0xACA7  a = r6 ; b = 21 ; mul ab ; dptr = 0x0E49 + r6*21 ; dptr += r7
-0xACBF  r5 = [dptr]                          ; source : ligne*21 + colonne
+0xACBF  r5 = [dptr]                          ; source: row*21 + col
 0xACC1  a = r7 ; b = 6 ; mul ab ; dptr = 0x0017 + r7*6 ; dptr += r6
-0xACD9  [dptr] = r5                          ; destination : colonne*6 + ligne
-0xACDB  inc r6 ; cjne r6,#6  -> boucle       ; r6 est la LIGNE, 0..5
-0xACE0  inc r7 ; cjne r7,#21 -> boucle       ; r7 est la COLONNE, 0..20
+0xACD9  [dptr] = r5                          ; destination: col*6 + row
+0xACDB  inc r6 ; cjne r6,#6  -> loop         ; r6 is the ROW, 0..5
+0xACE0  inc r7 ; cjne r7,#21 -> loop         ; r7 is the COLUMN, 0..20
 ```
 
-Donc **`CODE 0x9FEA` est rangé `ligne × 21 + colonne`** et le plan `0x0017` l'est en
-`colonne × 6 + ligne` : le transposeur fait exactement ce que son nom dit. Le portage transpose à la
-compilation, et ses 90 valeurs sont **identiques octet pour octet** à
-`CODE[0x9FEA + ligne × 21 + colonne]` pour les quinze colonnes utiles.
+Thus **`CODE 0x9FEA` is laid out as `row × 21 + col`** and the plane at `0x0017` is laid out as
+`col × 6 + row`: the transposer does literally what its name says. The port transposes at
+compile time, and its 90 values are **byte-for-byte identical** to
+`CODE[0x9FEA + row × 21 + col]` across the fifteen active columns.
 
-L'enregistrement Keil est auto-validant : son en-tête est `7e 0e 49` — **126 octets vers `0x0E49`** —
-et le terminateur `0x00` de la table tombe exactement en `0xA068`, soit `0x9FEA + 126`. Aucune place
-pour un décalage.
+The Keil init record is self-validating: its header is `7e 0e 49` — **126 bytes to `0x0E49`** —
+and the `0x00` terminator of the table lands at `0xA068`, which is `0x9FEA + 126`. Zero room
+for an offset error.
 
-##### Deux frères, et le semeur qui choisit entre eux
+##### Two siblings, and the seeder that chooses between them
 
-`0x9FEA` n'est pas le seul champ de phase. Le semeur de l'effet d'usine **6** — le scintillement
-`0x60C9` — est `0xA791`, et il charge le plan `0x0017` depuis **l'une de deux tables, selon le mode
-de couleur** `[0x011C]` :
+`0x9FEA` is not the only phase field. The seeder for factory effect **6** — the shimmer
+at `0x60C9` — is `0xA791`, and it loads the `0x0017` plane from **one of two tables, depending on the
+color mode** `[0x011C]`:
 
 ```asm
 0xA795  a = [0x011C] ; cjne a,#7 -> 0xA7AA
-0xA79C  dptr = 0x2A2E + colonne*6 + ligne     ; mode 7 : arc-en-ciel
-0xA7AA  dptr = 0x2AAC + colonne*6 + ligne     ; modes 0-6 : couleur fixe
-0xA7DD  [0x0017 + colonne*6 + ligne] = valeur ; PAS de transposition ici
+0xA79C  dptr = 0x2A2E + col*6 + row          ; mode 7: rainbow
+0xA7AA  dptr = 0x2AAC + col*6 + row          ; modes 0-6: fixed color
+0xA7DD  [0x0017 + col*6 + row] = value       ; NO transposition here
 ```
 
-Les deux font 126 octets et sont **déjà dans la disposition de destination** — contrairement à
-`0x9FEA`, elles n'ont pas besoin du transposeur.
+Both tables are 126 bytes long and are **already in the destination layout** — unlike
+`0x9FEA`, they do not need the transposer.
 
-**Et leurs plages valident les modules que cette page avait relevés séparément :**
+**And their value ranges validate the moduli that this page had identified separately:**
 
-| Table | Mode | Valeurs | Module appliqué par le moteur |
+| Table | Mode | Values | Modulus applied by the engine |
 | --- | --- | --- | --- |
-| `CODE 0x2A2E` | 7, arc-en-ciel | 1 → **191** | `0xC0` = 192 — soit **max + 1** |
-| `CODE 0x2AAC` | 0 à 6, fixe | 0 → **95** | `0x60` = 96 — soit **max + 1** |
+| `CODE 0x2A2E` | 7, rainbow | 1 → **191** | `0xC0` = 192 — i.e. **max + 1** |
+| `CODE 0x2AAC` | 0 to 6, fixed | 0 → **95** | `0x60` = 96 — i.e. **max + 1** |
 
-Le semeur choisit donc la table dont la plage est exactement celle du module que le moteur va
-appliquer. Deux relevés indépendants — le `0xEDA2(phase, 0xC0 / 0x60)` du moteur et le contenu des
-tables — qui se referment l'un sur l'autre.
+The seeder thus picks the table whose range matches the exact modulus that the engine will
+apply. Two independent findings — the engine's `0xEDA2(phase, 0xC0 / 0x60)` call and the contents of the
+tables — close the loop on each other.
 
-**Leur forme est un chevron.** Les lignes 0 à 2 partagent une rampe, les lignes 3 à 5 la rampe
-miroir :
+**Their shape is a chevron.** Rows 0 to 2 share one ramp, and rows 3 to 5 share the mirrored
+ramp:
 
 ```
-0x2A2E   l0-l2 :   1   6  11  16  21 ...  99      (+5 par colonne)
-         l3-l5 : 191 190 188 185 180 ... 103      (-5 par colonne)
+0x2A2E   r0-r2 :   1   6  11  16  21 ...  99      (+5 per column)
+         r3-r5 : 191 190 188 185 180 ... 103      (-5 per column)
 
-0x2AAC   l0-l2 :   0   7  14  21  28 ...  95      (+7 par colonne)
-         l3-l5 :  84  77  70  63  56 ...          (-7 par colonne)
+0x2AAC   r0-r2 :   0   7  14  21  28 ...  95      (+7 per column)
+         r3-r5 :  84  77  70  63  56 ...          (-7 per column)
 ```
 
-À noter : `0x2A2E` balaie les vingt-et-une colonnes d'un seul chevron — ses deux moitiés se
-rejoignent vers 99 et 103 à la colonne 20. `0x2AAC`, elle, **redémarre à zéro à la colonne 15** sur
-sa moitié haute tandis que sa moitié basse poursuit sa descente. Constaté, pas expliqué.
+Note: `0x2A2E` sweeps all twenty-one columns in a single chevron — its two halves
+meet around 99 and 103 at column 20. `0x2AAC`, by contrast, **restarts at zero at column 15** on
+its upper half while its lower half continues descending. Observed, not explained.
 
-##### Le bloc de données est parfaitement contigu
+##### The data block is completely contiguous
 
-Les huit tables de cette région s'enchaînent sans un octet de jeu ni de recouvrement :
+The eight tables in this region follow one another without a single byte of padding or overlap:
 
-| Adresse | Taille | Contenu | Fin |
+| Address | Size | Contents | End |
 | --- | --- | --- | --- |
-| `0x2A2E` | 126 | champ de phase effet 6, mode 7 | `0x2AAC` |
-| `0x2AAC` | 126 | champ de phase effet 6, couleur fixe | `0x2B2A` |
-| `0x2B2A` | 576 | roue de teintes, 192 × 3 | `0x2D6A` |
-| `0x2D6A` | 3 | le blanc isolé, lu par personne | `0x2D6D` |
-| `0x2D6D` | 384 | seconde roue, 128 × 3 | `0x2EED` |
+| `0x2A2E` | 126 | effect 6 phase field, mode 7 | `0x2AAC` |
+| `0x2AAC` | 126 | effect 6 phase field, fixed color | `0x2B2A` |
+| `0x2B2A` | 576 | hue wheel, 192 × 3 | `0x2D6A` |
+| `0x2D6A` | 3 | isolated white triplet, read by no one | `0x2D6D` |
+| `0x2D6D` | 384 | second wheel, 128 × 3 | `0x2EED` |
 | `0x2EED` | 126 | table A | `0x2F6B` |
 | `0x2F6B` | 126 | table B | `0x2FE9` |
-| `0x2FE9` | 75 | périodes, 15 × 5 | `0x3034` |
+| `0x2FE9` | 75 | periods, 15 × 5 | `0x3034` |
 
-Chaque borne tombe exactement sur la suivante. C'est la validation croisée la plus forte de tout ce
-chapitre : huit tailles déduites séparément, aucune ne déborde, aucune ne laisse de trou.
+Every boundary lands squarely on the next. This is the strongest cross-validation in this entire
+chapter: eight sizes deduced independently, none overflowing, none leaving a gap.
 
-##### L'effet d'usine 6 est porté — `AULA_FX_SHIMMER`
+##### Factory effect 6 is ported — `AULA_FX_SHIMMER`
 
-Les deux frères sont désormais dans le portage, avec leur moteur. Le moteur `0x60C9` a été décodé
-instruction par instruction :
+Both sibling tables are now in the port, along with their engine. The engine at `0x60C9` was decoded
+instruction by instruction:
 
 ```asm
-0x60DE  a = [0x011C] ; cjne a,#7 -> 0x6191        ; aiguillage sur le mode de couleur
-; -- branche arc-en-ciel --
-0x6105  r5 = [0x0017 + colonne*6 + ligne]          ; la phase de CETTE touche
-0x6107  r7 = 0xC0 ; lcall 0xEDA2                   ; avance, module 192
-0x6150  dptr = 0x2B2A + phase*3                    ; la roue de teintes
-; -- branche couleur fixe --
-0x61B3  r7 = 0x60 ; lcall 0xEDA2                   ; avance, module 96
-0x61FD  dptr = 0xC800 + effet*21 + mode*3          ; la couleur fixe
-0x626A  dptr = 0x08C3 ; lcall 0xA177               ; gain de respiration
+0x60DE  a = [0x011C] ; cjne a,#7 -> 0x6191        ; branch on color mode
+; -- rainbow branch --
+0x6105  r5 = [0x0017 + col*6 + row]               ; THIS key's phase
+0x6107  r7 = 0xC0 ; lcall 0xEDA2                   ; advance, modulo 192
+0x6150  dptr = 0x2B2A + phase*3                    ; hue wheel
+; -- fixed-color branch --
+0x61B3  r7 = 0x60 ; lcall 0xEDA2                   ; advance, modulo 96
+0x61FD  dptr = 0xC800 + effect*21 + mode*3         ; fixed color
+0x626A  dptr = 0x08C3 ; lcall 0xA177               ; breathing gain
 ```
 
-**`0xEDA2` porte une découverte** : ce n'est pas un simple incrément. Il teste le bit `0x23` —
-celui-là même que `0x1166` alimente depuis `b0[7]` de l'enregistrement par effet — et **décrémente**
-quand il est posé. C'est le **sens de défilement**.
+**`0xEDA2` holds a discovery**: it is not a simple increment. It tests bit `0x23` —
+the very bit populated by `0x1166` from `b0[7]` of the per-effect record — and **decrements**
+when that bit is set. It is the **scroll direction**.
 
-##### Le bit `0x23` — deux sources, trois consommateurs, et il est porté
+##### Bit `0x23` — two sources, three consumers, and now ported
 
-Une recherche exhaustive sur l'image donne **six sites**, et pas un de plus :
+An exhaustive search across the image yields **six sites**, and not one more:
 
-| Site | Rôle |
+| Site | Role |
 | --- | --- |
-| `0x1121` | `a = [0x0315] ; rlc a ; mov 0x23,c` — **source globale**, bit 7 du réglage persisté |
-| `0x1172` | même motif sur `0x0345 + effet*2` — **source par effet**, `b0[7]` |
-| `0x7474` | `clr 0x23` — l'onde concentrique **force le sens avant** |
-| `0xEF8A` | `clr 0x23` — le semeur `0xEF85` l'efface aussi |
-| `0xEDA2` | avance de la phase par touche : décrémente si posé, rebouclant sur `module - 1` |
-| `0xA3F4` | `rgb_scroll_step` : avance la position globale `[0x08C3]` d'un pas **par effet** (20 pour l'effet 10, 2 pour le 0x11, 1 sinon), en avant ou en arrière |
-| `0x5C98` | l'automate à quatre directions : deux sous-routines différentes selon le sens |
+| `0x1121` | `a = [0x0315] ; rlc a ; mov 0x23,c` — **global source**, bit 7 of the persisted setting |
+| `0x1172` | same pattern on `0x0345 + effect*2` — **per-effect source**, `b0[7]` |
+| `0x7474` | `clr 0x23` — the concentric wave **forces forward direction** |
+| `0xEF8A` | `clr 0x23` — the seeder `0xEF85` also clears it |
+| `0xEDA2` | per-key phase advance: decrements if set, wrapping to `modulus - 1` |
+| `0xA3F4` | `rgb_scroll_step`: advances the global position `[0x08C3]` by a **per-effect** step (20 for effect 10, 2 for `0x11`, 1 otherwise), forward or backward |
+| `0x5C98` | four-direction automaton: two different subroutines depending on direction |
 
-Et `[0x0315]` se lit entièrement : **bits 3-0 le mode de couleur** (`0x1138` en extrait `& 0x0F` vers
-`[0x011C]`), **bit 7 le sens**. Le champ « sens » de la table des réglages trouve ainsi son
-consommateur, et `b0[7]` — longtemps « bit sans lecteur » — en trouve un second.
+And `[0x0315]` can now be read in full: **bits 3–0 are the color mode** (`0x1138` extracts `& 0x0F` into
+`[0x011C]`), **bit 7 is the direction**. The "direction" field of the settings table thus finds its
+consumer, and `b0[7]` — long noted as a "bit with no reader" — finds a second one.
 
-Le portage l'expose désormais sous le keycode `DIR_TOG`, globalement comme `[0x0315]`, rangé dans
-`user_settings.ul_brightness` — même raison que pour le mode de couleur : un octet que la structure
-partagée réserve à l'éclairage d'ambiance, que ce clavier n'a pas.
+The port now exposes it under the `DIR_TOG` keycode, globally like `[0x0315]`, stored in
+`user_settings.ul_brightness` — for the same reason as the color mode: a byte that the shared
+struct reserves for underglow lighting, which this keyboard does not have.
 
-##### Un défaut trouvé en portant le sens : la couture de `led_phase`
+##### A bug found while porting direction: the `led_phase` seam
 
-`led_phase` est un **octet** : il reboucle à 256. Les consommateurs dont le module divise 256 ne le
-voient pas — la vague replie à 128, la géométrie de SMK travaille sur 0-255. Mais l'arc-en-ciel
-vertical replie à **192** et le scintillement à 192 ou 96, et `256 % 192 = 64` : **à chaque
-rebouclage, leur teinte sautait d'un tiers de roue**. À la vitesse la plus lente, un saut visible
-toutes les dix secondes.
+`led_phase` is a **single byte**: it wraps at 256. Consumers whose modulus divides 256 never
+notice it — the wave wraps at 128, and SMK's geometry operates on 0–255. But the vertical
+rainbow wraps at **192** and the shimmer at 192 or 96, and `256 % 192 = 64`: **on every
+wrap-around, their hue jumped by a third of the wheel**. At the slowest speed, a visible jump
+every ten seconds.
 
-Le firmware d'usine n'a pas ce défaut parce qu'il range la phase **par touche** et l'incrémente
-directement modulo 192 ou 96 — il n'a pas de compteur de trames sur huit bits.
+The factory firmware does not suffer from this bug because it stores the phase **per key** and increments it
+directly modulo 192 or 96 — it has no 8-bit frame counter.
 
-Un second compteur, `fx_phase192`, replié à 192 — que 96 divise — corrige les deux. Un octet de
-XDATA, et les deux modules deviennent sans couture.
+A second counter, `fx_phase192`, wrapped at 192 — which is divisible by 96 — fixes both. One byte of
+XDATA, and both moduli become seamless.
 
-**`0xA177` porte la rampe de respiration** : `composante × CODE[0x29CE + phase] / 255`, 96 entrées,
-**22 → 255 sur quarante-huit pas puis le retour**. Son plancher n'est pas zéro mais 22 : en couleur
-fixe, une touche ne s'éteint jamais tout à fait.
+**`0xA177` implements the breathing ramp**: `component × CODE[0x29CE + phase] / 255`, 96 entries,
+**22 → 255 over forty-eight steps and back down**. Its floor is not zero, but 22: in fixed-color
+mode, a key never turns completely off.
 
-Le portage transcrit les trois tables — `0x2A2E`, `0x2AAC`, `0x29CE` — **vérifiées octet par octet**,
-et applique la même astuce que la vague : toutes les touches avançant du même pas, la phase courante
-vaut `semence + compteur de trames`, donc aucun état à tenir. Sa période vient de `CODE 0x3002`,
-celle que le semeur de l'effet 6 charge.
+The port transcribes all three tables — `0x2A2E`, `0x2AAC`, `0x29CE` — **verified byte for byte**,
+and applies the same trick as for the wave: since all keys advance by the same step, the current phase
+equals `seed + frame_counter`, requiring no per-key state to be maintained. Its period comes from `CODE 0x3002`,
+the one loaded by the effect 6 seeder.
 
-> **Un décalage d'indice à connaître.** `AULA_FX_OFF` passe de 13 à 14. Un réglage enregistré qui
-> valait 13 — « éteint » — désigne maintenant le scintillement. Sans conséquence au-delà du premier
-> démarrage.
+> **An index shift to keep in mind.** `AULA_FX_OFF` moves from 13 to 14. A saved setting that
+> was 13 — "off" — now selects the shimmer. Harmless beyond the first
+> boot.
 
-##### Le bloc remonte encore, et deux tables de plus en sortent
+##### The block extends further back, yielding two more tables
 
-En cherchant la rampe de respiration, la borne `0x29CE + 96 = 0x2A2E` a tiré le fil vers l'amont. Le
-bloc contigu compte en réalité **onze** tables :
+While looking for the breathing ramp, the boundary `0x29CE + 96 = 0x2A2E` pulled the thread further upstream. The
+contiguous block actually comprises **eleven** tables:
 
-| Adresse | Taille | Contenu | Fin |
+| Address | Size | Contents | End |
 | --- | --- | --- | --- |
-| `0x2937` | 10 | rampe de luminosité globale | `0x2941` |
-| **`0x2941`** | **24** | **les sept couleurs fixes + le noir** — huit triplets | `0x2959` |
-| `0x2959` | 117 | couronnes de l'onde, 9 × 13 | `0x29CE` |
-| **`0x29CE`** | **96** | **rampe de respiration** | `0x2A2E` |
-| `0x2A2E` | 126 | phase du scintillement, mode 7 | `0x2AAC` |
-| `0x2AAC` | 126 | phase du scintillement, couleur fixe | `0x2B2A` |
-| `0x2B2A` | 576 | roue de teintes, 192 × 3 | `0x2D6A` |
-| `0x2D6A` | 3 | le blanc isolé | `0x2D6D` |
-| `0x2D6D` | 384 | seconde roue, 128 × 3 | `0x2EED` |
+| `0x2937` | 10 | global brightness ramp | `0x2941` |
+| **`0x2941`** | **24** | **the seven fixed colors + black** — eight triplets | `0x2959` |
+| `0x2959` | 117 | wave rings, 9 × 13 | `0x29CE` |
+| **`0x29CE`** | **96** | **breathing ramp** | `0x2A2E` |
+| `0x2A2E` | 126 | shimmer phase, mode 7 | `0x2AAC` |
+| `0x2AAC` | 126 | shimmer phase, fixed color | `0x2B2A` |
+| `0x2B2A` | 576 | hue wheel, 192 × 3 | `0x2D6A` |
+| `0x2D6A` | 3 | isolated white triplet | `0x2D6D` |
+| `0x2D6D` | 384 | second wheel, 128 × 3 | `0x2EED` |
 | `0x2EED` | 126 | table A | `0x2F6B` |
 | `0x2F6B` | 126 | table B | `0x2FE9` |
-| `0x2FE9` | 75 | périodes, 15 × 5 | `0x3034` |
+| `0x2FE9` | 75 | periods, 15 × 5 | `0x3034` |
 
-`0x2941` est **une seconde copie de la palette de `0xC800`**, même ordre, avec le noir ajouté en
-huitième. Onze tables, **onze bornes exactes**, pas un octet de jeu de `0x2937` à `0x3034`.
+`0x2941` is **a second copy of the `0xC800` palette**, in the same order, with black appended as an
+eighth entry. Eleven tables, **eleven exact boundaries**, not a single byte of slack from `0x2937` to `0x3034`.
 
-##### Les six colonnes au-delà de 15 — un modèle de 113 touches
+##### The six columns beyond 15 — a 113-key model
 
-La grille d'usine fait 6 × 21. Ce clavier en occupe quinze colonnes ; voici ce que portent les six
-autres, et ce que cela apprend.
+The factory grid is 6 × 21. This keyboard uses fifteen of those columns; here is what the other
+six contain, and what that tells us.
 
-**La forme.** En comptant les positions non vides de `CODE 0xC500` :
+**The shape.** Counting the non-empty positions in `CODE 0xC500`:
 
 ```
-c 0 ######   c 5 ######   c10 ######   c15 ######  <-- au-dela de ce clavier
+c 0 ######   c 5 ######   c10 ######   c15 ######  <-- beyond this keyboard
 c 1 .#####   c 6 #####.   c11 #####.   c16 ######
 c 2 ######   c 7 #####.   c12 ######   c17 .#####
 c 3 #####.   c 8 ######   c13 ######   c18 .####.
@@ -2472,201 +2470,201 @@ c 4 #####.   c 9 ######   c14 ######   c19 .#####
                                        c20 .##.#.
 ```
 
-**84 touches sur les colonnes 0 à 14, 29 sur les colonnes 15 à 20 : 113 en tout.** Le firmware de ce
-F75 porte la carte complète d'un modèle de 113 touches de la même famille — un format à pavé
-numérique, dont le F75 est la découpe à quinze colonnes.
+**84 keys across columns 0 to 14, 29 across columns 15 to 20: 113 in total.** The firmware on this
+F75 carries the complete map of a 113-key model from the same family — a full-size/numpad
+layout, of which the F75 is the fifteen-column cut-down.
 
-**Aucune permutation au-delà de 14.** Les identifiants de `0xC500` y valent exactement
-`colonne × 8 + ligne`, et les tables A (`0x2EED`) et B (`0x2F6B`) y sont l'identité. La permutation
-de la ligne 4 est confinée aux quinze premières colonnes : c'est bien un détail de la découpe 75 %,
-pas une propriété du grand modèle.
+**No permutation beyond column 14.** There, the IDs in `0xC500` equal
+`col × 8 + row` exactly, and tables A (`0x2EED`) and B (`0x2F6B`) are the identity. The permutation
+on row 4 is confined to the first fifteen columns: it really is a detail of the 75% cut,
+not a property of the larger model.
 
-**Mais ce ne sont pas des colonnes de remplissage.** Trois relevés le prouvent :
+**Yet they are not dummy padding columns.** Three findings prove this:
 
-| Structure | Taille | Ce que portent les colonnes 15-20 |
+| Structure | Size | What columns 15–20 contain |
 | --- | --- | --- |
-| champ de phase `CODE 0x9FEA` | **126 octets** | des valeurs continues de 15 à 71 — **aucun zéro sur les 126 entrées**, le balayage angulaire se poursuit |
-| couronnes de l'onde `CODE 0x2959` | 9 × 13 | **huit identifiants des colonnes 15 et 16** : `0x7A`-`0x7D`, `0x80`-`0x85` |
-| masque « gaming » `CODE 0xCAFC` | **126 octets** | rien — les neuf touches allumées sont toutes dans les colonnes 0 à 14 |
+| phase field `CODE 0x9FEA` | **126 bytes** | continuous values from 15 to 71 — **not a single zero across all 126 entries**, the angular sweep continues |
+| wave rings `CODE 0x2959` | 9 × 13 | **eight IDs from columns 15 and 16**: `0x7A`–`0x7D`, `0x80`–`0x85` |
+| "gaming" mask `CODE 0xCAFC` | **126 bytes** | nothing — all nine lit keys lie within columns 0 to 14 |
 
-Et les structures en XRAM sont dimensionnées pour 126, pas 90 :
+And the XRAM structures are sized for 126, not 90:
 
-- la table de couleurs `0x0152` fait **378 octets = 126 × 3**, ce que l'opcode `0x42` relit
-  exactement (27 blocs × 14) ;
-- le plan d'état par touche `0x0017` fait **126 octets**, `0x0017` + `colonne × 6 + ligne` ;
-- l'index de la file de touches est borné à **126** en `0x1670`.
+- the color table at `0x0152` is **378 bytes = 126 × 3**, which is exactly what opcode `0x42` reads
+  back (27 blocks × 14);
+- the per-key state plane at `0x0017` is **126 bytes**, `0x0017` + `col × 6 + row`;
+- the key queue index is bounded to **126** at `0x1670`.
 
-Conséquence pour le portage : `aula_fx_ring()` rend des identifiants de touches **que ce clavier n'a
-pas**. `spark_seed()` les écarte par sa borne de colonne — c'était déjà le cas, c'est maintenant dit
-en clair dans `ripple_step()` au lieu d'être un effet de bord heureux.
+Consequence for the port: `aula_fx_ring()` yields key IDs **that this keyboard does not
+have**. `spark_seed()` filters them out via its column bound — it already did so, and that is now stated
+explicitly in `ripple_step()` rather than being a fortunate side effect.
 
-##### Correction : `CODE 0xCAFC` n'est pas trois plans de couleur
+##### Correction: `CODE 0xCAFC` is not three color planes
 
-Cette page et le portage décrivaient l'image « gaming » comme **trois plans de quinze octets dont
-seul le bleu serait non nul**, d'où un rendu bleu écrit en dur. C'est faux, et la recherche le montre
-sans appel : **la séquence de quinze octets que le portage utilisait n'existe nulle part dans
-l'image.** Elle était dérivée, pas transcrite.
+This page and the port previously described the "gaming" preset as **three fifteen-byte planes in which
+only the blue plane was non-zero**, resulting in a hardcoded blue rendering. That is wrong, and a search proves it
+conclusively: **the fifteen-byte sequence used by the port does not exist anywhere in
+the firmware image.** It was derived, not transcribed.
 
-`0xCAFC` est **un seul octet par touche**, 126 en tout, indexé `colonne × 6 + ligne`, valant `0xFF`
-sur les touches allumées et zéro ailleurs. Ses neuf positions non nulles sont les indices
-0, 9, 14, 15, 21, 77, 82, 83, 89 — soit `(0,0) (1,3) (2,2) (2,3) (3,3) (12,5) (13,4) (13,5) (14,5)`,
-c'est-à-dire **Échap, A, W, S, D et les quatre flèches**. La partie qui tenait tient toujours : neuf
-positions qui tombent exactement sur la disposition compilée ne sont pas un hasard.
+`0xCAFC` is **a single byte per key**, 126 bytes in all, indexed as `col × 6 + row`, equal to `0xFF`
+on lit keys and zero elsewhere. Its nine non-zero positions are at indices
+0, 9, 14, 15, 21, 77, 82, 83, 89 — i.e. `(0,0) (1,3) (2,2) (2,3) (3,3) (12,5) (13,4) (13,5) (14,5)`,
+which correspond to **Esc, A, W, S, D, and the four arrow keys**. The part that held up still holds: nine
+positions landing squarely on those keys in the compiled layout is no coincidence.
 
-Ce qui ne tenait pas, c'est la couleur : **il n'y a aucune couleur dans cette table**. Le bleu était
-une invention née de la mauvaise lecture. L'effet prend désormais le mode de couleur, comme tous les
-autres ; le bleu reste accessible, c'est le mode 2.
+What did not hold up is the color: **there is no color information in this table**. The blue was
+an invention born of a misreading. The effect now uses the active color mode, like every other
+effect; blue remains available as mode 2.
 
-La réduction par colonne que le portage garde est juste — reconstruite depuis les 126 octets réels,
-elle redonne exactement les mêmes quinze valeurs.
+The per-column reduction kept by the port is sound — when rebuilt from the actual 126 bytes,
+it produces the exact same fifteen values.
 
-##### Conséquence sur le portage : deux tables dérivées deviennent une transcription
+##### Consequence for the port: two derived tables become one direct transcription
 
-`aula_fx.c` portait deux tables **dérivées** — un masque de présence de 15 octets et une carte de
-colonne spatiale de 90 octets, obtenue en inversant la table A. Les deux sont remplacées par les
-**90 octets de `CODE 0xC500` recopiés tels quels**, dont elles se déduisent :
+`aula_fx.c` previously carried two **derived** tables — a 15-byte presence mask and a 90-byte
+spatial column map obtained by inverting table A. Both are replaced by the
+**90 bytes of `CODE 0xC500` copied verbatim**, from which both can be derived on the fly:
 
-- présence : `aula_fx_key_id(col, row) == 0xFF` ;
-- colonne spatiale : `aula_fx_key_id(col, row) >> 3`.
+- presence: `aula_fx_key_id(col, row) == 0xFF`;
+- spatial column: `aula_fx_key_id(col, row) >> 3`.
 
-Moins de données, aucune dérivation, et la comparaison octet par octet avec le dump passe. Le test de
-présence y gagne au passage : un accès direct au lieu d'un masque de colonne suivi d'un décalage.
+Less data, zero derivation, and the byte-for-byte comparison against the dump passes. The presence
+check benefits along the way: a direct lookup instead of a column mask followed by a bit shift.
 
-##### Ce que le moteur de la vague fait autour de la palette
+##### What the wave engine does around the palette
 
-`0x82A5` ne peint pas la grille entière. Pour chaque position il lit la **table A** (`CODE 0x2EED`,
-`ligne × 21 + colonne`) et **ne rend que si la valeur est inférieure à quinze**, puis passe encore
-par `rgb_key_suppressed` (`0x598F`) avec la **table B** (`CODE 0x2F6B`). `0x6C9B` fait le même test
-avant d'écrire.
+`0x82A5` does not paint the entire grid. For each position, it reads **table A** (`CODE 0x2EED`,
+`row × 21 + col`) and **only renders if the value is less than fifteen**, then still passes
+through `rgb_key_suppressed` (`0x598F`) using **table B** (`CODE 0x2F6B`). `0x6C9B` performs the same check
+before writing.
 
-Le portage testait déjà la présence dans ses **semeurs** du plan d'intensité, mais pas dans ses
-chemins **continus** — vague, arc-en-ciel vertical, uni, géométrie de SMK — qui peignaient les six
-emplacements de la grille 6 × 15 ne portant aucune touche, et payaient une recherche de couleur pour
-rien. Le test est maintenant en tête de `led_regen_one()`, à partir de la carte `CODE 0xC500` que
-cette page tient déjà.
+The port already checked key presence in its intensity-plane **seeders**, but not in its
+**continuous** rendering paths — wave, vertical rainbow, solid, SMK geometry — which painted the six
+positions of the 6 × 15 grid that have no physical key, paying for a color lookup for
+nothing. The check now sits at the top of `led_regen_one()`, driven by the `CODE 0xC500` map that
+this page already holds.
 
-### `XRAM 0x009D` — index d'effet RGB
+### `XRAM 0x009D` — RGB effect index
 
-Vingt sites y accèdent. Trois convergences l'identifient :
+Twenty sites access it. Three converging clues identify it:
 
-- `0x4494` y écrit `0x20` (32) — la valeur même que teste `fcn.0000AF99`
-- `0x52CC` et `0x5377` le comparent à `9`
-- `0x15E7`, `0x15FA`, `0x8C30`, `0x8C47` s'en servent pour **indexer deux tables en flash**
+- `0x4494` writes `0x20` (32) to it — the exact value tested by `fcn.0000AF99`
+- `0x52CC` and `0x5377` compare it against `9`
+- `0x15E7`, `0x15FA`, `0x8C30`, `0x8C47` use it to **index into two tables in flash**
 
-| Base | Contenu | Étendue |
+| Base | Contents | Range |
 | --- | --- | --- |
-| `0xA8BC` | `00`, puis `04` × 23, puis `00` | index 0-24 |
-| `0xA8D5` | `00`, puis `09` × 32 | index 0-32 |
+| `0xA8BC` | `00`, then `04` × 23, then `00` | index 0–24 |
+| `0xA8D5` | `00`, then `09` × 32 | index 0–32 |
 
-Le code reprend en `0xA8F6`. Index 0 donne zéro, tous les autres une constante : ce sont des
-**paramètres par mode**, le mode 0 étant traité à part — vraisemblablement « éteint ». L'index monte
-au moins à 32, ce qui couvre le `0x20` de `0x4494`.
+Code resumes at `0xA8F6`. Index 0 yields zero, and all others yield a constant: these are
+**per-mode parameters**, with mode 0 handled specially — presumably "off". The index goes
+up to at least 32, which covers the `0x20` written at `0x4494`.
 
-*Inférence restante : que ces constantes soient des paramètres d'effet RGB. La convergence est
-forte — index borné, mode 0 nul, écriture depuis le chemin USB, arbitrage contre l'ISR USB — mais
-aucune n'a été suivie jusqu'à un registre PWM.*
+*Remaining inference: that these constants are RGB effect parameters. The convergence is
+strong — bounded index, mode 0 equal to zero, written from the USB path, arbitrated against the USB ISR — but
+none has been traced all the way to a PWM register.*
 
-## Veille — implémentée
+## Sleep — implemented
 
-Transcrite de la séquence d'usine. Le mécanisme de réveil est : **toutes les colonnes tenues
-BASSES, toutes les lignes en entrée avec pull-up**. Un appui quelconque tire une ligne au 0, ce
-qui déclenche INT4.
+Transcribed from the factory sequence. The wake mechanism is: **all columns held
+LOW, all rows configured as inputs with pull-ups**. Pressing any key pulls a row to 0, which
+triggers INT4.
 
-| Étape | Adresse d'usine |
+| Step | Factory address |
 | --- | --- |
-| Parking du panneau (lignes entrée+pull-up, colonnes basses puis sorties) | `fcn @ 0x006E` |
-| Parking hors matrice : P0.0/0.1, P0.5/0.6, P7.4/7.7, P4.5 → sortie basse ; P0.7 haut ; P7.6 bas | `0x7DCB`-`0x7DF1` |
+| Panel parking (rows input+pull-up, columns low then output) | `fcn @ 0x006E` |
+| Off-matrix parking: P0.0/0.1, P0.5/0.6, P7.4/7.7, P4.5 → output low; P0.7 high; P7.6 low | `0x7DCB`–`0x7DF1` |
 | `EXF1 = 0` | `0x7DF4` |
 | `IENC = 0xF3` | `0x7DF6` |
 | `EXF0 = 0x40` | `0x7DF9` |
 | `IEN0 \|= 0x02` (EX4) | `0x7DFC` |
 | `PCON \|= 0x02` (power-down) | `0x7E34` |
 
-**`IENC = 0xF3` et `EXF0 = 0x40` sont exactement les valeurs que `platform/sh68f90/extint.c`
-documente** comme « transcrites du firmware d'usine » — confirmation indépendante sur cet appareil.
-`extint_wake_arm()` est donc réutilisable tel quel.
+**`IENC = 0xF3` and `EXF0 = 0x40` are the exact values that `platform/sh68f90/extint.c`
+documents** as "transcribed from factory firmware" — an independent confirmation on this device.
+`extint_wake_arm()` can therefore be reused as-is.
 
-`fcn @ 0x006E` est aussi une **quatrième confirmation du brochage** : il énumère littéralement les
-6 lignes (`P7CR`/`P7PCR` bits 0-3, `P5CR`/`P5PCR` bits 3-4) puis les 15 colonnes, dans l'ordre.
+`fcn @ 0x006E` is also a **fourth confirmation of the pinout**: it literally enumerates the
+6 rows (`P7CR`/`P7PCR` bits 0–3, `P5CR`/`P5PCR` bits 3–4) followed by the 15 columns, in order.
 
-⚠️ **Non testée sur matériel.** Un parking faux = un clavier qui ne se réveille pas.
+⚠️ **Untested on hardware.** Incorrect pin parking = a keyboard that never wakes up.
 
-### La veille radio, ajoutée après coup
+### Radio sleep, added afterwards
 
-Le portage rendait `USER_SLEEP_USB` **en dur**, avec le commentaire « Pas de sans-fil sur ce
-portage ». La conséquence n'était pas cosmétique : `sleep.c` décide de l'endormissement par la
-**suspension du bus USB** en mode `USB`, et par son **compteur d'inactivité** en mode `RF` — et hors
-mode `RF` il remet ce compteur à zéro à chaque passage. Autrement dit, **le clavier n'avait aucune
-veille sur batterie.**
+The port previously returned `USER_SLEEP_USB` **hardcoded**, with the comment "No wireless on this
+port". The consequence was not merely cosmetic: `sleep.c` decides whether to sleep based on
+**USB bus suspend** in `USB` mode, and on its **inactivity timer** in `RF` mode — and outside
+`RF` mode it resets that timer on every pass. In other words, **the keyboard had no
+sleep mode at all when running on battery.**
 
-Le crochet suit désormais le sélecteur en direct, comme le NuPhy Air60 le fait du sien.
-`sleep_task()` l'interroge à chaque passage, donc glisser le sélecteur change le critère
-immédiatement.
+The hook now tracks the mode switch live, just as the NuPhy Air60 does for its own switch.
+`sleep_task()` polls it on every pass, so sliding the switch changes the sleep criterion
+immediately.
 
-Autour de `power_enter_powerdown()`, deux ajouts transcrits :
+Around `power_enter_powerdown()`, two transcribed additions:
 
-| Moment | Firmware d'usine | Portage |
+| Stage | Factory firmware | Port |
 | --- | --- | --- |
-| avant | `fcn.00007D74` / `fcn.00009E39` coupent l'EUART0 (SCON, IEN1) | `rf_sleep_prepare()` : vidange l'émission, puis `IEN1 &= ~ES0` et `SCON = 0` |
-| après | les deux chemins de réveil (`0x7E85`, `0x9EBF`) rappellent l'init `0xB1C2` | `rf_sleep_wake()` : `rf_uart_init()` puis réarmement de l'IRQ |
+| before | `fcn.00007D74` / `fcn.00009E39` disable EUART0 (SCON, IEN1) | `rf_sleep_prepare()`: drains TX, then `IEN1 &= ~ES0` and `SCON = 0` |
+| after | both wake paths (`0x7E85`, `0x9EBF`) re-call init `0xB1C2` | `rf_sleep_wake()`: `rf_uart_init()` then re-enables the IRQ |
 
-La vidange préalable est un ajout : une rafale interrompue par la mise en veille laisserait
-`tx_busy` armé et **`P0.2` bloqué bas en sortie**, donc le module tenu en requête d'émission
-pendant tout le sommeil.
+Draining TX beforehand is an addition: a burst cut short by entering sleep would leave
+`tx_busy` set and **`P0.2` stuck low as an output**, holding the radio module in a transmit-request
+state throughout sleep.
 
-Et le réveil réaffirme le transport sans attendre la sonde suivante — c'est la règle du superviseur
-d'usine (« pas connecté, donc on redemande »), appliquée à un moment où l'on sait que l'état
-mémorisé ne vaut plus rien.
+And waking up reasserts the transport without waiting for the next poll — following the factory
+supervisor's rule ("not connected, so ask again"), applied at a moment when we know the cached
+state is no longer valid.
 
-> **Un point signalé à tort.** Une relecture avait conclu que `park_panel()` avait un défaut en
-> mettant `P7.4` et `P4.5` — les deux broches du sélecteur — en sortie basse. Vérification faite,
-> ce parking est **transcrit du firmware d'usine** (`0x7DCB`-`0x7DF1`), et `user_gpio_init()` les
-> rend au sélecteur au réveil : `P4CR=0x4D` et `P7CR=0x60` les laissent toutes deux en entrée, avec
-> pull-up (`P4PCR=0x6F`, `P7PCR=0xDF`). Il n'y avait rien à corriger — seulement un ordre à
-> respecter, `rf_sleep_wake()` après `user_gpio_init()`.
+> **A wrongly flagged issue.** An earlier review concluded that `park_panel()` had a bug because it
+> set `P7.4` and `P4.5` — the two mode-switch pins — to output low. Upon verification,
+> that parking sequence is **transcribed from the factory firmware** (`0x7DCB`–`0x7DF1`), and `user_gpio_init()`
+> restores them to the mode switch on wake: `P4CR=0x4D` and `P7CR=0x60` leave both as inputs, with
+> pull-ups enabled (`P4PCR=0x6F`, `P7PCR=0xDF`). Nothing needed fixing — only an ordering constraint to
+> respect: calling `rf_sleep_wake()` after `user_gpio_init()`.
 
-## Le BK3632 — ce qu'on sait, et avec quel degré de certitude
+## The BK3632 — what we know, and with what degree of certainty
 
-### Établi sur CET appareil (par désassemblage ou observation directe)
+### Established on THIS device (by disassembly or direct observation)
 
-- **Il est présent sur le PCB.** Identifié par le mainteneur de `sinowisp` sur les photos du PCB de
-  l'issue #96 : « another package variant for the **BK3632** ».
-- **Il porte tout le sans-fil.** C'est pourquoi le support OpenRGB est **filaire uniquement** : le
-  driver parle au SH68F90A, qui ne gère pas la radio.
-- **Il dialogue avec le 8051 par EUART0** — vecteur 13 (`_INT_EUART0`), `SCON` 0xD8 / `SBUF` 0xAA,
-  broches `P5.5` (TXD) et `P5.6` (RXD), trames `01 <cmd> <param> <len> …` de 6 à 32 octets à
-  **260 870 bauds, 8N1**.
-- **Il détient les noms Bluetooth.** La commande `0x09`, émise deux fois depuis `main()`, lui pousse
-  `"AULA-F75 3.0 KB "` et `"AULA-F75 5.0 KB "` depuis la flash du 8051 (`0xAF6D`).
+- **It is present on the PCB.** Identified by the `sinowisp` maintainer from the PCB photos in
+  issue #96: "another package variant for the **BK3632**".
+- **It handles all wireless functionality.** That is why OpenRGB support is **wired-only**: the
+  driver talks to the SH68F90A, which does not manage the radio.
+- **It communicates with the 8051 over EUART0** — vector 13 (`_INT_EUART0`), `SCON` 0xD8 / `SBUF` 0xAA,
+  pins `P5.5` (TXD) and `P5.6` (RXD), frames `01 <cmd> <param> <len> …` of 6 to 32 bytes at
+  **260,870 baud, 8N1**.
+- **It holds the Bluetooth names.** Command `0x09`, sent twice from `main()`, pushes
+  `"AULA-F75 3.0 KB "` and `"AULA-F75 5.0 KB "` to it from the 8051's flash (`0xAF6D`).
 
-### Datasheet BK3633 — source primaire pour la famille
+### BK3633 datasheet — primary source for the family
 
-Le datasheet **BK3633 V0.9** (26 pages, Beken) documente le frère direct du BK3632. Attention :
-**ce n'est pas le BK3632**, et les chiffres peuvent différer d'un membre à l'autre.
+The **BK3633 V0.9** datasheet (26 pages, Beken) documents the direct sibling of the BK3632. Note:
+**this is not the BK3632**, and figures may differ between family members.
 
 | | BK3633 (datasheet) |
 | --- | --- |
-| Cœur | **RISC 32 bits**, jusqu'à **80 MHz** |
-| RAM | **80 Ko** de mémoire de données |
-| Flash | **500 Ko** programmable |
-| Radio | Bluetooth **5.2 dual-mode** + 2,4 GHz propriétaire |
-| Consommation | ~5 mA en fonctionnement, < 1 µA en sommeil profond |
-| Boîtiers | QFN32 4×4, QFN40 5×5, QFN48 6×6 |
-| Interfaces | **2 UART et téléchargement UART**, I²C, SPI jusqu'à 96 MHz, USB hôte et device, 6 PWM, ADC 10 bits, JTAG sécurisé, AES128, eFUSE |
+| Core | **32-bit RISC**, up to **80 MHz** |
+| RAM | **80 KB** data memory |
+| Flash | **500 KB** programmable |
+| Radio | Bluetooth **5.2 dual-mode** + proprietary 2.4 GHz |
+| Power consumption | ~5 mA active, < 1 µA deep sleep |
+| Packages | QFN32 4×4, QFN40 5×5, QFN48 6×6 |
+| Interfaces | **2 UARTs and UART download**, I²C, SPI up to 96 MHz, USB host and device, 6 PWMs, 10-bit ADC, secure JTAG, AES128, eFUSE |
 
-⚠️ **Correction** : une version antérieure de ce document annonçait « ARM9, 20 Ko de RAM, 160 Ko de
-flash » pour le BK3632. Ces chiffres venaient d'un **résumé de moteur de recherche**, pas d'une
-fiche technique. Le datasheet du BK3633 donne des valeurs très différentes. Les caractéristiques
-exactes du **BK3632** restent non vérifiées.
+⚠️ **Correction**: an earlier version of this document stated "ARM9, 20 KB RAM, 160 KB
+flash" for the BK3632. Those numbers came from a **search engine summary**, not from a
+datasheet. The BK3633 datasheet gives very different figures. The exact specifications
+of the **BK3632** remain unverified.
 
-### Trois interfaces de dump, nommées par le datasheet
+### Three dump interfaces named in the datasheet
 
-> « At the beginning of the chip starts up, the chip will enter **programming mode, JTAG mode or
-> normal** according received command from **Mode Selecting Pin**. »
+> "At the beginning of the chip starts up, the chip will enter **programming mode, JTAG mode or
+> normal** according received command from **Mode Selecting Pin**."
 
-Table 4 du datasheet, multiplexage des GPIO :
+Table 4 of the datasheet, GPIO multiplexing:
 
-| GPIO | Normal | Mode PROGRAM | Mode JTAG |
+| GPIO | Normal | PROGRAM Mode | JTAG Mode |
 | --- | --- | --- | --- |
 | `GPIOA[0]` | `UART_TX` / SCL / USBDN | **`DL_UART_TX`** | — |
 | `GPIOA[1]` | `UART_RX` / SDA / USBDP | **`DL_UART_RX`** | — |
@@ -2677,143 +2675,143 @@ Table 4 du datasheet, multiplexage des GPIO :
 | `GPIOA[7]` | `SPI_NSS` / PWM[4] | `SPI_CS` | `JTAG_TMS` |
 | `GPIOB[6]` / `[7]` | `UART2_TX` / `UART2_RX` | — | — |
 
-**« DL » = DownLoad.** Le téléchargement UART passe donc par `GPIOA[0]` et `GPIOA[1]`.
+**"DL" = DownLoad.** UART download therefore goes through `GPIOA[0]` and `GPIOA[1]`.
 
-Sur le **QFN32**, ces deux broches sont les n° **23 (`P00_USBDN`)** et **24 (`P01_USBDP`)** — les
-mêmes que les lignes USB D−/D+, multiplexées.
+On the **QFN32**, these two pins are pins **23 (`P00_USBDN`)** and **24 (`P01_USBDP`)** — multiplexed
+with the USB D−/D+ lines.
 
-Trois voies existent donc, toutes documentées : **UART**, **SPI** et **JTAG**. Le mécanisme de
-sélection — « une commande reçue sur la Mode Selecting Pin au démarrage » — n'est **pas détaillé**
-dans ce datasheet abrégé. Mais la formulation recoupe exactement ce qu'on sait déjà : sur BK7231 on
-spamme `0xD2` en SPI pendant le reset, et le BIM attend un `LINK_CHECK` en UART.
+Three avenues therefore exist, all documented: **UART**, **SPI**, and **JTAG**. The selection
+mechanism — "according received command from Mode Selecting Pin" at startup — is **not detailed**
+in this abbreviated datasheet. However, the wording matches what is already known: on the BK7231 you
+spam `0xD2` over SPI during reset, and the BIM waits for a `LINK_CHECK` over UART.
 
-### ⚠️ Le verrou possible : chiffrement et interfaces condamnables
+### ⚠️ Potential lockout: encryption and permanently disableable interfaces
 
-Section 3.8 du datasheet, « Code Encryption and System Security » :
+Section 3.8 of the datasheet, "Code Encryption and System Security":
 
-> « There is one times NVM for code encryption and system security. Each unit can have different
+> "There is one times NVM for code encryption and system security. Each unit can have different
 > password for code encryption, where hardware will do the decryption automatically.
 > **The download and debug interface could be closed permanently by user** to keep system security.
 > […] Once the access right is changed, **no roll back is possible** to provide permanent security
-> of the system. »
+> of the system."
 
-Trois conséquences, et elles priment sur tout ce qui précède :
+Three implications, and they take precedence over everything above:
 
-1. **La flash peut être chiffrée**, avec un mot de passe par unité et déchiffrement matériel à la
-   volée. Un dump réussi pourrait ne livrer que du chiffré.
-2. **Les interfaces de téléchargement ET de debug peuvent être condamnées définitivement** par le
-   fabricant, via une NVM one-time (type eFUSE). Cela fermerait d'un coup l'UART, le JTAG et le SPI.
-3. **C'est irréversible.**
+1. **The flash may be encrypted**, with a per-unit password and on-the-fly hardware
+   decryption. A successful dump might only yield ciphertext.
+2. **Both the download AND debug interfaces can be permanently disabled** by the
+   manufacturer via one-time NVM (eFUSE-style). That would shut down UART, JTAG, and SPI all at once.
+3. **It is irreversible.**
 
-**On ne sait pas si Aula/SinoWealth a verrouillé le BK3632 de ce clavier.** Cela ne se détermine
-qu'en essayant.
+**We do not know whether Aula/SinoWealth locked the BK3632 on this keyboard.** The only way to find out
+is to try.
 
-La bonne nouvelle : le test est **peu coûteux et non destructif**. Un adaptateur USB-TTL sur
-`GPIOA[0]`/`GPIOA[1]`, une trame `01 E0 FC 01 00` (LINK_CHECK) répétée pendant un reset, et on sait.
-Silence = probablement verrouillé, ou mauvaise séquence d'entrée. Réponse = la voie est ouverte.
+The good news: testing this is **inexpensive and non-destructive**. A USB-TTL adapter on
+`GPIOA[0]`/`GPIOA[1]`, a `01 E0 FC 01 00` (`LINK_CHECK`) frame repeated during reset, and we will know.
+Silence = likely locked, or wrong entry sequence. Response = the door is open.
 
-Beaucoup d'appareils grand public bon marché ne prennent pas la peine de verrouiller. Mais tant que
-ce n'est pas testé, **la voie B reste hypothétique, indépendamment de l'outillage**.
+Many inexpensive consumer devices do not bother locking the chip. Still, until
+tested, **Path B remains hypothetical, regardless of tooling**.
 
-### Déduit du BK3432, son proche parent — **pas le même composant**
+### Inferred from its close relative, the BK3432 — **not the same chip**
 
-Le SDK BK3432 (`Cdreamyao/tuya_ble_sdk_Demo_Project_bk3432`) donne, en source primaire :
+The BK3432 SDK (`Cdreamyao/tuya_ble_sdk_Demo_Project_bk3432`) provides, as a primary source:
 
-| | Valeur | Source |
+| | Value | Source |
 | --- | --- | --- |
-| Cœur | **ARM9E-S**, little endian, 60 MHz | `<Cpu>CPUTYPE(ARM9E)</Cpu>` du projet Keil |
-| Table de vecteurs | ARM classique : reset, undefined, swi, pabort, dabort, reserved, irq, fiq | `boot_vectors.s` |
-| Mapping | ROM `0x00000000`, RAM `0x00400000`, périphériques AHB `0x00800000+` | `BK3432_reg.h` |
-| Bootloader | **BIM**, avec téléchargement par UART | `bim_uart.h`, et le PDF du SDK |
+| Core | **ARM9E-S**, little-endian, 60 MHz | `<Cpu>CPUTYPE(ARM9E)</Cpu>` in the Keil project |
+| Vector table | classic ARM: reset, undefined, swi, pabort, dabort, reserved, irq, fiq | `boot_vectors.s` |
+| Memory map | ROM `0x00000000`, RAM `0x00400000`, AHB peripherals `0x00800000+` | `BK3432_reg.h` |
+| Bootloader | **BIM**, with UART download | `bim_uart.h`, and the SDK PDF |
 
-**C'est bien un ARM9, pas un Cortex-M** — la table de vecteurs à 8 entrées avec `FIQ` le prouve.
-Cela corrobore le « ARM9 » du résumé fabricant, mais pour le BK3432.
+**It really is an ARM9, not a Cortex-M** — the 8-entry vector table with `FIQ` proves it.
+This corroborates the "ARM9" claim from the manufacturer summary, at least for the BK3432.
 
-**Conséquence pour un éventuel reverse** : ce n'est pas une cible 8051 de 61 Ko comme le SH68F90A,
-mais **160 Ko d'ARM9** — une architecture entièrement différente, avec son propre jeu d'outils.
+**Implication for any reverse-engineering effort**: this is not a 61 KB 8051 target like the SH68F90A,
+but **160 KB of ARM9 code** — a completely different architecture requiring its own toolchain.
 
-## Sans-fil — transport caractérisé, protocole non résolu
+## Wireless — transport characterized, protocol unresolved
 
-### Ce qui est établi
+### What is established
 
-Liaison **EUART0** vers le BK3632, en **full-duplex** :
+**Full-duplex EUART0** link to the BK3632:
 
-| Élément | Valeur |
+| Element | Value |
 | --- | --- |
-| Trame | **longueur variable**, 6 à 32 octets (r5 avant l'appel) |
-| Octet 0 | `0x01` (tête constante) |
-| Octet 1 | code de commande — **`0x04`, `0x05`, `0x08`, `0x09`** observés |
-| Octets 2+ | charge utile |
+| Frame | **variable length**, 6 to 32 bytes (`r5` before the call) |
+| Byte 0 | `0x01` (constant header) |
+| Byte 1 | command code — **`0x04`, `0x05`, `0x08`, `0x09`** observed |
+| Bytes 2+ | payload |
 
-Longueurs observées aux points d'appel : `0x1E` (30) @ `0x46C2`, `0x0D` (13) @ `0x4730`,
-`0x20` (32) @ `0xA376`, `0x17` (23) @ `0xB0B8`, `0x06` @ `0xED53`. Le maximum de 32 octets
-correspond exactement à la taille du buffer TX, qui s'arrête juste avant le buffer RX.
-| TXD / RXD | **`P5.5`** / **`P5.6`** (broches distinctes : lien full-duplex) |
-| Handshake | **`P0.2`** — mis à 0 avant émission (`0xAB13`), relâché en fin de trame par l'ISR (`0xA580`) |
-| Format | mode 1, **8N1**, `Baud = Fsys / 92` = **~260 870 bauds** (`0xB1CE`) |
-| Routine d'envoi | `fcn @ 0xAB08` (charge nulle) / `0xAB09` (charge dans A) → `0xAB0F` |
-| Buffers | TX en IDATA `0x33`-`0x52` (**32 o**), RX en IDATA `0x54` (23 o) |
-| Drapeau émission | `0x2C.1` |
+Lengths observed at call sites: `0x1E` (30) @ `0x46C2`, `0x0D` (13) @ `0x4730`,
+`0x20` (32) @ `0xA376`, `0x17` (23) @ `0xB0B8`, `0x06` @ `0xED53`. The 32-byte maximum
+matches the exact size of the TX buffer, which ends right before the RX buffer.
+| TXD / RXD | **`P5.5`** / **`P5.6`** (separate pins: full-duplex link) |
+| Handshake | **`P0.2`** — pulled low before transmission (`0xAB13`), released at end of frame by the ISR (`0xA580`) |
+| Format | mode 1, **8N1**, `Baud = Fsys / 92` = **~260,870 baud** (`0xB1CE`) |
+| Send routine | `fcn @ 0xAB08` (zero payload) / `0xAB09` (payload in A) → `0xAB0F` |
+| Buffers | TX in IDATA `0x33`–`0x52` (**32 B**), RX in IDATA `0x54` (23 B) |
+| TX busy flag | `0x2C.1` |
 
-La commande `0x09` est émise depuis `main()` (`0x9148`, `0x914D`) — probablement l'initialisation
-du lien.
+Command `0x09` is sent from `main()` (`0x9148`, `0x914D`) — probably link
+initialization.
 
-### Pas de firmware BK3632 embarqué — vérifié
+### No embedded BK3632 firmware — verified
 
-Hypothèse testée : le 8051 embarquerait-il l'image du BK3632 pour la lui pousser par le lien série ?
-**Non**, et c'est mesuré, pas supposé.
+Tested hypothesis: could the 8051 embed the BK3632 firmware image and push it over the serial link?
+**No**, and this is measured, not assumed.
 
-1. **Place disponible.** Le firmware d'usine fait 61 440 o et son dernier octet significatif est en
-   `0xEFC3` : il reste **60 octets libres**. Le BK3632 a **160 Ko** de flash. Une image complète ne
-   peut pas y tenir.
-2. **Profil d'entropie.** Balayage par blocs de 512 o : **aucun bloc au-dessus de 6,53**. Pas de
-   zone compressée ni chiffrée. Du code ARM9 se situerait autour de 6 — mais les seules zones non
-   codées sont à l'inverse *très basses* : `0xB200`-`0xC400` (entropie 1,10, **87 % de zéros**) et
-   `0xC600`-`0xEC00` (1,20, **93 % de zéros**). Ce sont des tables creuses — bitmaps et keymaps par
-   couche — pas du code.
-3. **Débit du lien.** Le buffer TX fait 32 octets et la plus longue trame observée en fait 32.
-   Rien n'indique un chemin de transfert en volume.
+1. **Available space.** The factory firmware is 61,440 B and its last meaningful byte is at
+   `0xEFC3`: only **60 free bytes** remain. The BK3632 has **160 KB** of flash. A complete image cannot
+   fit.
+2. **Entropy profile.** Scanning in 512 B blocks: **no block exceeds 6.53**. There is no
+   compressed or encrypted region. ARM9 code would sit around 6 — whereas the only non-8051-code
+   regions have *very low* entropy instead: `0xB200`–`0xC400` (entropy 1.10, **87% zeros**) and
+   `0xC600`–`0xEC00` (1.20, **93% zeros**). Those are sparse tables — bitmaps and per-layer
+   keymaps — not code.
+3. **Link throughput.** The TX buffer is 32 bytes and the longest observed frame is 32 bytes.
+   Nothing points to a bulk transfer path.
 
-Conclusion : le firmware du BK3632 réside **dans le BK3632**. Pour l'obtenir il faut le lire sur
-la puce (voie B ci-dessous), et pour comprendre le protocole il vaut mieux écouter le lien
-(voie A).
+Conclusion: the BK3632 firmware resides **inside the BK3632**. To obtain it, one must read it off
+the chip (Path B below); to understand the protocol, it is simpler to sniff the serial link
+(Path A).
 
-### Toutes les fonctions qui touchent EUART0 — balayage exhaustif
+### All functions touching EUART0 — exhaustive scan
 
-Balayage de l'image entière sur les sept SFR de l'EUART0 (`SCON` D8H, `SBUF` AAH, `SADDR` ABH,
-`SADEN` ACH, `SBRTH` ADH, `SBRTL` AEH, `SFINE` AFH), plus le bit d'autorisation et la priorité,
-recoupé par un scan octet à octet de tous les opcodes 8051 à opérande direct.
+Full-image scan across all seven EUART0 SFRs (`SCON` D8H, `SBUF` AAH, `SADDR` ABH,
+`SADEN` ACH, `SBRTH` ADH, `SBRTL` AEH, `SFINE` AFH), plus the enable and priority bits,
+cross-checked against a byte-by-byte scan of all 8051 direct-operand opcodes.
 
-| Fonction | Rôle | SFR touchés |
+| Function | Role | SFRs touched |
 | --- | --- | --- |
-| `0xB1C2` | **init** — débit, mode, autorisation | SBRTH, SBRTL, SFINE, SCON, PCON, IEN1 |
-| `0xA544` | **ISR EUART0** (vecteur `0x6B`) | SCON.RI/TI, SBUF, SCON |
-| `0xAB0F` | émetteur générique, longueur variable | SBUF |
-| `0xACE6` | émetteur de trame courte (6 o) | SBUF |
-| `0xEF40` | **entrée en sans-fil** : `orl IEN1,#0x40` **puis `anl USBCON,#0x7F`**, `setb 0x27.7`, `delay(20)` (2 appels depuis `0x84E9`) | IEN1, **USBCON** |
-| `0xECC5` @ `0xEDE0` | priorité : `IPH1 = 0x42`, `IPL1 = 0x41` → bit 6 posé des deux côtés, **niveau 3** | IPH1, IPL1 |
-| `0x7D74`, `0x9E39` | veille : coupent EUART0, rappellent `0xB1C2` au réveil | SCON, IEN1 |
-| `0x84E9` @ `0x8548` | coupe EUART0 | IEN1 |
-| `0x41F2`, `0x4227`, `0x425D` | activent EUART0 après avoir posé XDATA `0x0319` et `0x031B` | IEN1 |
-| `0x9156` | coupe EUART0, sous condition XDATA `0x031B == 0` | IEN1 |
+| `0xB1C2` | **init** — baud rate, mode, enable | SBRTH, SBRTL, SFINE, SCON, PCON, IEN1 |
+| `0xA544` | **EUART0 ISR** (vector `0x6B`) | SCON.RI/TI, SBUF, SCON |
+| `0xAB0F` | generic transmitter, variable length | SBUF |
+| `0xACE6` | short-frame transmitter (6 B) | SBUF |
+| `0xEF40` | **wireless entry**: `orl IEN1,#0x40` **then `anl USBCON,#0x7F`**, `setb 0x27.7`, `delay(20)` (2 calls from `0x84E9`) | IEN1, **USBCON** |
+| `0xECC5` @ `0xEDE0` | priority: `IPH1 = 0x42`, `IPL1 = 0x41` → bit 6 set in both, **priority level 3** | IPH1, IPL1 |
+| `0x7D74`, `0x9E39` | sleep: disable EUART0, re-call `0xB1C2` on wake | SCON, IEN1 |
+| `0x84E9` @ `0x8548` | disables EUART0 | IEN1 |
+| `0x41F2`, `0x4227`, `0x425D` | enable EUART0 after setting XDATA `0x0319` and `0x031B` | IEN1 |
+| `0x9156` | disables EUART0 if XDATA `0x031B == 0` | IEN1 |
 
-Appelants de l'init `0xB1C2` : `main` (`0x9143`) et les **deux** chemins de réveil (`0x7E85`,
-`0x9EBF`). La liaison est donc entièrement reconfigurée à chaque sortie de veille.
+Callers of init `0xB1C2`: `main` (`0x9143`) and **both** wake paths (`0x7E85`,
+`0x9EBF`). The link is therefore completely reconfigured every time the keyboard wakes from sleep.
 
-`XDATA 0x0319` (valeurs 1/2/3) et `XDATA 0x031B` gouvernent l'activation : ce sont selon toute
-vraisemblance le **sélecteur de mode sans-fil** (BT1/BT2/BT3 ou BT/2.4G/USB), mais leur
-sémantique **n'est pas résolue**.
+`XDATA 0x0319` (values 1/2/3) and `XDATA 0x031B` govern activation: in all likelihood they represent
+the **wireless mode selector** (BT1/BT2/BT3 or BT/2.4G/USB), though their exact
+semantics were **not yet resolved** at this stage.
 
-> **Piège de méthode.** Trois « accès à `SBUF` » — `0xB1ED`, `0xECD0`, `0x7E62` — sont des
-> **faux positifs** : ce sont les octets d'opérande de `lcall 0xABAA` (`12 ab aa`), que le scan
-> octet lit comme `mov r3, 0xAA`. Tout balayage SFR sur cette image retombe dans ce piège.
+> **Methodological pitfall.** Three apparent "`SBUF` accesses" — `0xB1ED`, `0xECD0`, `0x7E62` — are
+> **false positives**: they are the operand bytes of `lcall 0xABAA` (`12 ab aa`), which a raw byte scan
+> misreads as `mov r3, 0xAA`. Any naive SFR scan on this image falls into this trap.
 
-#### Le vecteur — et la correction qu'il impose
+#### The interrupt vector — and the correction it forces
 
-`_INT_USB = 7`, et le firmware place bien `ljmp isr.usb` en `0x03 + 8×7 = 0x3B`. Le mapping
-index → vecteur est donc confirmé, et il **n'est pas** celui du 8051 classique :
+`_INT_USB = 7`, and the firmware indeed places `ljmp isr.usb` at `0x03 + 8×7 = 0x3B`. The
+index → vector mapping is thus confirmed, and it is **not** that of a classic 8051:
 
-| Vec | n | Source | Cible |
+| Vec | n | Source | Target |
 | --- | --- | --- | --- |
 | `0x03` | 0 | **TIMER2** | `0xA4D7` |
 | `0x0B` | 1 | INT4 | `0xEF94` |
@@ -2826,17 +2824,17 @@ index → vecteur est donc confirmé, et il **n'est pas** celui du 8051 classiqu
 | `0x63` | 12 | PWM4 | `0x816B` |
 | `0x6B` | 13 | **EUART0** | **`0xA544`** |
 
-`0x23` (SCM), `0x2B` (LPD), `0x33` (SPI), `0x5B` (PWM3) et `0x7B` ne sont pas utilisés : le
-firmware y a laissé du code ou des données.
+`0x23` (SCM), `0x2B` (LPD), `0x33` (SPI), `0x5B` (PWM3), and `0x7B` are unused: the
+firmware places ordinary code or data across them.
 
-⚠️ Les étiquettes `vec.int0` / `vec.timer0` / `vec.int1` / `vec.timer1` et `isr.int0 @ 0xA4D7`
-du harnais `tools/f75_r2.py` reprenaient les noms 8051 classiques — **faux sur ce MCU**.
-Corrigées dans le même commit que cette section.
+⚠️ The labels `vec.int0` / `vec.timer0` / `vec.int1` / `vec.timer1` and `isr.int0 @ 0xA4D7`
+in the `tools/f75_r2.py` harness originally used classic 8051 names — **wrong on this MCU**.
+Fixed in the same commit as this section.
 
-#### Débit — la formule, pas une supposition
+#### Baud rate — the formula, not a guess
 
-`0xB1C2` écrit `SBRTH = 0xFF`, `SBRTL = 0xFB`, `SFINE = 0x0C`. `SBRTH.7` est `SBRTEN`, donc
-`SBRT = 0x7FFB = 32763`. La datasheet donne, pour les modes 1 et 3 :
+`0xB1C2` writes `SBRTH = 0xFF`, `SBRTL = 0xFB`, `SFINE = 0x0C`. `SBRTH.7` is `SBRTEN`, so
+`SBRT = 0x7FFB = 32763`. For modes 1 and 3, the datasheet gives:
 
 ```
 BaudRate = Fsys / (16 × (32768 − SBRT) + SFINE)
@@ -2844,305 +2842,305 @@ BaudRate = Fsys / (16 × (32768 − SBRT) + SFINE)
          = Fsys / 92
 ```
 
-`Fsys` est établi par deux sources concordantes :
+`Fsys` is established by two concurring sources:
 
-- le firmware écrit `PLLCON = 0x03` (PLLON + PLLFS) et `CLKCON = 0x0C` (HFON + FS, avec
-  `CLKS[1:0] = 00`, donc aucune division). Datasheet : PLLFS = 1 → « PLL 的二分频作为
-  OSCSCLK », et le schéma d'horloge donne **PLL = 48 MHz** → OSCSCLK = 24 MHz ;
-- `meson.build` de SMK : `'sh68f90' : { 'freq_sys' : 24000000 }`.
+- the firmware writes `PLLCON = 0x03` (PLLON + PLLFS) and `CLKCON = 0x0C` (HFON + FS, with
+  `CLKS[1:0] = 00`, i.e. no division). Datasheet: PLLFS = 1 → "PLL 的二分频作为
+  OSCSCLK" (PLL divided by 2 used as OSCSCLK), and the clock tree diagram shows **PLL = 48 MHz** → OSCSCLK = 24 MHz;
+- SMK's `meson.build`: `'sh68f90' : { 'freq_sys' : 24000000 }`.
 
-**Débit = 24 000 000 / 92 ≈ 260 870 bauds.** Ce n'est aucun débit normalisé, et il n'y a pas
-de valeur nominale à en déduire : la liaison est propriétaire des deux côtés.
+**Baud rate = 24,000,000 / 92 ≈ 260,870 baud.** This is not a standard baud rate, and there is no
+nominal standard value to round it to: the link is proprietary on both ends.
 
-#### `SCON = 0x50` + `SSTAT` — les trois bits hauts sont des drapeaux d'erreur
+#### `SCON = 0x50` + `SSTAT` — the top three bits are error flags
 
-`0xB1CE` écrit `SCON = 0x50` → `SM1 = 1`, `REN = 1` : **mode 1, 8 bits, 1 stop**. Puis `0xB1DE`
-fait `orl PCON, #0x40`, c'est-à-dire **`SSTAT = 1`**. La datasheet est explicite :
+`0xB1CE` writes `SCON = 0x50` → `SM1 = 1`, `REN = 1`: **mode 1, 8-bit, 1 stop bit**. Then `0xB1DE`
+executes `orl PCON, #0x40`, i.e. **`SSTAT = 1`**. The datasheet is explicit:
 
 > SSTAT — 0：SCON[7:5] 工作方式作为 SM0，SM1，SM2 ／ 1：访问状态位（FE，RXOV，TXCOL）
 
-Avec `SSTAT = 1`, `SCON[7:5]` ne sont donc plus les bits de mode mais **FE** (erreur de trame),
-**RXOV** (débordement en réception) et **TXCOL** (collision d'émission) — et ils « 只能通过软件
-清零 », ne peuvent être effacés que par logiciel. C'est très exactement ce que fait la queue de
-l'ISR, dont le sens était autrement incompréhensible :
+With `SSTAT = 1`, `SCON[7:5]` are therefore no longer the mode bits, but **FE** (framing error),
+**RXOV** (receive overflow), and **TXCOL** (transmit collision) — and they "只能通过软件
+清零" (can only be cleared by software). That is the exact purpose of the tail of
+the ISR, which would otherwise be incomprehensible:
 
 ```asm
 mov a, SCON
 anl a, #0xE0        ; FE | RXOV | TXCOL
-jz  fin
-anl SCON, #0x1F     ; efface les trois drapeaux d'erreur
+jz  done
+anl SCON, #0x1F     ; clear the three error flags
 ```
 
-#### L'ISR `0xA544` — plan mémoire IDATA
+#### ISR `0xA544` — IDATA memory layout
 
 ```asm
-; --- reception ---
+; --- receive ---
 jnb  SCON.RI, tx
 clr  SCON.RI
-mov  r0,#0x70 ; mov a,@r0     ; index d'ecriture RX
-subb a,#0x17  ; jnc fin       ; buffer plein (23 o) -> octet jete
+mov  r0,#0x70 ; mov a,@r0     ; RX write index
+subb a,#0x17  ; jnc done      ; buffer full (23 B) -> drop byte
 mov  a,#0x54  ; add a,r7      ; buf[idx]
 mov  @r0, SBUF
 inc  @r0                      ; idx++
-setb 0x24.4                   ; « octet recu »
+setb 0x24.4                   ; "byte received"
 
-; --- emission ---
-tx: jnb SCON.TI, fin
+; --- transmit ---
+tx: jnb SCON.TI, done
 clr  SCON.TI
-mov  r1,#0x71 ; mov a,@r1     ; index TX
-mov  r0,#0x75 ; subb a,@r0    ; compare a la longueur-1
-jc   suite
-clr  0x2C.1                   ; fin d'emission
-anl  P0CR, #0xFB              ; P0.2 repasse en entree
-setb P0.2                     ; ... et remonte
-sjmp fin
-suite: inc @r0 ; mov a,@r0 ; add a,#0x33 ; mov SBUF, [a]
+mov  r1,#0x71 ; mov a,@r1     ; TX index
+mov  r0,#0x75 ; subb a,@r0    ; compare against length - 1
+jc   next
+clr  0x2C.1                   ; transmission complete
+anl  P0CR, #0xFB              ; P0.2 back to input
+setb P0.2                     ; ... and pulled high
+sjmp done
+next: inc @r0 ; mov a,@r0 ; add a,#0x33 ; mov SBUF, [a]
 ```
 
-| IDATA | Rôle |
+| IDATA | Role |
 | --- | --- |
-| `0x33`–`0x52` | tampon **TX** (32 o max, s'arrête juste avant le tampon RX) |
-| `0x54`–`0x6A` | tampon **RX**, 23 octets — garde `idx ≥ 0x17` |
-| `0x70` | index d'écriture RX |
-| `0x71` | index d'émission TX |
-| `0x74` | `r7` du dernier envoi (étiquette de trame) |
-| `0x75` | longueur TX **− 1** |
+| `0x33`–`0x52` | **TX** buffer (32 B max, ends right before the RX buffer) |
+| `0x54`–`0x6A` | **RX** buffer, 23 bytes — guard `idx ≥ 0x17` |
+| `0x70` | RX write index |
+| `0x71` | TX send index |
+| `0x74` | `r7` from the last send call (frame tag) |
+| `0x75` | TX length **− 1** |
 
-Les 23 octets du tampon RX correspondent exactement aux 23 octets que `fcn.000005EA` recopie
-vers XDATA `0x0120` — recoupement indépendant du plan mémoire.
+The 23 bytes of the RX buffer match the exact 23 bytes that `fcn.000005EA` copies
+to XDATA `0x0120` — an independent cross-check of the memory layout.
 
-#### `P0.2` — le handshake, mécanisme désormais prouvé
+#### `P0.2` — the handshake line, mechanism now proven
 
-Le rôle de `P0.2` était affirmé sans preuve (et d'abord décrit à tort comme une ligne de
-direction half-duplex). Les deux extrémités de la séquence le tranchent :
+The role of `P0.2` was previously asserted without proof (and initially mischaracterized as a
+half-duplex direction line). Both ends of the sequence settle it:
 
-| Moment | Code | Effet |
+| Stage | Code | Effect |
 | --- | --- | --- |
-| début d'émission (`0xAB13`, `0xACEA`) | `clr P0.2` ; `orl P0CR,#0x04` ; `clr P0.2` | `P0.2` passe **en sortie** et est tiré **bas** |
-| fin d'émission (ISR, `0xA580`) | `anl P0CR,#0xFB` ; `setb P0.2` | `P0.2` repasse **en entrée**, relâché **haut** |
+| start of TX (`0xAB13`, `0xACEA`) | `clr P0.2` ; `orl P0CR,#0x04` ; `clr P0.2` | `P0.2` switches **to output** and is driven **low** |
+| end of TX (ISR, `0xA580`) | `anl P0CR,#0xFB` ; `setb P0.2` | `P0.2` switches back **to input**, released **high** |
 
-Datasheet, registre `P0CR` (E1H) : « 0：输入模式 » — donc 1 = sortie. `P0.2` est bien une ligne
-de **requête d'émission / réveil** vers le BK3632, maintenue basse pendant toute la rafale.
+Datasheet, `P0CR` register (E1H): "0：输入模式" (0: input mode) — so 1 = output. `P0.2` is indeed a
+**transmit request / wake** line to the BK3632, held low throughout the entire burst.
 
-#### Somme de contrôle — même constante en émission et en réception
+#### Checksum — same constant for both TX and RX
 
-`0xAB0F` accumule les octets `0x33 .. 0x33+len−2` puis écrit `0x55 − Σ` comme **dernier** octet
-de la trame (`0xAB2E`). C'est la **même constante `0x55`** que celle déjà relevée sur les
-réponses reçues — recoupement des deux sens de la liaison.
+`0xAB0F` sums bytes `0x33 .. 0x33+len−2` and writes `0x55 − Σ` as the **last** byte
+of the frame (`0xAB2E`). This is the **exact same `0x55` constant** previously observed on incoming
+responses — cross-validating both directions of the link.
 
-#### Les deux émetteurs
+#### The two transmitters
 
-- **`fcn.0000AB0F`** — générique. Entrée : `r5` = longueur totale, trame déjà composée en IDATA
-  `0x33`. Il calcule la somme, la place en dernier, remet les index à zéro et amorce en écrivant
-  `SBUF = IDATA[0x33]` ; l'ISR envoie le reste. Cinq appelants (`0x46C2`, `0x4730`, `0xA376`,
+- **`fcn.0000AB0F`** — generic. Input: `r5` = total length, frame already assembled in IDATA
+  `0x33`. It computes the checksum, places it in the last byte, zeroes the indices, and primes the transfer by writing
+  `SBUF = IDATA[0x33]`; the ISR sends the rest. Five callers (`0x46C2`, `0x4730`, `0xA376`,
   `0xB0B8`, `0xED53`).
-- **`fcn.0000ACE6`** — trame fixe de 6 octets `01 <r7> <r5> 00 00 <somme>`. Ses deux seuls
-  appelants sont **dans le parseur `fcn.000005EA`** (`0x078A`, `0x0811`) : c'est donc la voie de
-  réponse. *Lecture inférée* : `0x01` en tête sert ici d'accusé de réception court, par
-  opposition aux réponses de 10 octets commençant par `0x02`.
+- **`fcn.0000ACE6`** — fixed 6-byte frame `01 <r7> <r5> 00 00 <sum>`. Its only two
+  callers are **inside the parser `fcn.000005EA`** (`0x078A`, `0x0811`): this is therefore the
+  response path. *Inferred reading*: a leading `0x01` serves here as a short acknowledgment, in
+  contrast to the 10-byte incoming responses starting with `0x02`.
 
-#### Chaîne complète du drapeau de réception
-
-```
-ISR EUART0  (0xA544, vec 0x6B)   setb 0x24.4          « octet recu »
-ISR PWM0    (0x72BA, vec 0x43)   0x24.4 -> 0x2D.7     relais, en 0x7444
-ISR TIMER2  (0xA4D7, vec 0x03)   lcall 0x05EA @ 0xA519
-fcn.000005EA                     IDATA 0x54 (23 o) -> XDATA 0x0120
-```
-
-Le parseur ne tourne donc **pas** dans la boucle principale mais dans l'**ISR TIMER2**.
-
-### Le raccord EUART0 ↔ pile HID
-
-Les rapports partent vers **deux destinations exclusives**, et l'aiguillage tient en un bit.
+#### Full receive-flag chain
 
 ```
-evenement touche
+EUART0 ISR  (0xA544, vec 0x6B)   setb 0x24.4          "byte received"
+PWM0 ISR    (0x72BA, vec 0x43)   0x24.4 -> 0x2D.7     relayed at 0x7444
+TIMER2 ISR  (0xA4D7, vec 0x03)   lcall 0x05EA @ 0xA519
+fcn.000005EA                     IDATA 0x54 (23 B) -> XDATA 0x0120
+```
+
+The parser therefore does **not** run in the main loop, but inside the **TIMER2 ISR**.
+
+### Bridging EUART0 ↔ HID stack
+
+Reports go to **two mutually exclusive destinations**, and the switch comes down to a single bit.
+
+```
+key event
   |
-  +-- fcn.00003108  /  fcn.000068E8       les deux ordonnanceurs
+  +-- fcn.00003108  /  fcn.000068E8       the two schedulers
         |
         +-- fcn.000044F6 --> euart0.send  --------------------> RADIO
-        |     gardes : 0x2A.4, 0x27.0, 0x2A.6, puis P4.7
+        |     guards: 0x2A.4, 0x27.0, 0x2A.6, then P4.7
         |
         +-- fcn.0000EF7B
-              jb 0x2D.4, ret              <== l'interrupteur
+              jb 0x2D.4, ret              <== the switch
               lcall fcn.0000AA79
               lcall fcn.00006ACF --> 0x6C07 --> EP2_IN_BUF ----> USB
 ```
 
-Dans `fcn.000068E8`, les deux appels se suivent : `lcall fcn.000044F6` en `0x69C2`, puis
-`lcall fcn.0000EF7B` en `0x69C7`. Chaque voie porte sa propre garde ; ce n'est pas un `if/else`
-mais deux chemins gardés indépendamment.
+In `fcn.000068E8`, the two calls follow one another directly: `lcall fcn.000044F6` at `0x69C2`, then
+`lcall fcn.0000EF7B` at `0x69C7`. Each path carries its own guard; it is not an `if/else`,
+but two independently guarded paths.
 
-#### `0x2D.4` — le bit qui coupe l'USB
+#### `0x2D.4` — the bit that cuts off USB
 
-> **Correction.** J'ai d'abord présenté `0x2D.4` comme « l'interrupteur radio/USB ». C'est exact
-> quant à son **effet**, faux quant à sa **cause** : il n'est pas posé par un choix de mode mais
-> par une hystérésis sur une grandeur analogique reçue de la radio (voir `fcn.00001DC3` plus
-> bas). Le sélecteur de mode, lui, est plutôt `XRAM 0x031B`.
+> **Correction.** I initially presented `0x2D.4` as "the radio/USB switch". That is accurate
+> as to its **effect**, but wrong as to its **cause**: it is set not by a mode selection, but
+> by hysteresis on an analog quantity received from the radio (see `fcn.00001DC3`
+> below). The actual mode selector is `XRAM 0x031B`.
 
-`fcn.0000EF7B` tient en dix octets :
+`fcn.0000EF7B` is just ten bytes long:
 
 ```asm
-jb    0x2d.4, ret        ; radio active -> aucun rapport USB
+jb    0x2d.4, ret        ; radio active -> no USB report
 lcall fcn.0000aa79
-lcall fcn.00006acf       ; dispatcher HID -> USB
+lcall fcn.00006acf       ; HID -> USB dispatcher
 ```
 
-Neuf autres fonctions le lisent (`0x0F77`, `0x1632`, `0x1F14`, `0x1F5B`, `0x1FF7`, `0x5995`,
-`0x68EC`, `0x9A82`). Il n'est écrit **que dans `fcn.00001DC3`** : `setb` en `0x1F25`, `clr` en
-`0x1EF5` et `0x1F50`. Un seul propriétaire pour l'état, ce qui en fait le point d'observation
-naturel du mode de sortie.
+Nine other functions read it (`0x0F77`, `0x1632`, `0x1F14`, `0x1F5B`, `0x1FF7`, `0x5995`,
+`0x68EC`, `0x9A82`). It is written **only in `fcn.00001DC3`**: `setb` at `0x1F25`, `clr` at
+`0x1EF5` and `0x1F50`. A single owner for this state, making it a natural observation
+point for the output path.
 
-#### La voie USB : `fcn.00006ACF` → `0x6C07`
+#### The USB path: `fcn.00006ACF` → `0x6C07`
 
-`fcn.00006ACF` balaie les drapeaux de rapport en attente par priorité décroissante (`0x27.4`,
-`0x2A.6`, `0x29.0`, …). Pour chacun il pose trois choses puis saute en `0x6C07` :
+`fcn.00006ACF` scans pending report flags in decreasing priority order (`0x27.4`,
+`0x2A.6`, `0x29.0`, …). For each one, it sets up three values and jumps to `0x6C07`:
 
-| XRAM | Rôle |
+| XRAM | Role |
 | --- | --- |
-| `0x0F0C` | index du rapport |
-| `0x0F0F`–`0x0F11` | pointeur générique vers le tampon source |
-| tampon`[0]` | **Report ID** = `0x0F0C` + 1 |
+| `0x0F0C` | report index |
+| `0x0F0F`–`0x0F11` | generic pointer to the source buffer |
+| buffer`[0]` | **Report ID** = `0x0F0C` + 1 |
 
-`0x6C07` fait le reste :
+`0x6C07` does the rest:
 
 ```asm
 movx [0x0f49] = 0x11 ; [0x0f4a] = 0x80    ; destination = 0x1180
-movx [0x0f0b] = 0                          ; compteur
-boucle:
-  a = [0x0f0c] ; mov dptr,#0x6045 ; movc a,@a+dptr   ; longueur du rapport
-  ...copie octet a octet du pointeur generique vers 0x1180 + i...
+movx [0x0f0b] = 0                          ; counter
+loop:
+  a = [0x0f0c] ; mov dptr,#0x6045 ; movc a,@a+dptr   ; report length
+  ...byte-by-byte copy from generic pointer to 0x1180 + i...
 mov  IEP2CNT, a        ; SFR 0x9D
-orl  EP2CON, #0x04     ; SFR 0x9A  -> arme l'endpoint
+orl  EP2CON, #0x04     ; SFR 0x9A  -> arm endpoint
 ```
 
-**`0x1180` est `EP2_IN_BUF`** (`_SBUF(0x1180) EP2_IN_BUF[64]` dans l'en-tête SMK). `0x6C07` est
-donc purement USB : il ne contient aucune branche radio.
+**`0x1180` is `EP2_IN_BUF`** (`_SBUF(0x1180) EP2_IN_BUF[64]` in the SMK header). `0x6C07` is
+therefore purely USB: it contains no radio branch.
 
-La table `0x6045` donne la longueur totale par rapport :
+The table at `0x6045` gives the total length for each report index:
 
 | index `0x0F0C` | 0 | 1 | 2 | 3 | 4 | 5 |
 | --- | --- | --- | --- | --- | --- | --- |
-| longueur | 3 | 2 | **4** | 16 | 8 | 8 |
+| length | 3 | 2 | **4** | 16 | 8 | 8 |
 
-L'index 2 vaut 4 octets — ce qui recoupe exactement le rapport de `0xA4BD`, qui écrit `0x08BF`
-(Report ID 3) plus `0x08C0`–`0x08C2` : quatre octets, ni plus ni moins.
+Index 2 is 4 bytes long — matching the exact report built by `0xA4BD`, which writes `0x08BF`
+(Report ID 3) plus `0x08C0`–`0x08C2`: four bytes, no more, no less.
 
-#### La voie radio : `fcn.000044F6`
+#### The radio path: `fcn.000044F6`
 
-Elle lit un index en `XRAM 0x0307`, adresse un enregistrement de **28 octets** en
-`0x0C57 + index × 28`, et émet deux tailles de trame :
+It reads an index at `XRAM 0x0307`, addresses a **28-byte** record at
+`0x0C57 + index × 28`, and sends two frame sizes:
 
-| Site | charge copiée | `r5` (trame) |
+| Call site | copied payload | `r5` (frame size) |
 | --- | --- | --- |
-| `0x46C2` | 28 o (`fcn.00004C4B`, `r7 = 0x1C`) | **30** |
-| `0x4730` | 11 o (`r7 = 0x0B`) | **13** |
+| `0x46C2` | 28 B (`fcn.00004C4B`, `r7 = 0x1C`) | **30** |
+| `0x4730` | 11 B (`r7 = 0x0B`) | **13** |
 
-C'est la seule des cinq entrées de `euart0.send` qui soit appelée depuis la chaîne de rapport.
-Les quatre autres portent de la configuration, pas des frappes :
+This is the only one of the five `euart0.send` call sites reached from the report chain.
+The other four carry configuration, not keystrokes:
 
-| Appelant | Trame | Contenu |
+| Caller | Frame | Contents |
 | --- | --- | --- |
-| `fcn.0000A307` @ `0xA376` | 32 o | commande `0x09`, nom Bluetooth |
-| `fcn.0000B093` @ `0xB0B8` | 23 o | commande `0x08`, charge de 19 o |
-| `fcn.0000ED3B` @ `0xED53` | 6 o | commande `0x06`, `01 06 00 00 00 <ck>` |
+| `fcn.0000A307` @ `0xA376` | 32 B | command `0x09`, Bluetooth name |
+| `fcn.0000B093` @ `0xB0B8` | 23 B | command `0x08`, 19 B payload |
+| `fcn.0000ED3B` @ `0xED53` | 6 B | command `0x06`, `01 06 00 00 00 <ck>` |
 
-> Précision à une note antérieure : dans `euart0.send`, **`r7` n'est pas l'octet de commande** —
-> il est rangé en IDATA `0x74` comme étiquette. L'octet de commande est l'octet 1 de la trame,
-> composé par l'appelant. `fcn.0000ED3B` le montre : `r7 = 0x0A` mais la trame porte `0x06`.
+> Clarification to an earlier note: in `euart0.send`, **`r7` is not the command byte** —
+> it is stored in IDATA `0x74` as a tag. The command byte is byte 1 of the frame,
+> assembled by the caller. `fcn.0000ED3B` illustrates this: `r7 = 0x0A`, whereas the frame carries `0x06`.
 
-#### `P4.7` — la seconde ligne de handshake, en entrée
+#### `P4.7` — the second handshake line, an input
 
-Toute émission est précédée de `jnb 0xb0.7, sortie` (SFR `0xB0` = `P4`). Onze sites le testent :
+Every transmission is preceded by `jnb 0xb0.7, exit` (SFR `0xB0` = `P4`). Eleven sites test it:
 `0x44F6`, `0xB093`, `0xB06A`, `0xB0BC`, `0xED3B`, `0xED89`, `0xEC85`, `0xEC68`, plus
-`isr.pwm0` (`0x743D`), `fcn.0000801F` (`0x8152`) et `fcn.0000AE50` (`0xAE5B`).
+`isr.pwm0` (`0x743D`), `fcn.0000801F` (`0x8152`), and `fcn.0000AE50` (`0xAE5B`).
 
-**Aucun `setb` ni `clr` sur `0xB0.7` dans toute l'image** — le firmware ne l'écrit jamais. C'est
-donc une **entrée**, pilotée par le BK3632. Avec `P0.2` en sortie (requête d'émission), la
-liaison compte **deux lignes de handshake**, et `P4.7` n'apparaît dans aucune colonne de la
-matrice — cohérent.
+**There is not a single `setb` or `clr` on `0xB0.7` in the entire image** — the firmware never writes to it. It is
+therefore an **input**, driven by the BK3632. Together with `P0.2` as an output (transmit request), the
+link has **two handshake lines**, and `P4.7` does not appear in any matrix column —
+consistent.
 
-`fcn.0000B093` cumule les deux gardes, ce qui donne la forme canonique d'un émetteur :
+`fcn.0000B093` combines both guards, showing the canonical form of a transmitter:
 
 ```asm
-jb  0x2c.1, ret     ; une emission est deja en cours
-jnb 0xb0.7, ret     ; le module radio n'est pas pret
+jb  0x2c.1, ret     ; a transmission is already in progress
+jnb 0xb0.7, ret     ; the radio module is not ready
 ```
 
-### Les trois fonctions du sous-système : `1DC3`, `44F6`, `6ACF`
+### The three functions of the subsystem: `1DC3`, `44F6`, `6ACF`
 
-| Fonction | Taille | Blocs | Rôle |
+| Function | Size | Blocks | Role |
 | --- | --- | --- | --- |
-| `fcn.00001DC3` | 2700 o | 219 | gestion d'énergie — **seul écrivain de `0x2D.4`** |
-| `fcn.000044F6` | 844 o | 53 | émetteur de rapports vers la radio |
-| `fcn.00006ACF` | 460 o | 33 | dispatcher de rapports vers l'USB |
+| `fcn.00001DC3` | 2700 B | 219 | power management — **sole writer of `0x2D.4`** |
+| `fcn.000044F6` | 844 B | 53 | report transmitter to the radio |
+| `fcn.00006ACF` | 460 B | 33 | report dispatcher to USB |
 
-#### `fcn.00001DC3` — une hystérésis, pas un sélecteur de mode
+#### `fcn.00001DC3` — hysteresis, not a mode selector
 
-Appelée depuis un seul site (`fcn.00008FA7` @ `0x8FE6`). Ses gardes d'entrée mènent à quatre
-sous-chemins ; celui qui pilote `0x2D.4` est atteint quand `0x26.0` est **clair** :
+Called from a single site (`fcn.00008FA7` @ `0x8FE6`). Its entry guards lead to four
+sub-paths; the one that drives `0x2D.4` is reached when `0x26.0` is **clear**:
 
 ```asm
-0x1f05  ; compare 16 bits [0x02E6]:[0x02E7] a 0x02E1 = 737
-        jc 0x1f17                       ; valeur < 737
-0x1f14  jnb 0x2d.4, 0x1f2e              ; sinon, remet le compteur a zero
-0x1f17  [0x097b]++ ; si >= 0xC8 (200) :
-0x1f25     setb 0x2d.4                  ; <== bascule
+0x1f05  ; 16-bit compare [0x02E6]:[0x02E7] against 0x02E1 = 737
+        jc 0x1f17                       ; value < 737
+0x1f14  jnb 0x2d.4, 0x1f2e              ; otherwise, reset counter to zero
+0x1f17  [0x097b]++ ; if >= 0xC8 (200):
+0x1f25     setb 0x2d.4                  ; <== trip
 0x1f27     setb 0x29.1 ; lcall fcn.0000EE6A
 
-0x1f33  ; compare la meme valeur a 0x0390 = 912
-0x1f43  [0x097f]++ ; si >= 0x64 (100) :
-0x1f50     clr 0x2d.4                   ; <== retour
+0x1f33  ; compare the same value against 0x0390 = 912
+0x1f43  [0x097f]++ ; if >= 0x64 (100):
+0x1f50     clr 0x2d.4                   ; <== recover
 0x1f52     clr 0x2b.3
 ```
 
-Deux seuils, deux compteurs anti-rebond, une bande morte de 737 à 912 : c'est une **hystérésis**,
-pas une commutation.
+Two thresholds, two debounce counters, and a deadband from 737 to 912: this is **hysteresis**,
+not mode switching.
 
-**D'où vient la grandeur mesurée.** `XRAM 0x02E6:0x02E7` est écrit par **`euart0.parse`**
-(`0x0677`, `0x0683`, `0x0691`) depuis l'octet en `XRAM 0x0127` — l'**offset 7 de la trame reçue**
-recopiée en `0x0120` — et initialisé à `0x03xx` par `vec.reset` (`0x9136`). La valeur vient donc
-du **BK3632**, pas du 8051.
+**Where the measured value comes from.** `XRAM 0x02E6:0x02E7` is written by **`euart0.parse`**
+(`0x0677`, `0x0683`, `0x0691`) from the byte at `XRAM 0x0127` — **offset 7 of the received frame**
+copied to `0x0120` — and initialized to `0x03xx` by `vec.reset` (`0x9136`). The value therefore comes
+from the **BK3632**, not the 8051.
 
-Ce qui est cohérent avec le silicium : le SH68F90 **n'a pas d'ADC**. La datasheet ne lui donne
-qu'un détecteur de sous-tension (`LPDCON` 0xB3, `LPDSEL` 0x89). Une mesure analogique ne peut
-venir que de la radio.
+That matches the silicon: the SH68F90 **has no ADC**. The datasheet only gives it
+a low-voltage detector (`LPDCON` 0xB3, `LPDSEL` 0x89). Any analog measurement must
+come from the radio chip.
 
-`fcn.00001DC3` compare cette valeur à **quatre seuils** échelonnés :
+`fcn.00001DC3` compares this value against **four stepped thresholds**:
 
-| Site | Seuil | Décimal |
+| Site | Threshold | Decimal |
 | --- | --- | --- |
 | `0x1F06` | `0x02E1` | 737 |
 | `0x23D8` | `0x030D` | 781 |
 | `0x2329` | `0x034E` | 846 |
 | `0x227A` | `0x0390` | 912 |
 
-Une échelle monotone dans une plage compatible avec une conversion **sur 10 bits** (0–1023),
-lue par le BK3632 et transmise sur EUART0.
+A monotonic scale within a range consistent with a **10-bit conversion** (0–1023),
+measured by the BK3632 and transmitted over EUART0.
 
-> *Inféré :* qu'il s'agisse de la **tension de batterie** et que les quatre seuils soient les
-> paliers d'une jauge. Ce qui est établi : la provenance (trame EUART0, octet 7), l'échelle de
-> seuils, l'hystérésis, et le fait que `0x2D.4` n'a qu'un seul écrivain.
+> *Inferred:* that this is the **battery voltage** and that the four thresholds are the
+> steps of a battery gauge. What is established: the origin (EUART0 frame, byte 7), the threshold
+> scale, the hysteresis, and the fact that `0x2D.4` has only a single writer.
 
-#### `fcn.00006ACF` — deux gardes, puis six emplacements
+#### `fcn.00006ACF` — two guards, then six slots
 
 ```asm
 mov a, EP2CON            ; SFR 0x9A
-jnb ACC.2, suite         ; si l'endpoint est encore arme -> sortir
-ljmp sortie
-suite:
-a = [0x031b] ; jz chaine ; ljmp sortie   ; ne rien emettre si 0x031B != 0
+jnb ACC.2, next          ; if endpoint is still armed -> exit
+ljmp exit
+next:
+a = [0x031b] ; jz chain  ; ljmp exit     ; send nothing if 0x031B != 0
 ```
 
-`0x031B` non nul suffit à couper toute émission USB — c'est un gate plus direct que `0x2D.4`,
-et c'est la même variable qui gouverne les activations d'EUART0 en `0x41F2`/`0x4227`/`0x425D`.
+A non-zero `0x031B` is enough to cut off all USB transmissions — a more direct gate than `0x2D.4`,
+and the exact same variable that governs EUART0 activation in `0x41F2`/`0x4227`/`0x425D`.
 
-Vient ensuite une **chaîne de priorité décroissante**. Chaque maillon acquitte son drapeau,
-pose `0x26.7`, écrit l'index, le Report ID en tête de tampon et un pointeur générique, puis
-saute au copieur :
+Next comes a **decreasing-priority chain**. Each link clears its flag,
+sets `0x26.7`, writes the index, the Report ID at the head of the buffer, and a generic pointer, then
+jumps to the copy routine:
 
-| Ordre | Drapeau | `0x0F0C` | Tampon | Report ID | Longueur |
+| Order | Flag | `0x0F0C` | Buffer | Report ID | Length |
 | --- | --- | --- | --- | --- | --- |
 | 1 | `0x2A.0` | 0 | `0x09BC` | 2 | 3 |
 | 2 | `0x27.3` | 1 | `0x097D` | 1 | 2 |
@@ -3151,127 +3149,127 @@ saute au copieur :
 | 5 | `0x29.0` | 4 | `0x09B0` | 7 | 8 |
 | 6 | `0x2B.2` | 5 | `0x0095` | 6 | 8 |
 
-**Six maillons — et la table de longueurs `0x6045` a exactement six entrées valides**
-(`03 02 04 10 08 08`) avant son `0xFF` de fin. Les deux se confirment mutuellement, ce qui
-valide au passage la lecture de la table.
+**Six links — and the length table at `0x6045` has exactly six valid entries**
+(`03 02 04 10 08 08`) before its terminating `0xFF`. The two mutually confirm each other, which
+also validates our reading of the table.
 
-Noter que le Report ID ne suit pas l'index : l'index 0 porte l'ID 2, l'index 1 porte l'ID 1.
-Les maillons 3 et 4 le calculent par `inc a`, les autres l'écrivent en dur.
+Note that the Report ID does not follow the index sequentially: index 0 carries ID 2, and index 1 carries ID 1.
+Links 3 and 4 compute it via `inc a`, while the others hardcode it.
 
-#### `fcn.000044F6` — deux moitiés symétriques, une sortie commune
+#### `fcn.000044F6` — two symmetric halves, one shared exit
 
 ```
-0x44F6  jb 0x2A.4 / jb 0x27.0 / jb 0x2A.6  -> moitie A (0x4502)
-                                   sinon   -> moitie B (0x45A2)
+0x44F6  jb 0x2A.4 / jb 0x27.0 / jb 0x2A.6  -> half A (0x4502)
+                                   else    -> half B (0x45A2)
 
-moitie A (0x4502-0x45A2)   index [0x0307], enregistrement 0x0C57 + n x 28
-moitie B (0x45A2-0x4652)   trois gardes puis corps parallele
+half A (0x4502-0x45A2)   index [0x0307], record 0x0C57 + n x 28
+half B (0x45A2-0x4652)   three guards then parallel body
 
 0x4652  convergence
-0x4675    jb 0xB0.7          <-- P4.7 : le module radio doit etre pret
-0x467B    ... -> euart0.send  r5 = 30   (charge de 28 o)
-0x46EB    ... -> euart0.send  r5 = 13   (charge de 11 o)
+0x4675    jb 0xB0.7          <-- P4.7: radio module must be ready
+0x467B    ... -> euart0.send  r5 = 30   (28 B payload)
+0x46EB    ... -> euart0.send  r5 = 13   (11 B payload)
 ```
 
-Les deux moitiés sont structurellement identiques (blocs de 136 et 143 octets) et convergent sur
-un unique bloc d'émission. C'est la seule des cinq entrées de `euart0.send` qui soit atteinte
-depuis la chaîne de rapport.
+The two halves are structurally identical (136- and 143-byte blocks) and converge on
+a single transmission block. This is the only one of the five `euart0.send` entry points reached
+from the report chain.
 
-### `XRAM 0x031B` — le transport actif
+### `XRAM 0x031B` — the active transport
 
-**57 références** dans l'image : c'est la variable centrale du sous-système sans-fil. Trois
-valeurs seulement, `0`, `1` et `2`.
+**57 references** across the image: this is the central variable of the wireless subsystem. Only three
+values occur: `0`, `1`, and `2`.
 
-#### Ce que la valeur commande
+#### What the value controls
 
-| Site | Test | Effet quand `0x031B == 0` |
+| Site | Test | Effect when `0x031B == 0` |
 | --- | --- | --- |
-| `usb.init` @ `0xEC00` | `jnz` | l'USB n'est initialisé (`USBADDR`) **que** dans ce cas |
-| `fcn.00006ACF` @ `0x6AD7` | `jz` | aucun rapport HID USB si la valeur est non nulle |
-| `isr.timer2` @ `0xA513` | `jz` | `euart0.parse` n'est appelé **que** si elle est non nulle |
-| `vec.reset` @ `0x9150` | `jnz` | sinon `anl IEN1,#0xBF` — l'IRQ EUART0 reste coupée |
-| `fcn.00001DC3` @ `0x1EFC` | `jnz` | l'hystérésis d'énergie ne tourne qu'en sans-fil |
-| `fcn.00003108` @ `0x310E` | `cjne #0x02` | en mode 2, un élément de plus à balayer (`inc 0x0E`) |
+| `usb.init` @ `0xEC00` | `jnz` | USB is initialized (`USBADDR`) **only** in this case |
+| `fcn.00006ACF` @ `0x6AD7` | `jz` | no USB HID report is sent if the value is non-zero |
+| `isr.timer2` @ `0xA513` | `jz` | `euart0.parse` is called **only** if the value is non-zero |
+| `vec.reset` @ `0x9150` | `jnz` | otherwise `anl IEN1,#0xBF` — the EUART0 IRQ stays disabled |
+| `fcn.00001DC3` @ `0x1EFC` | `jnz` | power hysteresis only runs in wireless mode |
+| `fcn.00003108` @ `0x310E` | `cjne #0x02` | in mode 2, one more element is scanned (`inc 0x0E`) |
 
-> Précision à la section précédente : l'appel à `euart0.parse` dans `isr.timer2` a **deux**
-> gardes, pas une — `jb 0x2c.0` en `0xA504` et `jz` sur `0x031B` en `0xA513`, toutes deux vers
-> la même sortie `0xA51C`.
+> Clarification to the previous section: the call to `euart0.parse` in `isr.timer2` has **two**
+> guards, not one — `jb 0x2c.0` at `0xA504` and `jz` on `0x031B` at `0xA513`, both branching to
+> the same exit at `0xA51C`.
 
-#### Le retour au filaire — `fcn.000084E9` @ `0x8543`
+#### Returning to wired mode — `fcn.000084E9` @ `0x8543`
 
 ```asm
 clr   a
 movx  [0x031b], a       ; transport = 0
-anl   IEN1, #0xBF       ; coupe l'IRQ EUART0
-lcall usb.init          ; reinitialise l'USB
+anl   IEN1, #0xBF       ; disable EUART0 IRQ
+lcall usb.init          ; reinitialize USB
 ```
 
-#### Le passage en Bluetooth — trois blocs identiques
+#### Switching to Bluetooth — three identical blocks
 
-`0x41D4`, `0x420A`, `0x423F`, au numéro de slot près :
+`0x41D4`, `0x420A`, `0x423F`, identical up to the slot number:
 
 ```asm
 jnb 0x29.5, abandon ; jnb 0x2a.5, abandon
-a = [0x031B] ; xrl #0x02 ; jz suite     ; exige d'etre DEJA en mode 2
-a = [0x0319] ; xrl #0x0N ; jz fin       ; deja sur ce slot -> ne rien faire
+a = [0x031B] ; xrl #0x02 ; jz suite     ; requires ALREADY being in mode 2
+a = [0x0319] ; xrl #0x0N ; jz fin       ; already on this slot -> do nothing
 [0x031B] = 2
-[0x0319] = N            ; dec a / movx a / inc a, avec a = 2  ->  1, 2, 3
-orl  IEN1, #0x40        ; active l'IRQ EUART0
-anl  USBCON, #0x7F      ; coupe l'USB
+[0x0319] = N            ; dec a / movx a / inc a, with a = 2  ->  1, 2, 3
+orl  IEN1, #0x40        ; enable EUART0 IRQ
+anl  USBCON, #0x7F      ; disable USB
 setb 0x27.7 ; setb 0x26.5
 ```
 
-Le numéro de slot est produit par la seule différence entre les trois blocs : `dec a`, `movx a`,
-`inc a` appliqués à `a = 2`. Donc **`XRAM 0x0319` est le slot Bluetooth, 1 à 3**, et ces trois
-blocs sont les raccourcis de *changement de slot* — ils exigent le mode 2 et n'y font pas entrer.
+The slot number is produced by the only difference between the three blocks: `dec a`, `movx a`,
+`inc a` applied to `a = 2`. Therefore **`XRAM 0x0319` is the Bluetooth slot, 1 to 3**, and these three
+blocks are the *slot-switching* shortcuts — they require mode 2 and do not enter it.
 
-La symétrie avec le retour filaire est exacte : `IEN1.6` activé contre coupé, `USBCON.7` coupé
-contre `usb.init`.
+The symmetry with returning to wired mode is exact: `IEN1.6` enabled vs. disabled, `USBCON.7` disabled
+vs. `usb.init`.
 
 #### Mode 1
 
-`0x4276` exige `[0x031B] == 1`, remet à zéro un compteur 16 bits en `0x0961` et pose `0x2C.5` —
-un déclencheur, pas une entrée de mode. `euart0.parse` (`0x070E`) et `fcn.000084E9` (`0x8576`)
-traitent le mode 1 distinctement du mode 2, chacun avec son propre `xrl`.
+`0x4276` requires `[0x031B] == 1`, zeroes a 16-bit counter at `0x0961`, and sets `0x2C.5` —
+a trigger, not a mode entry. `euart0.parse` (`0x070E`) and `fcn.000084E9` (`0x8576`)
+handle mode 1 distinctly from mode 2, each with its own `xrl`.
 
-> *Inféré :* 0 = USB filaire, 1 = 2,4 GHz, 2 = Bluetooth — c'est la structure tri-mode habituelle
-> de ces claviers. *Établi :* trois valeurs ; le mode 2 porte un slot 1–3 ; le mode 0 est celui où
-> l'USB est initialisé et où le sans-fil est intégralement coupé.
+> *Inferred:* 0 = wired USB, 1 = 2.4 GHz, 2 = Bluetooth — this is the usual tri-mode structure
+> of these keyboards. *Established:* three values; mode 2 carries a slot 1–3; mode 0 is the one where
+> USB is initialized and wireless is completely shut off.
 
-#### Résolu, complètement : ce qui fait entrer en 2,4 GHz
+#### Resolved, completely: what enters 2.4 GHz mode
 
-Le point ouvert n°1 — « aucune écriture directe de la valeur 1 dans `g_transport` » — se referme,
-et pas seulement par le chemin du bloc persisté décrit plus bas. Il y a un **sélecteur matériel**,
-et il a sa propre routine.
+Open item #1 — "no direct write of the value 1 to `g_transport`" — is now closed,
+and not only via the persisted block path described below. There is a **hardware selector**,
+and it has its own routine.
 
-##### `fcn.000084E9` — le sélecteur à glissière, trois positions
+##### `fcn.000084E9` — the three-position slide switch
 
-Appelée depuis `tick_slow` (`0x9074`). Elle échantillonne **deux broches** :
+Called from `tick_slow` (`0x9074`). It samples **two pins**:
 
 ```asm
 0x84E9  jb  0xF8.4, 0x84FE     ; 0xF8 = P7  ->  P7.4
 0x84FE  jb  0xB0.5, 0x8512     ; 0xB0 = P4  ->  P4.5
 ```
 
-> Ghidra les nomme `F8_4` et `T1` : `T1` est le nom classique du bit `0xB0.5` quand `0xB0` est pris
-> pour `P3`. C'est encore le piège de la carte SFR — sur ce MCU `0xB0` est `P4`.
+> Ghidra names them `F8_4` and `T1`: `T1` is the classic name of bit `0xB0.5` when `0xB0` is mistaken
+> for `P3`. That is the SFR map trap again — on this MCU, `0xB0` is `P4`.
 
-| `P7.4` | `P4.5` | Position | Compteur |
+| `P7.4` | `P4.5` | Position | Counter |
 | --- | --- | --- | --- |
-| 1 | 1 | **filaire** | `0x08BD` |
+| 1 | 1 | **wired** | `0x08BD` |
 | 1 | 0 | **Bluetooth** | `0x0960` |
-| 0 | — | **2,4 GHz** | `0x02DF` |
+| 0 | — | **2.4 GHz** | `0x02DF` |
 
-Chaque position a son compteur ; les deux autres sont remis à zéro à chaque passage. **Dix
-passages consécutifs** déclenchent la bascule. C'est un anti-rebond, pas un temporisateur.
+Each position has its own counter; the other two are zeroed on each pass. **Ten
+consecutive passes** trigger the switchover. It is a debounce filter, not a timer.
 
-Ces deux broches figuraient parmi les entrées « rôle inconnu » de l'init GPIO d'usine. Il en reste
-sept : `P0.0`, `P0.1`, `P0.5`, `P0.6`, `P4.1`, `P4.4`, `P7.7`.
+These two pins were among the "unknown role" inputs in the factory GPIO init. Seven remain:
+`P0.0`, `P0.1`, `P0.5`, `P0.6`, `P4.1`, `P4.4`, `P7.7`.
 
-##### Les trois branches
+##### The three branches
 
 ```c
-/* 2,4 GHz */
+/* 2.4 GHz */
 if (g_transport == 0) { setb 0x27.7; delay(20); }   /* 0xEF8D */
 g_transport = 1;
 IEN1 |= 0x40; USBCON &= 0x7F; setb 0x27.7; delay(20);   /* 0xEF40 */
@@ -3283,7 +3281,7 @@ if (g_bt_slot < 1 || g_bt_slot > 3) g_bt_slot = 1;
 IEN1 |= 0x40; USBCON &= 0x7F; setb 0x27.7; delay(20);
 rf_link_select(g_bt_slot, 0);
 
-/* filaire */
+/* wired */
 setb 0x27.7; delay(20);
 rf_notify_wired();                                  /* 0xEED1 */
 g_transport = 0;
@@ -3292,313 +3290,313 @@ usb_init();
 delay(200);
 ```
 
-`fcn.0000EED1` est la politesse de sortie : **commande `0x0E`**, dix millisecondes, **commande
-`0x0B` avec le paramètre 0**, dix millisecondes.
+`fcn.0000EED1` is the polite exit sequence: **command `0x0E`**, ten milliseconds, **command
+`0x0B` with parameter 0**, ten milliseconds.
 
-##### Les deux temporisateurs de bascule — et l'USB qu'on éteint
+##### The two switchover delay thunks — and turning off USB
 
-Une première rédaction de cette page donnait `0xEF40` pour un simple réarmement d'IRQ. C'est faux,
-et la différence compte pour un portage. Les deux thunks, désassemblés en entier :
+An earlier draft of this page described `0xEF40` as a simple IRQ re-arming. That is wrong,
+and the difference matters for a port. Both thunks, disassembled in full:
 
 ```asm
 0xEF8D  setb 0x3f           ; = 0x27.7
         mov  r7,#0x14
         ljmp 0xED03         ; ~20 ms
 
-0xEF40  orl  IEN1,#0x40     ; l'IRQ EUART0 s'arme
-        anl  USBCON,#0x7F   ; <<< le module USB s'ETEINT
+0xEF40  orl  IEN1,#0x40     ; EUART0 IRQ is armed
+        anl  USBCON,#0x7F   ; <<< the USB module turns OFF
         setb 0x3f
         mov  r7,#0x14
         ljmp 0xED03         ; ~20 ms
 ```
 
-`0xED03` est la boucle de temporisation (`r7` en entrée, deux niveaux imbriqués). `0x3f` est
-l'adresse *bit* de `0x27.7`, d'où la notation employée plus haut.
+`0xED03` is the delay loop (`r7` on entry, two nested levels). `0x3f` is
+the *bit* address of `0x27.7`, hence the notation used above.
 
-Donc **en sans-fil, le firmware d'usine coupe le périphérique USB** ; il ne se contente pas
-d'ignorer l'hôte. Les trois raccourcis de changement de slot (`0x41D4`, `0x420A`, `0x423F`) le
-faisaient déjà en clair — la nouveauté est que le chemin du *sélecteur à glissière* le fait aussi,
-par ce thunk, et c'est celui-là que le portage suit.
+So **in wireless mode, the factory firmware shuts off the USB peripheral**; it does not merely
+ignore the host. The three slot-switching shortcuts (`0x41D4`, `0x420A`, `0x423F`) already did
+this explicitly — what is new is that the *slide switch* path does it too,
+via this thunk, and that is the path the port follows.
 
-##### `fcn.00003901` : la commande `0x06` est une sonde de présence
+##### `fcn.00003901`: command `0x06` is a presence probe
 
-Relu en C, la branche de repos du séquenceur (documentée plus bas) n'est pas une requête d'état
-ponctuelle mais un **entretien de liaison à trois coups** :
+Re-read in C, the idle branch of the sequencer (documented below) is not a one-off status
+request but a **three-strike link keepalive**:
 
 ```c
 if (g_state == 0 && !flag_7_2) {
     if (++[0x0150] > 99) {
         [0x0150] = 0;
-        euart0_cmd06();                 /* commande 0x06 */
-        if (++IDATA[0x30] > 2) {        /* trois sondes sans reponse */
+        euart0_cmd06();                 /* command 0x06 */
+        if (++IDATA[0x30] > 2) {        /* three unanswered probes */
             IDATA[0x30] = 0;
-            0x2C.1 = 0;                 /* « liaison vivante » retombe */
-            P0CR &= 0xFB; P0_2 = 1;     /* la ligne d'emission est relachee */
+            0x2C.1 = 0;                 /* "link alive" drops */
+            P0CR &= 0xFB; P0_2 = 1;     /* the TX line is released */
         }
     }
 }
 ```
 
-Le relâchement de `P0.2` est exactement celui que l'ISR fait en fin de rafale : la sonde sert aussi
-de rattrapage si une rafale s'est perdue. C'est ce mécanisme que le portage transcrit pour donner un
-sens à son indicateur « connecté » — et c'est pourquoi cet indicateur **retombe** de lui-même.
+Releasing `P0.2` is the exact same action the ISR performs at the end of a burst: the probe also serves
+as a fallback recovery if a burst was lost. This is the mechanism the port transcribes to give
+meaning to its "connected" indicator — and that is why this indicator **drops** on its own.
 
-##### `fcn.0000EF5A` → `fcn.0000ED89` — la commande qui choisit la radio
+##### `fcn.0000EF5A` → `fcn.0000ED89` — the command that selects the radio
 
 ```asm
-0xED89  jb  0x2c.1, ret        ; pas d'emission en cours
-0xED8C  jnb P4.7,   ret        ; module pret
-        IDATA[0x33] = 0x01     ; en-tete
-        IDATA[0x34] = 0x01     ; commande
+0xED89  jb  0x2c.1, ret        ; no transmission in progress
+0xED8C  jnb P4.7,   ret        ; module ready
+        IDATA[0x33] = 0x01     ; header
+        IDATA[0x34] = 0x01     ; command
         IDATA[0x35] = R7       ; slot
-        IDATA[0x36] = R5       ; drapeau
-0xED9E  lcall euart0_send      ; six octets
+        IDATA[0x36] = R5       ; flag
+0xED9E  lcall euart0_send      ; six bytes
 ```
 
-Soit sur le fil :
+Or on the wire:
 
 ```
-01 01 <drapeau> <slot> 00 <0x55 - somme>
+01 01 <flag> <slot> 00 <0x55 - sum>
 ```
 
-> **Correction.** Cette page a d'abord écrit `01 01 <slot> <drapeau>`. L'ordre est l'inverse, et
-> l'assembleur ci-dessus le dit déjà : `IDATA[0x35] = R7` **puis** `IDATA[0x36] = R5`. Ce qui reçoit
-> `g_bt_slot` est **R5**, sur les quatre sites qui l'émettent — `0x85D7` (entrée Bluetooth), `0x44C0`,
-> `0x87AD`, `0x06E6` (superviseur de lien). R7 vaut `0` partout sauf en `0x87BD`, où il vaut `1`.
+> **Correction.** This page initially wrote `01 01 <slot> <flag>`. The order is the reverse, and
+> the assembly above already says so: `IDATA[0x35] = R7` **then** `IDATA[0x36] = R5`. What receives
+> `g_bt_slot` is **R5**, across all four call sites that send it — `0x85D7` (Bluetooth entry), `0x44C0`,
+> `0x87AD`, `0x06E6` (link supervisor). R7 is `0` everywhere except at `0x87BD`, where it is `1`.
 >
-> Ce qui tranche est `0x06E6` : en Bluetooth, quand l'état reçu ne correspond pas au slot attendu, le
-> superviseur redemande avec `R5 = g_bt_slot` et `R7 = 0` (`0x072C` : `ff` = `MOV R7,A` avec `A = 0`).
-> Si R7 portait le slot, le clavier réclamerait le **dongle 2,4 GHz** à chaque échec de lien
-> Bluetooth : il changerait de radio pour cause de mauvaise radio. Le portage émettait dans le mauvais
-> ordre ; c'est corrigé dans `rf_send_link()`.
+> What settles it is `0x06E6`: in Bluetooth mode, when the received state does not match the expected slot, the
+> supervisor re-requests with `R5 = g_bt_slot` and `R7 = 0` (`0x072C`: `ff` = `MOV R7,A` with `A = 0`).
+> If R7 carried the slot, the keyboard would request the **2.4 GHz dongle** on every Bluetooth link
+> failure: it would switch radios because of a wrong radio. The port was sending them in the wrong
+> order; this is fixed in `rf_send_link()`.
 
-**Le slot est l'encodage radio, et il ne vaut pas celui de `g_transport`** :
+**The slot is the radio encoding, and it does not match `g_transport`**:
 
 | Slot | Radio |
 | --- | --- |
-| `0` | **dongle 2,4 GHz** |
-| `1` `2` `3` | Bluetooth, emplacements 1 à 3 |
+| `0` | **2.4 GHz dongle** |
+| `1` `2` `3` | Bluetooth, slots 1 to 3 |
 
-La preuve tient en trois lignes de `tick_slow_wireless` (`0x870C`) :
+The proof fits in three lines of `tick_slow_wireless` (`0x870C`):
 
 ```c
 if (g_transport == 2)      slot = g_bt_slot;   /* 0x87AD */
 else if (g_transport == 1) slot = 0;           /* 0x87BB */
-else                       /* rien */;
+else                       /* nothing */;
 rf_link_select(slot, 1);                       /* 0x87BF, R7 = 1 */
 ```
 
-En mode 1, le seul slot possible est **0**. Et l'entrée en mode 1 de `fcn.000084E9` appelle
-`rf_link_select(0, 0)` en dur. Les deux sites se recoupent.
+In mode 1, the only possible slot is **0**. And entering mode 1 in `fcn.000084E9` calls
+`rf_link_select(0, 0)` with hardcoded arguments. Both call sites agree.
 
-> **Attention à la collision d'encodages.** `g_transport` vaut 0 pour *filaire* ; le slot vaut 0
-> pour *2,4 GHz*. Les deux champs se croisent sur la valeur la plus dangereuse. Le portage SMK
-> définit deux types distincts pour cette raison.
+> **Watch out for the encoding collision.** `g_transport` is 0 for *wired*; the slot is 0
+> for *2.4 GHz*. The two fields cross on the most dangerous value. The SMK port
+> defines two distinct types for this reason.
 
-Le second argument vaut **0** à l'entrée dans un mode et **1** depuis le tic lent, sur le bit
-`0x2C.5` que pose le raccourci d'appairage (`0x4287`). D'où la lecture « 1 = relancer
-l'appairage » — cohérente avec les deux sites, mais c'est leur seule différence : *inféré*.
+The second argument is **0** when entering a mode and **1** from the slow tick, gated on bit
+`0x2C.5` set by the pairing shortcut (`0x4287`). Hence the reading "1 = restart
+pairing" — consistent across both sites, though that is their only difference: *inferred*.
 
-##### `fcn.0000870C` — le tic lent sans-fil
+##### `fcn.0000870C` — the wireless slow tick
 
-Trois actions temporisées, dont deux nouvelles :
+Three timed actions, two of which are new:
 
-- **`0x2B.7`** → réinitialisation d'usine. Le détail complet est plus bas, « L'effacement
-  d'appairages, mais une relance » : ce n'est pas seulement `settings_save` et le retour visuel.
-- **`0x2C.5`** → réaffirmation du lien, ci-dessus.
-- un compteur d'environ trente-deux passages → **commande `0x04` avec le paramètre 3**.
+- **`0x2B.7`** → factory reset. Full details are below under "No pairing erasure,
+  but a re-pairing trigger": it is more than just `settings_save` and visual feedback.
+- **`0x2C.5`** → link reassertion, above.
+- a counter of roughly thirty-two passes → **command `0x04` with parameter 3**.
 
-#### Résolu : pas d'effacement d'appairages, mais une relance
+#### Resolved: no pairing erasure, but a re-pairing trigger
 
-Cette page a longtemps porté « l'effacement d'appairages » comme point ouvert, avec pour seul
-candidat `fcn.0000929E`, « dont la zone remplie de `0xFF` n'est pas spécifiée ». **Le candidat est
-éliminé, et la question a deux moitiés de réponse** :
+This page long listed "pairing erasure" as an open item, with only one
+candidate, `fcn.0000929E`, "whose `0xFF`-filled area is unspecified". **That candidate is
+eliminated, and the question has a two-part answer**:
 
-- **il n'existe aucun effacement** — ce firmware n'envoie jamais au BK3632 quoi que ce soit qui
-  puisse détruire un lien enregistré ;
-- **il existe une relance d'appairage**, sur un raccourci dédié, et son chemin est maintenant
-  remonté de bout en bout : c'est la commande `0x01` avec son drapeau à `1`.
+- **there is no erasure** — this firmware never sends anything to the BK3632 that
+  could destroy a stored bond;
+- **there is a pairing restart**, on a dedicated shortcut, and its path is now
+  traced end to end: it is command `0x01` with its flag set to `1`.
 
-##### `fcn.0000929E` est l'initialisation RAM du démarrage
+##### `fcn.0000929E` is the startup RAM initialization
 
-Son unique appelant est `0x910D`, **dans `main`, sans condition**, entre `0xECC5` et
-`settings_restore` (`0xA283`). Les zones qu'il remplit sont maintenant lues : `0x0964` et `0x0994`
-(21 octets chacune) à `0xFF`, `0x089D` (21 octets), `0x009E` et `0x0DA1` (126 octets chacune) à zéro,
-plus 9 octets en `0x08B2` et 2 en `0x097D`. Ce sont les tableaux de couleur par touche en XRAM, mis
-à leur état neutre avant que les réglages ne soient relus depuis la flash. Rien à voir avec le
+Its sole caller is `0x910D`, **in `main`, unconditionally**, between `0xECC5` and
+`settings_restore` (`0xA283`). The regions it fills have now been read: `0x0964` and `0x0994`
+(21 bytes each) to `0xFF`, `0x089D` (21 bytes), `0x009E` and `0x0DA1` (126 bytes each) to zero,
+plus 9 bytes at `0x08B2` and 2 at `0x097D`. These are the per-key color arrays in XRAM, set
+to their neutral state before settings are read back from flash. Nothing to do with
 Bluetooth.
 
-##### Ce que fait réellement le raccourci de réinitialisation
+##### What the reset shortcut actually does
 
-Deux déclencheurs posent le bit `0x2B.7`, et le consommateur est `0x8725` dans le tic lent sans fil :
+Two triggers set bit `0x2B.7`, and the consumer is `0x8725` in the wireless slow tick:
 
-| Déclencheur | Site | Comportement |
+| Trigger | Site | Behavior |
 | --- | --- | --- |
-| Raccourci clavier | clé `0x04` -> arm `0x41B3`, `0x41BF` pose le bit puis remet le compteur `[0x0961:0x0962]` à zéro | le consommateur exige que ce compteur 16 bits atteigne **3000** : c'est un **appui long** |
-| Commande reçue | `0x0C53`, atteint par le sous-code **`0x06`** du conteneur `0x08` | pré-charge le compteur à **3001**, force le prédiviseur `[0x08DB]` à **10** et pose le bit : réinitialisation **immédiate, pilotée par l'hôte** |
-| Abandon | `0x44AE` efface le bit | touche relâchée trop tôt |
+| Keyboard shortcut | key `0x04` -> arm `0x41B3`, `0x41BF` sets the bit then zeroes counter `[0x0961:0x0962]` | the consumer requires this 16-bit counter to reach **3000**: it is a **long press** |
+| Received command | `0x0C53`, reached via subcode **`0x06`** of container `0x08` | preloads the counter to **3001**, forces prescaler `[0x08DB]` to **10**, and sets the bit: **immediate, host-driven** reset |
+| Abort | `0x44AE` clears the bit | key released too early |
 
-> **Correction.** Cette page a d'abord écrit « sous-code `0x05` », en parsant la table inline de
-> `0x0859` comme des triplets *(clé, adresse)*. C'est l'inverse — voir « Les treize arms du conteneur
-> `0x08` reçu » plus bas : le répartiteur `0x4E45` lit *(adresse_hi, adresse_lo, clé)*, la clé en
-> **dernier**. Toutes les clés de cette table étaient donc décalées d'un cran. Le déclencheur de
-> `0x0C53` est **`0x06`**, et `0x05` arme un tout autre arm (`0x0C4A`, une lecture).
+> **Correction.** This page initially wrote "subcode `0x05`", parsing the inline table at
+> `0x0859` as *(key, address)* triplets. It is the reverse — see "The thirteen arms of received container
+> `0x08`" below: dispatcher `0x4E45` reads *(address_hi, address_lo, key)*, with the key
+> **last**. All keys in that table were therefore shifted by one entry. The trigger for
+> `0x0C53` is **`0x06`**, and `0x05` arms a completely different branch (`0x0C4A`, a read).
 >
-> La justification donnée à l'époque — « le jeu de sous-codes correspond exactement à celui que cette
-> page relève côté émission » — était fausse et est retirée : les treize sous-codes **reçus**
-> (`01`–`06`, `09`, `41`–`44`, `49`, `4A`) ne sont pas le jeu **émis** (`05`, `0A`, `41`–`44`, `49`,
-> `4A`). Ils se recoupent sans coïncider.
+> The justification given at the time — "the set of subcodes matches the one documented on the
+> transmit side" — was wrong and has been removed: the thirteen **received** subcodes
+> (`01`–`06`, `09`, `41`–`44`, `49`, `4A`) are not the **transmitted** set (`05`, `0A`, `41`–`44`, `49`,
+> `4A`). They overlap without coinciding.
 
-Le prédiviseur `[0x08DB]` est ce qui rend la chose *immédiate* : `tick_slow` (`0x8FA7`) ne fait son
-travail que lorsque `[0x08DB]` atteint **10**, et `0x819C` ne l'incrémente que d'un par tic. Le poser
-à 10 fait passer la garde au tic suivant, au lieu d'attendre dix tics. C'est le pendant du compteur
-pré-chargé à 3001 : l'un supprime l'appui long, l'autre supprime l'attente.
+The prescaler `[0x08DB]` is what makes it *immediate*: `tick_slow` (`0x8FA7`) only performs its
+work when `[0x08DB]` reaches **10**, and `0x819C` increments it by only one per tick. Setting it
+to 10 passes the guard on the very next tick instead of waiting ten ticks. It is the counterpart to the counter
+preloaded to 3001: one bypasses the long press, the other bypasses the wait.
 
-Ce bit vient du **répartiteur de raccourcis** `0x4136`, un appel au répartiteur inline `0x4E45`
-suivi de dix-sept triplets `(adresse_hi, adresse_lo, clé)` — l'ordre est bien celui-là, et il se
-vérifie sur l'arm de la réinitialisation, dont l'adresse tabulée `0x41B3` tombe exactement sur les
-deux gardes `JNB 0x4D` / `JNB 0x55` qui précèdent le `SETB 0x2B.7` de `0x41BF` :
+This bit comes from the **shortcut dispatcher** `0x4136`, a call to the inline dispatcher `0x4E45`
+followed by seventeen `(address_hi, address_lo, key)` triplets — that is indeed the order, verified
+on the reset arm, whose tabulated address `0x41B3` lands squarely on the
+two `JNB 0x4D` / `JNB 0x55` guards preceding the `SETB 0x2B.7` at `0x41BF`:
 
-| Clé | Arm | Rôle |
+| Key | Arm | Role |
 | --- | --- | --- |
-| `0x04` | `0x41B3` | **réinitialisation d'usine** — pose `0x2B.7` |
-| `0x05` `0x06` `0x07` | `0x41C8` `0x41FE` `0x4233` | emplacements Bluetooth **1**, **2**, **3** (`g_transport = 2`, `g_bt_slot = 1/2/3`) |
-| `0x08` | `0x426A` | **relance d'appairage** — pose `0x2C.5` |
-| `0x00` `0x01` `0x02` `0x0A` `0x0B` `0x11` `0x18`–`0x1D` | `0x4170` … `0x43D5` | autres raccourcis |
+| `0x04` | `0x41B3` | **factory reset** — sets `0x2B.7` |
+| `0x05` `0x06` `0x07` | `0x41C8` `0x41FE` `0x4233` | Bluetooth slots **1**, **2**, **3** (`g_transport = 2`, `g_bt_slot = 1/2/3`) |
+| `0x08` | `0x426A` | **re-pairing** — sets `0x2C.5` |
+| `0x00` `0x01` `0x02` `0x0A` `0x0B` `0x11` `0x18`–`0x1D` | `0x4170` … `0x43D5` | other shortcuts |
 
-Les trois arms Bluetooth se lisent d'un coup d'œil : chacun écrit `g_transport = 2` avec `A = 2`,
-puis réutilise ce même `A` pour le slot — `14` (`DEC A`) pour l'emplacement 1, rien pour le 2, `04`
-(`INC A`) pour le 3.
+The three Bluetooth arms can be read at a glance: each writes `g_transport = 2` with `A = 2`,
+then reuses that same `A` for the slot — `14` (`DEC A`) for slot 1, nothing for slot 2, `04`
+(`INC A`) for slot 3.
 
-Et voici la séquence complète, `0x8728`–`0x8799`, **ses dix-huit appels énumérés** :
+And here is the complete sequence, `0x8728`–`0x8799`, with **all eighteen calls enumerated**:
 
-| Appel | Rôle |
+| Call | Role |
 | --- | --- |
-| `0xEF8D`, `0xEF46` | marquer les réglages modifiés + 20 ms d'attente |
-| `0xADA2` | `rgb_fill_solid(0,0,0)` — noir |
+| `0xEF8D`, `0xEF46` | mark settings dirty + 20 ms delay |
+| `0xADA2` | `rgb_fill_solid(0,0,0)` — black |
 | `0xA069` | `settings_save` |
-| **`0x91D3`** | restaure les couleurs par touche par défaut depuis `CODE 0xCB7A` vers `0x09BF`, `0x0A3D`, `0x0ABB` |
-| **`0x77A0`** | restaure la **disposition d'usine** : blocs de 512 octets depuis `CODE 0xB400`, `0xB600`, `0xB800`… vers `0x09BF`, puis écriture dans les pages IAP `0x66`, `0x67`, `0x68` via `0xAAC1` |
-| `0xADA2` ×6 + `0xED03` ×7 | bleu 200 ms, noir, vert, noir, rouge, noir |
+| **`0x91D3`** | restores default per-key colors from `CODE 0xCB7A` to `0x09BF`, `0x0A3D`, `0x0ABB` |
+| **`0x77A0`** | restores the **factory keymap**: 512-byte blocks from `CODE 0xB400`, `0xB600`, `0xB800`… to `0x09BF`, then written to IAP pages `0x66`, `0x67`, `0x68` via `0xAAC1` |
+| `0xADA2` ×6 + `0xED03` ×7 | blue 200 ms, black, green, black, red, black |
 
-Puis `CLR 0x1B` (rétroéclairage éteint), `SETB 0x51` et `SETB 0x21` (rechargement et ressemis).
+Then `CLR 0x1B` (backlight off), `SETB 0x51` and `SETB 0x21` (reload and reseed).
 
-**Aucun de ces dix-huit appels ne touche l'EUART0.** Pas une trame, pas une entrée dans la file
-d'émission. C'est une réinitialisation de **disposition et d'éclairage**, pas d'appairages.
+**None of these eighteen calls touches EUART0.** Not a single frame, not a single entry in the transmit
+queue. It is a **layout and lighting** reset, not a pairing reset.
 
-##### La seconde moitié du même tic : la relance d'appairage
+##### The second half of the same tick: restarting pairing
 
-`0x8725` teste `0x2B.7` et, **s'il est absent, saute directement en `0x8799`** — c'est-à-dire dans
-la suite du tic, pas hors de lui. Or `0x8799` teste `0x2C.5`. Les deux raccourcis partagent donc le
-compteur d'appui long **et** le tic qui les consomme, dans cet ordre :
+`0x8725` tests `0x2B.7` and, **if it is clear, jumps directly to `0x8799`** — that is, into
+the remainder of the tick, not out of it. And `0x8799` tests `0x2C.5`. Both shortcuts therefore share the
+long-press counter **and** the tick that consumes them, in this order:
 
 ```asm
-0x870C  si [0x0961:0x0962] < 3000 -> 0x87F6      ; l'appui long n'est pas atteint
-0x8721  compteur = 0
-0x8725  jnb 0x2b.7, 0x8799                       ; pas de reinitialisation -> on tente l'appairage
-0x8728  ...  reinitialisation d'usine ...
-0x8793  clr 0x2c.5                               ; <-- et elle ANNULE l'appairage en attente
+0x870C  if [0x0961:0x0962] < 3000 -> 0x87F6      ; long press not yet reached
+0x8721  counter = 0
+0x8725  jnb 0x2b.7, 0x8799                       ; no reset -> try pairing
+0x8728  ...  factory reset ...
+0x8793  clr 0x2c.5                               ; <-- and it CANCELS pending pairing
 0x8799  jnb 0x2c.5, 0x87C2
-0x879C  [0x0E3B] = 0 ; clr 0x2c.5 ; delai 20 ms
-0x87A6  si g_transport == 2 -> R5 = g_bt_slot
-0x87B4  sinon si g_transport == 1 -> R5 = 0
+0x879C  [0x0E3B] = 0 ; clr 0x2c.5 ; delay 20 ms
+0x87A6  if g_transport == 2 -> R5 = g_bt_slot
+0x87B4  else if g_transport == 1 -> R5 = 0
 0x87BD  R7 = 1
-0x87BF  lcall 0xEF5A                             ; 01 01 01 <slot> 00 <somme>
+0x87BF  lcall 0xEF5A                             ; 01 01 01 <slot> 00 <sum>
 ```
 
-L'arm `0x426A` qui pose `0x2C.5` **exige `g_transport == 1`**, c'est-à-dire le 2,4 GHz. En pratique
-la seule trame émise par ce chemin est donc `01 01 01 00 00 <somme>` : *relance l'appairage avec le
-dongle*. Le `CLR 0x2C.5` de `0x8793` dit le reste — quand les deux bits sont posés, la
-réinitialisation gagne et l'appairage est abandonné, pas mis en file.
+Arm `0x426A`, which sets `0x2C.5`, **requires `g_transport == 1`**, i.e., 2.4 GHz. In practice,
+the only frame emitted by this path is therefore `01 01 01 00 00 <sum>`: *restart pairing with the
+dongle*. The `CLR 0x2C.5` at `0x8793` tells the rest of the story — when both bits are set, the
+reset wins and pairing is abandoned, not queued.
 
-Un second consommateur de `0x2C.5` existe, en `0x44BD`, et il émet `R7 = 0` : une simple
-reconnexion. Il exige `g_transport == 2` alors que le seul poseur du bit exige `g_transport == 1`.
+A second consumer of `0x2C.5` exists at `0x44BD`, and it emits `R7 = 0`: a simple
+reconnection. It requires `g_transport == 2`, whereas the only setter of the bit requires `g_transport == 1`.
 
-> **Résolu.** Le changement de transport entre la pose et la lecture n'est pas hypothétique : c'est
-> ce que font les touches d'emplacement Bluetooth. `0x44BD` est le **chemin de relâchement** de
-> `0x412C`, atteint quand l'usage `b3` vaut `5`, `6` ou `7` — les trois arms qui écrivent
-> `g_transport = 2`. La séquence est donc : appui long sur la touche d'appairage en 2,4 GHz (le bit
-> se pose), puis appui sur une touche d'emplacement Bluetooth (le transport passe à 2), puis
-> relâchement — et `0x44BD` émet la reconnexion et efface le bit. Voir « Le quatrième répartiteur »
-> plus bas.
+> **Resolved.** Changing transport between setting and reading the bit is not hypothetical: that is
+> what the Bluetooth slot keys do. `0x44BD` is the **key-release path** of
+> `0x412C`, reached when usage `b3` is `5`, `6`, or `7` — the three arms that write
+> `g_transport = 2`. The sequence is therefore: long press on the pairing key in 2.4 GHz mode (the bit
+> is set), then press on a Bluetooth slot key (transport switches to 2), then
+> release — and `0x44BD` sends the reconnection and clears the bit. See "The fourth dispatcher"
+> below.
 
-`0xEF5A` n'est d'ailleurs pas qu'un émetteur : après `0xED89` il efface le bit `0x69` et recharge
-`IDATA[0x18] = 6`, `IDATA[0x17] = 0xFF` — le superviseur de lien repart à neuf.
+Moreover, `0xEF5A` is not just a transmitter: after `0xED89`, it clears bit `0x69` and reloads
+`IDATA[0x18] = 6`, `IDATA[0x17] = 0xFF` — resetting the link supervisor from scratch.
 
-##### Pourquoi le négatif est solide
+##### Why the negative conclusion is solid
 
-Les appairages vivent dans le BK3632, pas dans le SH68F90 : les effacer demanderait une commande sur
-l'EUART0. Or les **onze** commandes émises ont toutes une sémantique établie, et la dernière dont
-cette page laissait le déclencheur à « — » est désormais placée : **`0x0C` est émise en `0x7D9B`,
-dans la préparation de veille** (`0x7D74`), avec les paramètres `7` et `8`, quand `[0x0E3B]` est non
-nul. Les codes `0x05`, `0x07` et `0x0A` ne sont **jamais** émis. Et les sous-opcodes du conteneur
-`0x08` (`0x05`, `0x0A`, `0x41`–`0x44`, `0x49`, `0x4A`) sont tous des transferts de données depuis
-`CODE` ou la zone IAP.
+Pairings live in the BK3632, not in the SH68F90: erasing them would require a command over
+EUART0. Yet all **eleven** transmitted commands have an established semantics, and the last one whose
+trigger this page had left as "—" is now located: **`0x0C` is sent at `0x7D9B`,
+during sleep preparation** (`0x7D74`), with parameters `7` and `8`, when `[0x0E3B]` is non-zero.
+Codes `0x05`, `0x07`, and `0x0A` are **never** sent. And the sub-opcodes of container
+`0x08` (`0x05`, `0x0A`, `0x41`–`0x44`, `0x49`, `0x4A`) are all data transfers from
+`CODE` or the IAP region.
 
-Il ne reste donc aucune commande candidate **pour effacer**. Le portage avait choisi de **ne pas
-inventer** de commande d'effacement ; ce n'était pas seulement prudent, c'était juste. La seule
-action d'appairage que ce firmware sache faire est la relance ci-dessus, et elle passe par une
-commande que le portage émet déjà.
+That leaves no candidate command **for erasing**. The port had chosen **not to
+invent** an erase command; that was not merely cautious, it was right. The only
+pairing action this firmware knows how to perform is the restart above, and it uses a
+command the port already sends.
 
-##### Ce que le portage pourrait reprendre, et ne reprend pas
+##### What the port could adopt, and does not
 
-La réinitialisation d'usine elle-même est portable — SMK a déjà `settings`, `indicators_apply_defaults()`
-et une disposition par défaut compilée. Ce serait une **fonctionnalité nouvelle**, pas la réponse à
-la question posée, et elle n'est pas ajoutée ici.
+Factory reset itself is portable — SMK already has `settings`, `indicators_apply_defaults()`,
+and a compiled-in default keymap. That would be a **new feature**, not the answer to
+the question asked, and it is not added here.
 
-Côté code, il reste deux choses, et une seule a demandé une modification :
+On the code side, two things remain, and only one required a change:
 
-- **rien à porter pour l'effacement** — il n'existe pas ;
-- **la relance existe déjà** dans `aula_rf.c` sous le nom `RF_LINK_PAIRING`, mais elle partait avec
-  les deux octets inversés. C'est corrigé : `rf_send_link()` place désormais le drapeau en octet 2 et
-  le slot en octet 3. Le défaut était sans effet en 2,4 GHz, où les deux valent zéro ; en Bluetooth il
-  faisait partir `01 01 <slot> 00`, soit une demande de dongle assortie d'un drapeau parasite.
+- **nothing to port for erasure** — it does not exist;
+- **re-pairing already exists** in `aula_rf.c` under the name `RF_LINK_PAIRING`, but it was sent with
+  the two bytes swapped. This is now fixed: `rf_send_link()` places the flag in byte 2 and
+  the slot in byte 3. The bug had no effect in 2.4 GHz mode, where both are zero; in Bluetooth mode it
+  sent `01 01 <slot> 00`, requesting the dongle along with a spurious flag.
 
-#### Résolu : `0x031B` est un champ d'un bloc de réglages persisté
+#### Resolved: `0x031B` is a field in a persisted settings block
 
-Le point resté ouvert — « aucune écriture directe de la valeur 1 » — a une explication nette :
-`0x031B` n'est pas une variable isolée, c'est **l'octet 14 d'un bloc de 128 octets** qui vit à
-trois endroits.
+The remaining open question — "no direct write of the value 1" — has a clean explanation:
+`0x031B` is not an isolated variable; it is **byte 14 of a 128-byte block** that lives in
+three places.
 
 ```
-flash page 99 (0xC600, 128 o)
-      |   fcn.0000A611     lecteur flash generique
-      v                    base 0x0ED6:7, dest 0x0ED8:9, compte 0x0EDA:B, movc @a+dptr
-XRAM 0x09BF   bloc de travail, 128 o
+flash page 99 (0xC600, 128 B)
+      |   fcn.0000A611     generic flash reader
+      v                    base 0x0ED6:7, dest 0x0ED8:9, count 0x0EDA:B, movc @a+dptr
+XRAM 0x09BF   staging block, 128 B
       |   fn.fx_init  @ 0xA2BB-0xA2D1     [0x09BF + i] -> [0x030D + i]
       v
-XRAM 0x030D   bloc VIF, 128 o
+XRAM 0x030D   LIVE block, 128 B
 ```
 
-et le retour :
+and the write-back path:
 
 ```
 XRAM 0x030D --fcn.0000A069 @ 0xA083/0xA0C2--> XRAM 0x09BF --iap.save--> flash page 99
 ```
 
-`fn.fx_init` est appelée deux fois par `vec.reset` (`0x9110`, `0x9174`) : la restauration a bien
-lieu au démarrage. Et juste avant de sauvegarder, `fcn.0000A069` rafraîchit explicitement les
-deux champs :
+`fn.fx_init` is called twice by `vec.reset` (`0x9110`, `0x9174`): restoration indeed
+takes place at startup. And right before saving, `fcn.0000A069` explicitly refreshes both
+fields:
 
 ```asm
-[0x09CB] = [0x0319]      ; slot Bluetooth     (offset 12)
-[0x09CD] = [0x031B]      ; transport actif    (offset 14)
+[0x09CB] = [0x0319]      ; Bluetooth slot     (offset 12)
+[0x09CD] = [0x031B]      ; active transport   (offset 14)
 mov r5,#0x63 ; r6,#0xC6  ; page 99 = 0xC600
 lcall iap.save
 ```
 
-L'arithmétique ferme la boucle : `0x030D + 12 = 0x0319`, `0x030D + 14 = 0x031B`, et
+The arithmetic closes the loop: `0x030D + 12 = 0x0319`, `0x030D + 14 = 0x031B`, and
 `0x09BF + 12 = 0x09CB`, `0x09BF + 14 = 0x09CD`.
 
-**Pourquoi la recherche ne voyait rien.** Le bloc vif est adressé **par pointeur calculé**
-(`mov a,#0x0d ; add a,r7 ; mov DPL,a ; mov a,#0x03 ; addc a,r6 ; mov DPH,a`) depuis quatre sites,
-et le bloc de travail depuis une trentaine. Une routine générique « écrire l'octet de config N »
-pose donc `0x031B` sans jamais émettre `mov dptr, #0x031b`. La valeur 1 arrive par là, ou par la
-restauration flash — pas par une constante en dur.
+**Why the search saw nothing.** The live block is addressed **via computed pointer**
+(`mov a,#0x0d ; add a,r7 ; mov DPL,a ; mov a,#0x03 ; addc a,r6 ; mov DPH,a`) from four sites,
+and the staging block from roughly thirty. A generic "write config byte N" routine
+therefore sets `0x031B` without ever emitting `mov dptr, #0x031b`. The value 1 arrives that way, or via
+flash restoration — not via a hardcoded constant.
 
-#### Vérification sur le dump
+#### Verification against the dump
 
-Bloc lu à `0xC600` dans `assets/f75_firmware.bin` :
+Block read at `0xC600` in `assets/f75_firmware.bin`:
 
 ```
 0xC600  00 03 03 02 00 00 04 04 07 00 04 20 01 00 00 00
@@ -3607,79 +3605,79 @@ Bloc lu à `0xC600` dans `assets/f75_firmware.bin` :
 0xC670  09 37 09 37 04 09 04 04 04 04 04 04 04 04 5a a5
 ```
 
-| Offset | XRAM vif | Valeur | Rôle |
+| Offset | Live XRAM | Value | Role |
 | --- | --- | --- | --- |
-| 12 | `0x0319` | **1** | slot Bluetooth |
-| 14 | `0x031B` | **0** | transport actif — **filaire** |
-| 126–127 | `0x038B`–`0x038C` | `5A A5` | marqueur de validité |
+| 12 | `0x0319` | **1** | Bluetooth slot |
+| 14 | `0x031B` | **0** | active transport — **wired** |
+| 126–127 | `0x038B`–`0x038C` | `5A A5` | validity marker |
 
-`0x031B = 0` : le clavier était en **mode filaire** au moment du dump — ce qui est exactement le
-cas, `sinowisp` ayant lu par l'USB. La chaîne complète flash → `0x09BF` → `0x030D` est confirmée
-de bout en bout par une valeur observable.
+`0x031B = 0`: the keyboard was in **wired mode** when the dump was taken — which is converter-accurate,
+since `sinowisp` read it over USB. The entire chain flash → `0x09BF` → `0x030D` is confirmed
+end to end by an observable value.
 
-Le `5A A5` en queue de bloc est la signature classique d'un marqueur de validité : il permet au
-firmware de distinguer un bloc écrit d'une page effacée.
+The `5A A5` at the tail of the block is the classic signature of a validity marker: it allows the
+firmware to distinguish a written block from an erased page.
 
-> Cette page 99 est la même que celle sauvegardée par `fcn.0000A069`, et elle figurait déjà
-> parmi les sept pages non vierges relevées à l'analyse d'entropie de la zone IAP. Les deux
-> observations, faites indépendamment, se rejoignent.
+> This page 99 is the same one saved by `fcn.0000A069`, and it already appeared
+> among the seven non-blank pages noted during the entropy analysis of the IAP region. The two
+> observations, made independently, converge.
 
-#### Cartographie du bloc
+#### Mapping the block
 
-La longueur est confirmée des deux côtés : `fn.fx_init` (`0xA292`) et `fcn.0000A5AD` (`0xA5B5`)
-appellent `fcn.0000A611` avec les mêmes arguments — `r4:r5 = 0x09BF`, `r3:r2 = 0x0080`,
-`r6:r7 = 0xC600`. **128 octets**, dans les deux sens.
+The length is confirmed on both sides: `fn.fx_init` (`0xA292`) and `fcn.0000A5AD` (`0xA5B5`)
+call `fcn.0000A611` with the same arguments — `r4:r5 = 0x09BF`, `r3:r2 = 0x0080`,
+`r6:r7 = 0xC600`. **128 bytes**, in both directions.
 
-**22 offsets sur 128 sont adressés directement** par `mov dptr, #0x03NN`, tous entre 0 et 32.
-Le reste n'est atteint que par pointeur calculé.
+**22 offsets out of 128 are addressed directly** via `mov dptr, #0x03NN`, all between 0 and 32.
+The rest are only reached via computed pointer.
 
-| Off | XRAM | Dump | Refs | Ce que le firmware en fait |
+| Off | XRAM | Dump | Refs | What the firmware does with it |
 | --- | --- | --- | --- | --- |
-| 0 | `0x030D` | `00` | 20 | lu très largement |
-| 1 | `0x030E` | `03` | 4 | compteur décrémenté puis testé (`0x88D9`, `0x88E7`) |
-| 3 | `0x0310` | `02` | 1 | `fcn.00003108` : borne de balayage → `IDATA 0x0E` |
-| 5 | `0x0312` | `00` | 6 | drapeau (`jz`) |
-| 6 | `0x0313` | `04` | 4 | recopié vers `0x0D19` |
-| 7 | `0x0314` | `04` | 2 | recopié vers `0x0D9D` |
-| 8 | `0x0315` | `07` | 4 | champ compacté (`anl #0x0F`, `anl #0x80`) |
-| 9 | `0x0316` | `00` | 13 | **source de `XRAM 0x009D`** — l'effet RGB |
-| 10 | `0x0317` | `04` | 11 | plage 0–14 (`cjne a, #0x0E`) |
-| 11 | `0x0318` | `20` | 3 | apparié à l'offset 10 dans `fn.fx_init` et `fcn.0000A069` |
-| **12** | `0x0319` | `01` | 16 | **slot Bluetooth** |
-| **14** | `0x031B` | `00` | 57 | **transport actif** |
-| 15 | `0x031C` | `00` | 2 | écrit en `0x4197`, lu par `fcn.00008FA7` |
-| 16 | `0x031D` | `00` | 2 | idem, `0x41AC` / `0x8FDA` |
-| 17 | `0x031E` | `00` | 1 | lu par `fcn.00008FA7` |
-| 18 | `0x031F` | `00` | 3 | reçoit `0x0D16` quand la classe d'action vaut 9 |
-| 22 | `0x0323` | `00` | 3 | drapeau |
-| 24 | `0x0325` | `02` | 1 | lu par `fcn.00008FA7` |
-| 26 | `0x0327` | `00` | 8 | drapeau |
-| 27 | `0x0328` | `00` | 23 | testé `cjne a, #0x01` |
-| 28 | `0x0329` | `01` | 1 | compteur cyclique modulo 4 (`0x84C6`) |
+| 0 | `0x030D` | `00` | 20 | read very widely |
+| 1 | `0x030E` | `03` | 4 | counter decremented then tested (`0x88D9`, `0x88E7`) |
+| 3 | `0x0310` | `02` | 1 | `fcn.00003108`: scan bound → `IDATA 0x0E` |
+| 5 | `0x0312` | `00` | 6 | flag (`jz`) |
+| 6 | `0x0313` | `04` | 4 | copied to `0x0D19` |
+| 7 | `0x0314` | `04` | 2 | copied to `0x0D9D` |
+| 8 | `0x0315` | `07` | 4 | packed field (`anl #0x0F`, `anl #0x80`) |
+| 9 | `0x0316` | `00` | 13 | **source of `XRAM 0x009D`** — the RGB effect |
+| 10 | `0x0317` | `04` | 11 | range 0–14 (`cjne a, #0x0E`) |
+| 11 | `0x0318` | `20` | 3 | paired with offset 10 in `fn.fx_init` and `fcn.0000A069` |
+| **12** | `0x0319` | `01` | 16 | **Bluetooth slot** |
+| **14** | `0x031B` | `00` | 57 | **active transport** |
+| 15 | `0x031C` | `00` | 2 | written at `0x4197`, read by `fcn.00008FA7` |
+| 16 | `0x031D` | `00` | 2 | same, `0x41AC` / `0x8FDA` |
+| 17 | `0x031E` | `00` | 1 | read by `fcn.00008FA7` |
+| 18 | `0x031F` | `00` | 3 | receives `0x0D16` when action class is 9 |
+| 22 | `0x0323` | `00` | 3 | flag |
+| 24 | `0x0325` | `02` | 1 | read by `fcn.00008FA7` |
+| 26 | `0x0327` | `00` | 8 | flag |
+| 27 | `0x0328` | `00` | 23 | tested `cjne a, #0x01` |
+| 28 | `0x0329` | `01` | 1 | modulo-4 cyclic counter (`0x84C6`) |
 | 32 | `0x032D` | `00` | 2 | |
 
-Les offsets 2, 4, 13, 19–21, 23, 25, 29–31 n'ont aucune référence directe et valent 0 dans le
-dump : réservés, ou atteints uniquement par le protocole de configuration.
+Offsets 2, 4, 13, 19–21, 23, 25, 29–31 have no direct references and are 0 in the
+dump: reserved, or only reached via the configuration protocol.
 
-#### Deux tableaux, adressés par pointeur calculé
+#### Two arrays, addressed via computed pointer
 
-Une recherche du motif `mov DPL,a ; mov a,#0x03 ; addc a,rX ; mov DPH,a` donne les bases :
+Searching for the pattern `mov DPL,a ; mov a,#0x03 ; addc a,rX ; mov DPH,a` yields the bases:
 
-| Base | Offset | Pas | Index vérifié |
+| Base | Offset | Stride | Verified index |
 | --- | --- | --- | --- |
-| `0x0345` / `0x0346` | 56 / 57 | **2** | `[0x009D] × 2` en `0x1166`, `0x8F5F`, `0x93F0` |
-| `0x0362` | 85 | 1 | `[0x009D]` en `0x114E` |
+| `0x0345` / `0x0346` | 56 / 57 | **2** | `[0x009D] × 2` at `0x1166`, `0x8F5F`, `0x93F0` |
+| `0x0362` | 85 | 1 | `[0x009D]` at `0x114E` |
 
-Le tableau à pas 2 est un **enregistrement de deux octets par effet**, dont les champs sont
-compactés :
+The stride-2 array is a **two-byte per-effect record**, with packed
+fields:
 
 ```asm
-0x1170  movx a,@dptr ; rlc a ; mov 0x24.3, c   ; bit 7 de l'octet 0 -> drapeau 0x24.3
-0x117E  movx a,@dptr ; anl a,#0x0f             ; quartet bas de l'octet 1 -> 0x011C
-0x8F6A  movx a,@dptr ; anl a,#0x8f             ; bits 7 et 3-0 de l'octet 1
+0x1170  movx a,@dptr ; rlc a ; mov 0x24.3, c   ; bit 7 of byte 0 -> flag 0x24.3
+0x117E  movx a,@dptr ; anl a,#0x0f             ; low nibble of byte 1 -> 0x011C
+0x8F6A  movx a,@dptr ; anl a,#0x8f             ; bits 7 and 3-0 of byte 1
 ```
 
-Et la queue du dump montre exactement cette régularité par paires :
+And the tail of the dump shows this exact pairwise regularity:
 
 ```
 off 56   ff ff
@@ -3690,15 +3688,15 @@ off 116  04 09 | 04 04 x5
 off 126  5a a5
 ```
 
-#### Résolution : deux familles d'effets, et un sélecteur
+#### Resolution: two effect families, and a selector
 
-La tension venait d'une hypothèse fausse de ma part — que `XRAM 0x009D` soit uniformément
-`0x20`-basé. Il ne l'est pas. `fn.fx_init` (`0xA2EC`) et `fcn.0000A069` (`0xA0D9`) portent le
-même sélecteur, à l'identique :
+The tension came from a false assumption on my part — that `XRAM 0x009D` was uniformly
+`0x20`-based. It is not. `fn.fx_init` (`0xA2EC`) and `fcn.0000A069` (`0xA0D9`) carry the
+exact same selector:
 
 ```asm
 mov dptr,#0x0316 ; movx a,@dptr    ; offset 9
-setb c ; subb a,#0x00              ; carry ssi [0x0316] == 0
+setb c ; subb a,#0x00              ; carry iff [0x0316] == 0
 jc  prendre_0317
 mov dptr,#0x0318                   ; [0x0316] != 0  ->  offset 11
 sjmp ecrire
@@ -3708,95 +3706,95 @@ ecrire:
 movx a,@dptr ; movx [0x009d], a
 ```
 
-Il y a donc **deux familles d'effets**, et l'offset 9 dit laquelle est active :
+There are therefore **two effect families**, and offset 9 tells which one is active:
 
-| Offset | Rôle | Plage | Dump |
+| Offset | Role | Range | Dump |
 | --- | --- | --- | --- |
-| 9 | sélecteur de famille | 0 / ≠0 | `0x00` |
-| 10 | effet **famille A** | 0–14 (`cjne a, #0x0E`) | `0x04` |
-| 11 | effet **famille B** | `0x20`+ | `0x20` |
+| 9 | family selector | 0 / ≠0 | `0x00` |
+| 10 | **family A** effect | 0–14 (`cjne a, #0x0E`) | `0x04` |
+| 11 | **family B** effect | `0x20`+ | `0x20` |
 
-Sur le clavier dumpé, le sélecteur vaut 0 → **`XRAM 0x009D = 4`, famille A**. C'est ce qui
-manquait : les valeurs `0x20` / `0x26` / `0x2D` que j'avais relevées appartiennent toutes à la
-famille B, et m'avaient fait généraliser à tort.
+On the dumped keyboard, the selector is 0 → **`XRAM 0x009D = 4`, family A**. That was the missing
+piece: the values `0x20` / `0x26` / `0x2D` I had noted all belong to
+family B, and had led me to overgeneralize.
 
-#### Le tableau se recale exactement
+#### The array aligns exactly
 
-Avec l'index `[0x009D] × 2` sur la base `0x0345` :
+With the index `[0x009D] × 2` on base `0x0345`:
 
-| Famille | Index | Offsets couverts | |
+| Family | Index | Covered offsets | |
 | --- | --- | --- | --- |
-| A | 0 – 14 | **56 – 85** | entièrement **dans** le bloc |
-| B | `0x20` – `0x2F` | 120 – 151 | **déborde** les 128 octets |
+| A | 0 – 14 | **56 – 85** | entirely **within** the block |
+| B | `0x20` – `0x2F` | 120 – 151 | **overflows** the 128 bytes |
 
-La famille A couvre précisément la zone structurée du dump (offsets 58–85), et c'est elle qui est
-persistée. Les enregistrements de la famille B sortent du bloc et ne vivent qu'en XRAM.
+Family A covers precisely the structured region of the dump (offsets 58–85), and is the one that gets
+persisted. Family B records fall outside the block and live only in XRAM.
 
-Décodage de l'enregistrement de l'effet courant (index 4 → offset **64**, octets `09 37`) :
+Decoding the record for the current effect (index 4 → offset **64**, bytes `09 37`):
 
-| Champ | Valeur | Destination |
+| Field | Value | Destination |
 | --- | --- | --- |
 | `b0 & 0x1F` | 9 | `XRAM 0x0D19` (`0x1197`) |
-| `b0` bit 7 | 0 | drapeau `0x24.3` (`0x1170`) |
+| `b0` bit 7 | 0 | flag `0x24.3` (`0x1170`) |
 | `b1 & 0x0F` | 7 | `XRAM 0x011C` (`0x117E`) |
 | `b1 & 0x8F` | `0x07` | `0x8F6A` |
 
-Deux paramètres par effet, sur 5 et 4 bits, plus deux bits de drapeau — la forme attendue d'un
-couple *vitesse / luminosité* avec des indicateurs, même si les noms restent à confirmer.
+Two parameters per effect, 5 bits and 4 bits wide, plus two flag bits — the expected shape of a
+*speed / brightness* pair with flags, even if the names still need confirmation.
 
-#### `0x0D19` et `0x011C` — vitesse et couleur
+#### `0x0D19` and `0x011C` — speed and color
 
-Les deux destinations de l'enregistrement par effet sont identifiées.
+Both destinations of the per-effect record are identified.
 
-##### `XRAM 0x0D19` — la **luminosité** (27 références)
+##### `XRAM 0x0D19` — **brightness** (27 references)
 
-`fcn.0000A0F0` — appelée depuis douze sites de rendu — s'en sert comme index :
+`fcn.0000A0F0` — called from twelve rendering sites — uses it as an index:
 
 ```asm
 mov dptr,#0x0d19 ; movx a,@dptr
-mov dptr,#0x2937 ; movc a,@a+dptr    ; gain = table[vitesse]
+mov dptr,#0x2937 ; movc a,@a+dptr    ; gain = table[speed]
 movx [0x0ef1], a ; mov r5, a
-... lcall fcn.0000EF66   (r6:r7 = r7 x r5, multiplication 8x8 -> 16)
-... lcall fcn.00000056   avec r5 = 0x50 = 80  (division)
+... lcall fcn.0000EF66   (r6:r7 = r7 x r5, 8x8 -> 16 multiplication)
+... lcall fcn.00000056   with r5 = 0x50 = 80  (division)
 ```
 
-Table `0x2937` :
+Table `0x2937`:
 
 ```
 00 08 10 18 20 28 32 3c 46 50 | ff
- 0  8 16 24 32 40 50 60 70 80   fin
+ 0  8 16 24 32 40 50 60 70 80   end
 ```
 
-**Dix entrées, indices 0 à 9** — ce qui recoupe exactement la borne `subb a, #0x09` relevée en
-`0x7A18` et `0x7A86`. Le gain va de 0 à 80, et la division par 80 en fait un facteur de 0 à 1
-appliqué aux trois composantes (`0x011D` → `0x0E46`, `0x0000` → `0x0E42`, `0x0E25` → `0x0E3F`).
+**Ten entries, indices 0 to 9** — which matches the `subb a, #0x09` bound noted at
+`0x7A18` and `0x7A86`. The gain ranges from 0 to 80, and dividing by 80 turns it into a 0-to-1 factor
+applied to all three channels (`0x011D` → `0x0E46`, `0x0000` → `0x0E42`, `0x0E25` → `0x0E3F`).
 
-Le maximum est **par effet**, lu dans une table CODE :
+The maximum is **per-effect**, read from a CODE table:
 
 ```asm
 0x8C30  mov dptr,#0x009d ; movx a,@dptr
-0x8C34  mov dptr,#0xa8d5 ; movc a,@a+dptr   ; borne = CODE[0xA8D5 + effet]
-0x8C39  ... compare et sature 0x0D19
+0x8C34  mov dptr,#0xa8d5 ; movc a,@a+dptr   ; bound = CODE[0xA8D5 + effect]
+0x8C39  ... compares and clamps 0x0D19
 ```
 
-Valeur par défaut **4** (`0x1D10`, `0x1D31`). Valeur dans le dump : **9**, soit le maximum.
+Default value **4** (`0x1D10`, `0x1D31`). Value in the dump: **9**, which is the maximum.
 
-> **Correction.** J'avais d'abord nommé `0x0D19` « vitesse ». C'est la **luminosité**.
-> `fcn.00000056` est bien une division (`div ab`, vérifiée), donc `fcn.0000A0F0` calcule
-> `x × table[0x0D19] / 80` — un facteur de 0 à 1 en dix pas. Et les trois grandeurs qu'il met à
-> l'échelle sont `0x0000`, `0x011D` et `0x0E25`, toutes trois écrites **juste après la lecture de
-> palette** dans `fcn.00004EA9` (`0x4ED9`, `0x4F1F`) : ce sont les trois composantes de couleur —
-> respectivement **vert**, **rouge** et **bleu**, voir *Laquelle est le rouge — tranché*.
-> Trois composantes, un seul facteur — c'est une commande de luminosité, pas de vitesse.
+> **Correction.** I initially named `0x0D19` "speed". It is **brightness**.
+> `fcn.00000056` is indeed a division (`div ab`, verified), so `fcn.0000A0F0` computes
+> `x × table[0x0D19] / 80` — a factor from 0 to 1 in ten steps. And the three quantities it scales
+> are `0x0000`, `0x011D`, and `0x0E25`, all three written **right after the palette
+> lookup** in `fcn.00004EA9` (`0x4ED9`, `0x4F1F`): they are the three color channels —
+> **green**, **red**, and **blue** respectively, see *Which one is red — settled*.
+> Three channels, a single factor — that is a brightness control, not speed.
 
-##### `XRAM 0x011C` — le mode de couleur (30 références)
+##### `XRAM 0x011C` — color mode (30 references)
 
-Six fonctions de rendu — `fcn.00004EA9`, `0x5114`, `0x60C9`, `0x6C9B`, `0x7108`, `0x746A`, plus
-`0xA791` — commencent toutes par le même test :
+Six rendering functions — `fcn.00004EA9`, `0x5114`, `0x60C9`, `0x6C9B`, `0x7108`, `0x746A`, plus
+`0xA791` — all begin with the same check:
 
 ```asm
 mov dptr,#0x011c ; movx a,@dptr ; mov r7,a
-xrl a,#0x07 ; jz  saute            ; 0x011C == 7 -> on court-circuite
+xrl a,#0x07 ; jz  saute            ; 0x011C == 7 -> bypass
 mov dptr,#0x0896 ; movx a,@dptr
 mov 0xf0,#0x15 ; mul ab            ; x 21
 add a,#0x00 ; mov DPL,a
@@ -3804,38 +3802,38 @@ mov a,0xf0 ; addc a,#0xc8 ; mov DPH,a   ; 0xC800 + n x 21
 mov 0xf0,#0x03 ; mov a,r7 ; lcall fcn.00004E39   ; x 3
 ```
 
-**21 octets = sept triplets RGB**, et l'index dans l'enregistrement est `0x011C × 3`. La table
-est en **flash page 100 (`0xC800`)**, dans la zone IAP. Le dump donne, à l'identique pour chaque
-profil :
+**21 bytes = seven RGB triplets**, and the index within the record is `0x011C × 3`. The table
+is in **flash page 100 (`0xC800`)**, in the IAP region. The dump gives, identically for every
+profile:
 
-| Index | Couleur |
+| Index | Color |
 | --- | --- |
-| 0 | `#FF0000` rouge |
-| 1 | `#00FF00` vert |
-| 2 | `#0000FF` bleu |
-| 3 | `#FFFF00` jaune |
+| 0 | `#FF0000` red |
+| 1 | `#00FF00` green |
+| 2 | `#0000FF` blue |
+| 3 | `#FFFF00` yellow |
 | 4 | `#FF00FF` magenta |
 | 5 | `#00FFFF` cyan |
-| 6 | `#FFFFFF` blanc |
+| 6 | `#FFFFFF` white |
 
-Donc **`0x011C` de 0 à 6 sélectionne une couleur fixe de la palette, et 7 est le cas
-« pas de couleur fixe »** — le mode arc-en-ciel, celui qui saute la lecture de palette. Défaut
-**7** (`0x1D2B`) ; valeur dans le dump : **7**.
+So **`0x011C` from 0 to 6 selects a fixed color from the palette, and 7 is the
+"no fixed color" case** — rainbow mode, the one that skips the palette lookup. Default
+**7** (`0x1D2B`); value in the dump: **7**.
 
-Son maximum est lui aussi par effet, dans `CODE[0xA8A3 + effet]` (`0x939F`, `0x93B4`).
+Its maximum is also per-effect, in `CODE[0xA8A3 + effect]` (`0x939F`, `0x93B4`).
 
-#### `0x0D9D` — la vitesse, et `0x0896` — la palette par effet
+#### `0x0D9D` — speed, and `0x0896` — per-effect palette
 
-##### `XRAM 0x0D9D` — la vitesse (26 références)
+##### `XRAM 0x0D9D` — speed (26 references)
 
-Restaurée de l'**offset 7** du bloc (`0x1130`) et resauvegardée vers lui (`0x8F4B`), bornée par
-`CODE[0xA8BC + effet]` = 4, avec la même mécanique incrémenter/saturer que les autres
+Restored from **offset 7** of the block (`0x1130`) and saved back to it (`0x8F4B`), bounded by
+`CODE[0xA8BC + effect]` = 4, using the same increment/clamp mechanics as the others
 (`0x8EED`–`0x8F30`).
 
-Ce qui la caractérise : elle indexe **quinze tables CODE de cinq valeurs décroissantes**, chacune
-câblée en dur dans une fonction de rendu différente.
+Its defining feature: it indexes **fifteen CODE tables of five decreasing values**, each
+hardcoded into a different rendering function.
 
-| Table | Valeurs |
+| Table | Values |
 | --- | --- |
 | `0x2FE9` | 120 100 80 50 20 |
 | `0x2FEE` | 60 50 40 30 20 |
@@ -3853,235 +3851,235 @@ câblée en dur dans une fonction de rendu différente.
 | `0x302A` | 46 36 26 16 6 |
 | `0x302F` | 50 40 30 20 8 |
 
-**Quinze tables — et la famille A compte exactement quinze effets (0 à 14).** Cinq valeurs, et le
-maximum vaut 4. Décroissantes : plus l'indice monte, plus la période est courte. C'est la vitesse,
-avec une plage propre à chaque effet.
+**Fifteen tables — and family A has exactly fifteen effects (0 to 14).** Five values, and the
+maximum is 4. Decreasing: the higher the index, the shorter the period. This is speed,
+with a range specific to each effect.
 
-Valeur dans le dump : **4**, soit le maximum.
+Value in the dump: **4**, which is the maximum.
 
-##### `XRAM 0x0896` — l'effet dont on lit la palette (23 références)
+##### `XRAM 0x0896` — the effect whose palette is read (23 references)
 
-> **Son unique écrivain est identifié** : `0x16EC`, le verrou de changement d'effet. Voir plus bas,
-> « L'écrivain de `0x0896` — c'est un verrou, pas une variable libre ».
+> **Its sole writer is identified**: `0x16EC`, the effect-change latch. See below,
+> "The writer of `0x0896` — it is a latch, not a free variable".
 
-Les fonctions de rendu font `0xC800 + [0x0896] × 21`. Les valeurs auxquelles `0x0896` est comparé
-sont parlantes : `xrl a,#0x0d` (`0x5E0C`, `0x6630`), `cjne a,#0x0A` (`0xA3F7`, `0xA42D`),
-`xrl a,#0x01` (`0x7476`), et `add a,#0xE0` — c'est-à-dire une comparaison à `0x20`. **Ce sont les
-plages des deux familles d'effets.**
+The rendering functions compute `0xC800 + [0x0896] × 21`. The values against which `0x0896` is compared
+are telling: `xrl a,#0x0d` (`0x5E0C`, `0x6630`), `cjne a,#0x0A` (`0xA3F7`, `0xA42D`),
+`xrl a,#0x01` (`0x7476`), and `add a,#0xE0` — i.e., a comparison against `0x20`. **These are the
+ranges of the two effect families.**
 
-Vérification sur le dump, en supposant `0x0896` = index d'effet :
+Verification against the dump, assuming `0x0896` = effect index:
 
-| Effet | Adresse | Page | Palette |
+| Effect | Address | Page | Palette |
 | --- | --- | --- | --- |
-| `0x00` | `0xC800` | 100 | rouge vert bleu jaune magenta cyan blanc |
-| `0x04` | `0xC854` | 100 | *idem* |
-| `0x0E` | `0xC926` | 100 | *idem* |
-| `0x20` | `0xCAA0` | 101 | tout noir |
-| `0x2D` | `0xCBB1` | 101 | tout noir |
+| `0x00` | `0xC800` | 100 | red green blue yellow magenta cyan white |
+| `0x04` | `0xC854` | 100 | *same* |
+| `0x0E` | `0xC926` | 100 | *same* |
+| `0x20` | `0xCAA0` | 101 | all black |
+| `0x2D` | `0xCBB1` | 101 | all black |
 
-Les quinze effets de la famille A portent chacun leur palette de sept couleurs, toutes réglées
-sur la palette d'usine ; ceux de la famille B sont à zéro — ils n'utilisent pas de palette, ce qui
-est cohérent avec leur maximum de couleur plus bas (4 au lieu de 7). Les adresses tombent
-entièrement dans les pages 100 et 101 de la zone IAP.
+The fifteen effects in family A each carry their own seven-color palette, all set
+to the factory palette; those in family B are zeroed — they do not use a palette, which
+is consistent with their lower color maximum (4 instead of 7). The addresses fall
+entirely within pages 100 and 101 of the IAP region.
 
-##### L'écrivain de `0x0896` — c'est un verrou, pas une variable libre
+##### The writer of `0x0896` — it is a latch, not a free variable
 
-Cette page a longtemps porté « l'écrivain de `XRAM 0x0896` » comme point ouvert, en relevant que
-l'aiguillage d'animation branche sur `0x0896` **et non** sur `0x009D`. Les deux questions n'en font
-qu'une, et la réponse les règle ensemble.
+This page long carried "the writer of `XRAM 0x0896`" as an open question, noting that
+the animation dispatcher branches on `0x0896` **and not** on `0x009D`. The two questions are really
+one, and the answer settles both together.
 
-Sur les **23 références** à `0x0896`, **une seule est une écriture** : `0x16EC`.
+Out of **23 references** to `0x0896`, **only one is a write**: `0x16EC`.
 
 ```
-16A6  jb   0x51, 0x16D7            ; deja marque « a recharger »
+16A6  jb   0x51, 0x16D7            ; already marked "needs reload"
 16A9  mov  dptr,#0x0ED0 ; movx a,@dptr ; mov r6,a
 16AE  mov  dptr,#0x0896 ; movx a,@dptr
-16B2  cjne a,r6,   0x16D7          ; l'effet a-t-il change ?
+16B2  cjne a,r6,   0x16D7          ; did the effect change?
 16B5  mov  dptr,#0x0897 ; movx a,@dptr
-16B9  cjne a,r7,   0x16D7          ; et le second parametre ?
-...                                 ; idem 0x0ED3/0x09AF (luminosite) et 0x0ED4/0x0306 (vitesse)
-16D4  ljmp 0x1AEA                  ; rien n'a bouge -> rendu normal
+16B9  cjne a,r7,   0x16D7          ; and the second parameter?
+...                                 ; same for 0x0ED3/0x09AF (brightness) and 0x0ED4/0x0306 (speed)
+16D4  ljmp 0x1AEA                  ; nothing changed -> normal rendering
 16D7  clr  0x51
 16DE  mov  dptr,#0x0896 ; movx a,@dptr ; cjne a,r6, 0x16EC
 16E5  mov  dptr,#0x0897 ; movx a,@dptr ; xrl a,r7 ; jz 0x1702
-16EC  mov  dptr,#0x0896 ; mov a,r6 ; movx @dptr,a    <== L'UNIQUE ECRITURE
+16EC  mov  dptr,#0x0896 ; mov a,r6 ; movx @dptr,a    <== THE SOLE WRITE
 16F1  mov  dptr,#0x0897 ; mov a,r7 ; movx @dptr,a
-16F6  setb 0x21                    ; ressemis du plan par effet
+16F6  setb 0x21                    ; reseed the per-effect plane
 16F8  clr  0x22
 16FC  lcall 0xEDE7
-16FF  lcall 0xEE6A                 ; et on efface le panneau
+16FF  lcall 0xEE6A                 ; and clear the panel
 ```
 
-C'est un **comparateur-verrou** : il ne recopie que si la valeur a changé, et le changement
-déclenche deux choses — le bit `0x21`, qui commande le ressemis du plan par effet (c'est lui que
-`0x1A9E` teste avant d'appeler le transposeur `0xACA3`), et l'effacement complet du panneau.
+It is a **comparator-latch**: it only copies if the value has changed, and a change
+triggers two things — bit `0x21`, which commands reseeding of the per-effect plane (that is the bit
+`0x1A9E` checks before calling the transposer `0xACA3`), and a full clear of the panel.
 
-**Et la source, c'est bien `0x009D`.** Trente octets plus haut :
+**And the source is indeed `0x009D`.** Thirty bytes higher:
 
 ```
 160D  mov dptr,#0x009D ; movx a,@dptr
 1611  mov dptr,#0x0ED0 ; movx @dptr,a     ; [0x0ED0] = [0x009D]
-1615  ... [0x0ED3] = [0x0D19] (luminosite), [0x0ED4] = [0x0D9D] (vitesse)
+1615  ... [0x0ED3] = [0x0D19] (brightness), [0x0ED4] = [0x0D9D] (speed)
 162A  jnb 0x1B, +5 : [0x0ED0] = 0
 1632  jnb 0x6C, +5 : [0x0ED0] = 0
 163A  jnb 0x5B, +5 : [0x0ED0] = 0
 ```
 
-D'où la chaîne complète, en quatre temps :
+Hence the complete four-stage chain:
 
-> **`0x009D`** (effet *choisi*, réglage persistant, douze écrivains dont les raccourcis qui posent
-> `0x20`, `0x26` et `0x2D`) **→ `0x0ED0`** (effet *demandé*, recopié à chaque tour) **→ trois portes**
-> qui le forcent à 0 **→ `0x0896`** (effet *actif*, verrouillé au changement).
+> **`0x009D`** (*selected* effect, persistent setting, twelve writers including the shortcuts that set
+> `0x20`, `0x26`, and `0x2D`) **→ `0x0ED0`** (*requested* effect, copied on every pass) **→ three gates**
+> that force it to 0 **→ `0x0896`** (*active* effect, latched on change).
 
-Les trois portes sont des bits d'état, et ils expliquent pourquoi la valeur effective peut différer
-du réglage :
+The three gates are status bits, and they explain why the effective value can differ
+from the setting:
 
-| Bit | Rôle | Écrivains |
+| Bit | Role | Writers |
 | --- | --- | --- |
-| `0x1B` (`0x23.3`) | **rétroéclairage allumé** | basculé par un raccourci (`b2 1b` en `0x42AC`, suivi du marquage « réglages modifiés »), effacé à l'endormissement sans fil (`0x8797`), reposé au réveil (`0x8816`) |
-| `0x6C` (`0x2D.4`) | le bit qui coupe l'USB, déjà documenté plus bas — **seul écrivain : `fcn.00001DC3`**, le gestionnaire d'énergie | `0x1F25` / `0x1EF5`, `0x1F50` |
-| `0x5B` (`0x2B.3`) | second bit d'énergie, écrit dans la même fonction | `0x1F8E` / `0x1EF7`, `0x1F52`, `0x7EBF` |
+| `0x1B` (`0x23.3`) | **backlight on** | toggled by a shortcut (`b2 1b` at `0x42AC`, followed by marking "settings dirty"), cleared on wireless sleep (`0x8797`), set again on wake (`0x8816`) |
+| `0x6C` (`0x2D.4`) | the bit that shuts off USB, already documented below — **sole writer: `fcn.00001DC3`**, the power manager | `0x1F25` / `0x1EF5`, `0x1F50` |
+| `0x5B` (`0x2B.3`) | second power bit, written in the same function | `0x1F8E` / `0x1EF7`, `0x1F52`, `0x7EBF` |
 
-**Voilà pourquoi l'aiguillage lit `0x0896` et pas `0x009D`** : `0x009D` est ce que l'utilisateur a
-choisi, `0x0896` est ce qui doit réellement s'afficher une fois passées les portes d'énergie et
-l'interrupteur de rétroéclairage. Ce n'était pas une variable orpheline, c'était le verrou de sortie
-d'un comparateur.
+**That is why the dispatcher reads `0x0896` and not `0x009D`**: `0x009D` is what the user
+chose, `0x0896` is what should actually be displayed after passing through the power gates and
+the backlight switch. It was not an orphan variable; it was the output latch
+of a comparator.
 
-##### `0x0897`, l'autre moitié du verrou
+##### `0x0897`, the other half of the latch
 
-Le comparateur teste **une paire**, pas une valeur : `cjne a,r7` en `0x16B9`, et `R7` vient de
-`0x1619` — `mov dptr,#0x011C ; movx a,@dptr ; mov r7,a`. `0x011C` est le **mode couleur** (celui que
-`0x1D2B` force à 7 pour le tirage aléatoire, et que `0x5108` consulte). `R7` survit intact jusqu'au
-comparateur.
+The comparator checks **a pair**, not a single value: `cjne a,r7` at `0x16B9`, and `R7` comes from
+`0x1619` — `mov dptr,#0x011C ; movx a,@dptr ; mov r7,a`. `0x011C` is the **color mode** (the one
+`0x1D2B` forces to 7 for random selection, and which `0x5108` consults). `R7` survives intact up to the
+comparator.
 
-Donc `0x0897` est la **copie verrouillée du mode couleur**, et le verrou porte sur le couple
-*(effet, mode couleur)*. C'est cohérent : changer de mode couleur demande le même ressemis et le même
-effacement que changer d'effet. Les moteurs, eux, lisent le mode courant en `0x011C` directement —
-`0x0897` ne sert qu'à détecter le changement.
+So `0x0897` is the **latched copy of the color mode**, and the latch covers the
+*(effect, color mode)* pair. That makes sense: changing the color mode requires the same reseeding and
+clearing as changing the effect. The engines themselves read the current mode directly from `0x011C` —
+`0x0897` only serves to detect changes.
 
-##### `0x26` et `0x2D` ne sont pas des effets, ce sont des états transitoires
+##### `0x26` and `0x2D` are not effects, they are transient states
 
-Trois raccourcis posent une valeur littérale dans `0x009D` : `0x20`, `0x26` et `0x2D`. Les deux
-derniers sont **symétriques**, et ils sauvegardent d'abord :
+Three shortcuts write a literal value into `0x009D`: `0x20`, `0x26`, and `0x2D`. The last
+two are **symmetrical**, and they save the previous state first:
 
-| Site | Ce qu'il fait |
+| Site | What it does |
 | --- | --- |
-| `0x9184` | `[0x0E24] = effet courant` puis `[0x009D] = 0x26` |
-| `0xA48B` | `[0x0E24] = effet courant` puis `[0x009D] = 0x2D` — et seulement si l'effet courant vaut `0x20` (`cjne a,#0x20` en `0xA47E`) |
-| `0x1D40` | `[0x009D] = [0x0E24]` — la restauration, dans le gestionnaire de `0x26` |
-| `0xAFB8` | `[0x009D] = [0x0E24]` — la seconde restauration, précédée d'un test `cjne a,#0x20` sur la valeur sauvegardée |
+| `0x9184` | `[0x0E24] = current effect` then `[0x009D] = 0x26` |
+| `0xA48B` | `[0x0E24] = current effect` then `[0x009D] = 0x2D` — and only if the current effect is `0x20` (`cjne a,#0x20` at `0xA47E`) |
+| `0x1D40` | `[0x009D] = [0x0E24]` — the restoration, inside the `0x26` handler |
+| `0xAFB8` | `[0x009D] = [0x0E24]` — the second restoration, preceded by a `cjne a,#0x20` check on the saved value |
 
-**`0x26` est une animation de transition.** Son gestionnaire `0x1D37` lit `XRAM 0x0ECD` — le sens
-vertical du serpent — et **dès qu'il repasse à zéro**, c'est-à-dire quand le balayage a fini de
-parcourir la grille, il efface le panneau, restaure `[0x0E24]` et repose le drapeau de rechargement.
-L'usine s'en sert comme d'un habillage de changement de mode, pas comme d'un effet qu'on choisit.
+**`0x26` is a transition animation.** Its handler `0x1D37` reads `XRAM 0x0ECD` — the vertical
+direction of the snake — and **as soon as it returns to zero**, i.e., when the sweep has finished
+traversing the grid, it clears the panel, restores `[0x0E24]`, and sets the reload flag again.
+The factory firmware uses it as visual flair when switching modes, not as a user-selectable effect.
 
-**`0x2D` ne rend rien du tout.** L'aiguillage ne teste que `0x20` et `0x26` avant sa borne
-`cjne a,#0x12` ; `0x2D` la dépasse et tombe sur `0x1DC2`, un `ret`. Sa ligne de palette est
-d'ailleurs entièrement noire. C'est un état où le moteur d'animation se tait délibérément, entré
-depuis le mode gaming et restauré par `0xAFB8`.
+**`0x2D` renders nothing at all.** The dispatcher only checks `0x20` and `0x26` before its
+`cjne a,#0x12` bound; `0x2D` exceeds it and falls through to `0x1DC2`, a `ret`. Its palette row is
+moreover completely black. It is a state where the animation engine deliberately goes silent, entered
+from gaming mode and restored by `0xAFB8`.
 
-**Conséquence pour le portage** : `AULA_FX_SNAKE_RGB` reste un effet permanent chez nous. Son rendu
-est transcrit, mais sa **durée** est notre choix — SMK n'a pas de notion d'effet transitoire et notre
-liste se parcourt à la touche. C'est écrit dans `indicators.c`. Quant à `0x2D`, il n'a pas de
-contrepartie et n'en a pas besoin : ne rien afficher, c'est `AULA_FX_OFF`.
+**Consequence for the port**: `AULA_FX_SNAKE_RGB` remains a permanent effect in our implementation. Its rendering
+is transcribed, but its **duration** is our design choice — SMK has no notion of a transient effect, and our
+list is cycled by key press. That is implemented in `indicators.c`. As for `0x2D`, it has no
+counterpart and needs none: displaying nothing is `AULA_FX_OFF`.
 
-##### Ce que ça change pour le portage : rien, et c'est en soi un résultat
+##### What this changes for the port: nothing, and that in itself is a result
 
-Le portage recalcule à chaque passage depuis `user_settings.led_effect`, et `fx_reset()` — appelé à
-chaque changement d'effet — joue exactement le rôle du couple `SETB 0x21` + `LCALL 0xEE6A`
-(ressemis de l'état des semeurs, puis `aula_rgb_clear()`). Les trois portes ont leurs équivalents
-ailleurs dans SMK : l'extinction est l'effet `AULA_FX_OFF`, et la veille passe déjà par
-`indicators_pwm_disable()` depuis `sleep.c` et `user_sleep_prepare()`. Aucune ligne à ajouter — la
-convergence est vérifiée, pas supposée.
+The port recomputes on every pass from `user_settings.led_effect`, and `fx_reset()` — called on
+every effect change — plays the exact role of the `SETB 0x21` + `LCALL 0xEE6A` pair
+(reseeding the seeder state, then `aula_rgb_clear()`). The three gates have their equivalents
+elsewhere in SMK: turning lighting off is the `AULA_FX_OFF` effect, and sleep already goes through
+`indicators_pwm_disable()` from `sleep.c` and `user_sleep_prepare()`. Not a single line to add —
+convergence is verified, not assumed.
 
-##### L'offset 5 est l'aiguillage global / par effet
+##### Offset 5 is the global / per-effect switch
 
 ```asm
 0x111B  mov dptr,#0x0312 ; movx a,@dptr
-0x111F  jz 0x1144                        ; == 0 -> parametres PAR EFFET
-        ... lit les offsets 8, 6, 7  (0x0315, 0x0313, 0x0314)  -> globaux
-0x1144  ... lit le tableau par effet
+0x111F  jz 0x1144                        ; == 0 -> PER-EFFECT parameters
+        ... reads offsets 8, 6, 7  (0x0315, 0x0313, 0x0314)  -> global
+0x1144  ... reads the per-effect array
 ```
 
-Le dump donne l'offset 5 à **0**, donc le clavier était en mode **par effet** — ce qui explique
-que la luminosité effective soit 9 (issue de l'enregistrement) et non 4 (la copie globale à
-l'offset 6).
+The dump gives offset 5 as **0**, so the keyboard was in **per-effect** mode — which explains
+why the effective brightness is 9 (from the record) rather than 4 (the global copy at
+offset 6).
 
-##### Les bits 6-4 de `b1` — c'est bien la vitesse
+##### Bits 6-4 of `b1` — this is indeed speed
 
-> **Correction d'une correction.** Au tour précédent j'ai retiré cette piste en la déclarant
-> fausse. Elle était juste : je n'avais cherché que les masques `0x0F` et `0x8F`, et raté
-> `anl a, #0xF0` en `0x11A8`.
+> **Correction of a correction.** In the previous pass I removed this lead, declaring it
+> false. It was right: I had only searched for masks `0x0F` and `0x8F`, and missed
+> `anl a, #0xF0` at `0x11A8`.
 
-Un **quatrième** accès à `b1`, dans la branche « par effet » de `fcn.00001111` :
+A **fourth** access to `b1`, in the "per-effect" branch of `fcn.00001111`:
 
 ```asm
 0x119D  mov a,#0x46 ; add a,r5 ; ...      ; DPTR = 0x0346 + 2e   (b1)
 0x11A7  movx a,@dptr
 0x11A8  anl a,#0xf0                        ; bits 7-4
-0x11AF  mov r0,#0x04 ; lcall fcn.00004DD8  ; decalage de 4 bits a droite
-0x11B4  mov dptr,#0x0d9d ; ...             ; -> vitesse
+0x11AF  mov r0,#0x04 ; lcall fcn.00004DD8  ; right shift by 4 bits
+0x11B4  mov dptr,#0x0d9d ; ...             ; -> speed
 ```
 
-`fcn.00004DD8` décale `r4:r5:r6:r7` de `r0` bits vers la droite — le pendant de `fcn.00004DC5`
-déjà rencontré pour la table de descripteurs. Et la réécriture, en `0x8F6A`, est l'exacte
-inverse :
+`fcn.00004DD8` shifts `r4:r5:r6:r7` right by `r0` bits — the counterpart of `fcn.00004DC5`
+already encountered for the descriptor table. And writing it back, at `0x8F6A`, is the exact
+inverse:
 
 ```asm
-anl  a, #0x8f                   ; garde le bit 7 et les bits 3-0 de b1
+anl  a, #0x8f                   ; keeps bit 7 and bits 3-0 of b1
 mov  dptr,#0x0d9d ; movx a,@dptr
-mov  B,#0x10 ; mul ab           ; vitesse x 16
-orl  a, r7                      ; b1 = (b1 & 0x8F) | (vitesse << 4)
+mov  B,#0x10 ; mul ab           ; speed x 16
+orl  a, r7                      ; b1 = (b1 & 0x8F) | (speed << 4)
 ```
 
-La vitesse étant bornée à 4, `vitesse << 4` ne dépasse jamais `0x40` et ne touche donc jamais le
-bit 7. **En pratique `b1[6:4]` est la vitesse**, et `b1[7]` est un bit libre que l'écriture
-préserve.
+Since speed is bounded to 4, `speed << 4` never exceeds `0x40` and therefore never touches
+bit 7. **In practice, `b1[6:4]` is speed**, and `b1[7]` is a spare bit that the write
+preserves.
 
-#### La symétrie complète
+#### Complete symmetry
 
-| Paramètre | Global | Par effet | Borne par effet |
+| Parameter | Global | Per-effect | Per-effect bound |
 | --- | --- | --- | --- |
-| luminosité | offset 6 — `0x0313` | `b0[4:0]` | `CODE[0xA8D5 + e]` = 9 |
-| vitesse | offset 7 — `0x0314` | `b1[6:4]` | `CODE[0xA8BC + e]` = 4 |
-| couleur | offset 8 — `0x0315[3:0]` | `b1[3:0]` | `CODE[0xA8A3 + e]` = 7 |
-| sens | offset 8 — `0x0315[7]` | `b0[7]` | drapeau `0x24.3` |
+| brightness | offset 6 — `0x0313` | `b0[4:0]` | `CODE[0xA8D5 + e]` = 9 |
+| speed | offset 7 — `0x0314` | `b1[6:4]` | `CODE[0xA8BC + e]` = 4 |
+| color | offset 8 — `0x0315[3:0]` | `b1[3:0]` | `CODE[0xA8A3 + e]` = 7 |
+| direction | offset 8 — `0x0315[7]` | `b0[7]` | flag `0x24.3` |
 
-Chaque paramètre existe donc en **deux exemplaires**, et l'offset 5 dit lequel fait foi.
+Each parameter therefore exists in **two copies**, and offset 5 dictates which one is authoritative.
 
-##### `XRAM 0x0312` (offset 5) — l'aiguillage
+##### `XRAM 0x0312` (offset 5) — the switch
 
-Six références, **toutes des lectures `jz`**, et — comme `0x031B` — aucune écriture directe : il
-est posé par le protocole de configuration via le pointeur de bloc.
+Six references, **all `jz` reads**, and — like `0x031B` — no direct write: it
+is set by the configuration protocol via the block pointer.
 
-| Site | Rôle |
+| Site | Role |
 | --- | --- |
-| `0x111B` | restauration : branche globale ou branche par effet |
-| `0x7990`, `0x7A26` | idem, dans `fcn.00007928` |
-| `0x8C85` | incrément **luminosité** — persister vers `0x0313` ou vers `b0` |
-| `0x8F45` | incrément **vitesse** — vers `0x0314` ou vers `b1[6:4]` |
-| `0x93CE` | incrément **couleur** — vers `0x0315` ou vers `b1[3:0]` |
+| `0x111B` | restoration: global branch or per-effect branch |
+| `0x7990`, `0x7A26` | same, in `fcn.00007928` |
+| `0x8C85` | increment **brightness** — persist to `0x0313` or to `b0` |
+| `0x8F45` | increment **speed** — to `0x0314` or to `b1[6:4]` |
+| `0x93CE` | increment **color** — to `0x0315` or to `b1[3:0]` |
 
-Les trois gestionnaires de touches consultent donc le même bit pour savoir **où écrire** la
-valeur modifiée. Dump : **0** → mode par effet.
+All three key handlers thus consult the same bit to know **where to write** the
+modified value. Dump: **0** → per-effect mode.
 
-##### `XRAM 0x0315` (offset 8) — l'homologue global de `b1`
+##### `XRAM 0x0315` (offset 8) — the global counterpart of `b1`
 
 ```asm
-0x1121  movx a,@dptr ; rlc a ; mov 0x24.3, c    ; bit 7  -> sens
-0x1138  movx a,@dptr ; anl a,#0x0f ; -> 0x011C  ; bits 3-0 -> couleur
-0x93D4  a = [0x0315] & 0x80 ; a |= [0x011C] ; [0x0315] = a     ; reecriture
+0x1121  movx a,@dptr ; rlc a ; mov 0x24.3, c    ; bit 7  -> direction
+0x1138  movx a,@dptr ; anl a,#0x0f ; -> 0x011C  ; bits 3-0 -> color
+0x93D4  a = [0x0315] & 0x80 ; a |= [0x011C] ; [0x0315] = a     ; write-back
 ```
 
-Dump : `0x07` → couleur 7 (arc-en-ciel), sens 0. Cohérent avec l'enregistrement par effet
-(`b1 = 0x37` → couleur 7) — les deux exemplaires sont en accord.
+Dump: `0x07` → color 7 (rainbow), direction 0. Consistent with the per-effect record
+(`b1 = 0x37` → color 7) — both copies agree.
 
-##### Le drapeau `0x24.3` — le sens de l'animation
+##### Flag `0x24.3` — animation direction
 
-Sept sites. Écrit depuis le bit 7 du réglage (`0x1126` en global, `0x1172` en par-effet), effacé
-par deux fonctions de rendu (`0x7474`, `0xEF8A`), lu par trois. Le plus parlant est
-`fcn.0000A3F4` :
+Seven sites. Written from bit 7 of the setting (`0x1126` in global mode, `0x1172` in per-effect mode), cleared
+by two rendering functions (`0x7474`, `0xEF8A`), read by three. The most telling is
+`fcn.0000A3F4`:
 
 ```asm
 0xA3F4  jnb 0x24.3, 0xA42D
@@ -4090,134 +4088,134 @@ par deux fonctions de rendu (`0x7474`, `0xEF8A`), lu par trois. Le plus parlant 
 0xA435  mov dptr,#0x08c3 ; movx a,@dptr ; add a,#0xec    ; -20
 ```
 
-**`+20` d'un côté, `−20` de l'autre**, sur le même compteur de position `0x08C3` (qui reboucle
-sur `cjne a,#0x11`, soit 17). C'est un **sens de défilement**.
+**`+20` on one side, `−20` on the other**, on the same position counter `0x08C3` (which wraps
+on `cjne a,#0x11`, i.e., 17). It is a **scrolling direction**.
 
-##### Relecture finale du clavier dumpé
+##### Final readout of the dumped keyboard
 
-| | Global | Par effet (effet 4, `09 37`) |
+| | Global | Per-effect (effect 4, `09 37`) |
 | --- | --- | --- |
-| luminosité | 4 | **9** |
-| vitesse | 4 | **3** |
-| couleur | 7 (arc-en-ciel) | **7** (arc-en-ciel) |
-| sens | 0 | **0** |
+| brightness | 4 | **9** |
+| speed | 4 | **3** |
+| color | 7 (rainbow) | **7** (rainbow) |
+| direction | 0 | **0** |
 
-Offset 5 = 0, donc ce sont les valeurs **par effet** qui s'appliquent.
+Offset 5 = 0, so the **per-effect** values apply.
 
-##### Trois tables de bornes par effet
+##### Three per-effect bound tables
 
-`0xA8A3`, `0xA8BC`, `0xA8D5` — espacées de `0x19` = 25 :
+`0xA8A3`, `0xA8BC`, `0xA8D5` — spaced by `0x19` = 25:
 
-| Base | Borne de | Valeur famille A | Valeur famille B |
+| Base | Bound for | Family A value | Family B value |
 | --- | --- | --- | --- |
-| `0xA8A3` | `0x011C` (couleur) | 7 | 4 |
-| `0xA8BC` | `0x0D9D` (vitesse) | 4 | — |
-| `0xA8D5` | `0x0D19` (luminosité) | 9 | 9 |
+| `0xA8A3` | `0x011C` (color) | 7 | 4 |
+| `0xA8BC` | `0x0D9D` (speed) | 4 | — |
+| `0xA8D5` | `0x0D19` (brightness) | 9 | 9 |
 
-Les trois affectations sont vérifiées par désassemblage direct : `0x8C34` pour `0xA8D5`,
-`0x939F` pour `0xA8A3`, `0x15EB` / `0x8EF4` / `0x8F0B` pour `0xA8BC`.
+All three assignments are verified by direct disassembly: `0x8C34` for `0xA8D5`,
+`0x939F` for `0xA8A3`, `0x15EB` / `0x8EF4` / `0x8F0B` for `0xA8BC`.
 
-##### L'enregistrement se relit entièrement
+##### The record can now be read in full
 
-Pour l'effet courant du clavier dumpé (index 4, offset 64, octets `09 37`) :
+For the current effect of the dumped keyboard (index 4, offset 64, bytes `09 37`):
 
-| Bits | Valeur | Sens |
+| Bits | Value | Meaning |
 | --- | --- | --- |
-| `b0[4:0]` | 9 | **luminosité**, au maximum |
-| `b0[7]` | 0 | drapeau `0x24.3` |
-| `b1[3:0]` | 7 | **couleur** = arc-en-ciel |
-| `b1[6:4]` | 3 | non lu par les masques identifiés — **non attribué** |
-| `b1[7]` | 0 | drapeau (masque `0x8F`) |
+| `b0[4:0]` | 9 | **brightness**, at maximum |
+| `b0[7]` | 0 | flag `0x24.3` |
+| `b1[3:0]` | 7 | **color** = rainbow |
+| `b1[6:4]` | 3 | not read by the identified masks — **unassigned** |
+| `b1[7]` | 0 | flag (mask `0x8F`) |
 
-#### Et `5A A5`
+#### And `5A A5`
 
-L'argument « ce pourrait être l'enregistrement d'index 35 » s'affaiblit nettement : les
-enregistrements de la famille B débordent le bloc de toute façon (l'effet `0x26`, valeur par
-défaut au reset, tombe à l'offset 132), donc les deux derniers octets du bloc ne portent aucune
-donnée d'effet utile. Avec en plus un motif complémentaire (`0101 1010` / `1010 0101`) en toute
-fin de structure, la lecture **marqueur de validité** est la mieux étayée. Elle reste non prouvée.
+The argument "this could be record index 35" is significantly weakened:
+family B records overflow the block anyway (effect `0x26`, the default value
+on reset, lands at offset 132), so the last two bytes of the block carry no
+useful effect data. Combined with a complementary bit pattern (`0101 1010` / `1010 0101`) at the very
+end of the structure, the **validity marker** reading is the best supported. It remains unproven.
 
-### Réception : parser et format des réponses
+### Reception: parser and response format
 
-La réception se fait en **deux étages**.
+Reception takes place in **two stages**.
 
-**1. L'ISR ne fait que signaler.** À la fin de l'**ISR PWM0**
-(vecteur `0x43` → `0x72BA`), en `0x7444` :
-
-```asm
-jnb  0x24.4, ...   ; drapeau materiel « donnees recues », pose par l'ISR EUART0
-clr  0x24.4        ; acquitte
-setb 0x2d.7        ; drapeau de traitement differe
-```
-
-**2. `fcn.000005EA` traite hors interruption** (`0x05F3`) :
+**1. The ISR only signals.** At the end of the **PWM0 ISR**
+(vector `0x43` → `0x72BA`), at `0x7444`:
 
 ```asm
-clr   0x2d.7                 ; acquitte
-mov   r1, #0x54              ; source : buffer RX en IDATA 0x54
-mov   r7, #0x17              ; 23 octets
-lcall fcn.00004c4b           ; copie vers XDATA 0x0120
-mov   r0,#0x70 ; mov a,@r0   ; index d'ecriture RX
+jnb  0x24.4, ...   ; hardware "data received" flag, set by the EUART0 ISR
+clr  0x24.4        ; acknowledge
+setb 0x2d.7        ; deferred processing flag
 ```
 
-**Les trames reçues sont donc analysées en XDATA `0x0120`.**
+**2. `fcn.000005EA` processes outside interrupt context** (`0x05F3`):
 
-#### Format d'une réponse
+```asm
+clr   0x2d.7                 ; acknowledge
+mov   r1, #0x54              ; source: RX buffer in IDATA 0x54
+mov   r7, #0x17              ; 23 bytes
+lcall fcn.00004c4b           ; copy to XDATA 0x0120
+mov   r0,#0x70 ; mov a,@r0   ; RX write index
+```
+
+**Received frames are therefore parsed in XDATA `0x0120`.**
+
+#### Response format
 
 ```
-[0] = 0x02        en-tete de REPONSE   (les commandes emises utilisent 0x01)
-[1] = commande    ex. 0x06
-[2] = statut / parametre
-[3..8] = donnees
+[0] = 0x02        RESPONSE header   (transmitted commands use 0x01)
+[1] = command     e.g. 0x06
+[2] = status / parameter
+[3..8] = data
 [9] = checksum
 ```
 
-**Checksum vérifié** (`0x0650`) :
+**Verified checksum** (`0x0650`):
 
 ```asm
 clr  c
 mov  a, #0x55
-subb a, 0x08        ; 0x55 - somme(octets 0..8)
-mov  dptr,#0x0129 ; movx a,@dptr   ; octet [9]
-xrl  a, 0x08 ; jz                  ; sinon la trame est rejetee
+subb a, 0x08        ; 0x55 - sum(bytes 0..8)
+mov  dptr,#0x0129 ; movx a,@dptr   ; byte [9]
+xrl  a, 0x08 ; jz                  ; otherwise the frame is rejected
 ```
 
-→ **`checksum = 0x55 − Σ(octets 0..8)`**, trames de **10 octets**.
+→ **`checksum = 0x55 − Σ(bytes 0..8)`**, **10-byte** frames.
 
-Après validation, les champs sont dispatchés : `[4]` → XRAM `0x09BA`, `[5]` → XRAM `0x09AC`,
-`[7]` → chaîne passant par `0x02E6`.
+After validation, the fields are dispatched: `[4]` → XRAM `0x09BA`, `[5]` → XRAM `0x09AC`,
+`[7]` → chain passing through `0x02E6`.
 
-#### Plusieurs types de trames
+#### Multiple frame types
 
-L'octet `[0]` est dispatché sur **`0x02`, `0x03`, `0x08` et `0x15`** (`0x0612`, `0x077D`, `0x0797`,
-`0x07BD`). L'octet `[2]` est ensuite testé contre `0x08`, `0x05`, `0x40`.
+Byte `[0]` is dispatched on **`0x02`, `0x03`, `0x08`, and `0x15`** (`0x0612`, `0x077D`, `0x0797`,
+`0x07BD`). Byte `[2]` is then tested against `0x08`, `0x05`, `0x40`.
 
-Pour le type `0x03` : pose `0x2C.3`, met XRAM `0x0150` à 0, appelle `fcn.0000ACE6` avec `r7 = 0xF0`,
-puis charge `IDATA 0x18 = 0x06` et `IDATA 0x17 = 0xFF`.
+For type `0x03`: sets `0x2C.3`, zeroes XRAM `0x0150`, calls `fcn.0000ACE6` with `r7 = 0xF0`,
+then loads `IDATA 0x18 = 0x06` and `IDATA 0x17 = 0xFF`.
 
-#### 🔑 Le sans-fil pilote le RGB
+#### 🔑 Wireless controls RGB
 
-Dans la branche autour de `0x07D5`-`0x07FC`, le parser lit les octets **`[3]`, `[4]`, `[5]`** de la
-trame reçue, puis écrit :
+In the branch around `0x07D5`–`0x07FC`, the parser reads bytes **`[3]`, `[4]`, `[5]`** of the
+received frame, then writes:
 
 ```asm
 0x07f0   mov dptr,#0x038e ; clr a ; movx @dptr,a    ; 0x038E = 0
 0x07f5   inc dptr ; mov a,r5 ; movx @dptr,a         ; 0x038F = r5
-0x07f8   mov a,r7 ; swap a ; anl a,#0x0f            ; quartet haut
-0x07fc   mov dptr,#0x038d ; movx @dptr,a            ; 0x038D = sous-index d'effet
+0x07f8   mov a,r7 ; swap a ; anl a,#0x0f            ; high nibble
+0x07fc   mov dptr,#0x038d ; movx @dptr,a            ; 0x038D = effect sub-index
 ```
 
-**`0x038D` est le sous-index d'effet RGB** (voir la chaîne de sélection plus haut). Une trame venue
-du BK3632 peut donc **changer l'effet lumineux**. Autrement dit, le chemin sans-fil relaie de la
-configuration vers le 8051 — vraisemblablement depuis une application hôte via Bluetooth ou le
-dongle 2,4 GHz.
+**`0x038D` is the RGB effect sub-index** (see the selection chain above). A frame coming
+from the BK3632 can therefore **change the lighting effect**. In other words, the wireless path relays
+configuration to the 8051 — presumably from a host application over Bluetooth or the
+2.4 GHz dongle.
 
-C'est la troisième source d'effet, à côté des touches Fn et du chemin USB.
+This is the third effect source, alongside the Fn keys and the USB path.
 
-### La table de remap décodée — la disposition d'usine
+### The decoded remap table — factory layout
 
-La table de `0xCE00` (page 103) contient **84 enregistrements non nuls sur 128**, dont les
-indices 0 à 89. Lus **colonne par colonne**, six lignes par colonne, ils donnent ceci :
+The table at `0xCE00` (page 103) contains **84 non-zero records out of 128**, within
+indices 0 to 89. Read **column by column**, six rows per column, they give:
 
 ```
       c0    c1    c2    c3    c4    c5    c6     c7     c8    c9    c10   c11   c12   c13   c14
@@ -4229,395 +4227,395 @@ indices 0 à 89. Lus **colonne par colonne**, six lignes par colonne, ils donnen
  L5   MOD1  MOD4  MOD8  .     .     Spc   .      .      Fn?   MOD16 .     .     Left  Down  Rght
 ```
 
-**Les lignes 1 à 4 sont le bloc QWERTY exact**, colonne par colonne, sans une seule anomalie. La
-ligne 5 est la rangée du bas, la ligne 0 la rangée de fonction. Cela valide d'un coup la géométrie
-6 × 15 et l'ordre de balayage établis par ailleurs — matrice, pinout et keymap se recoupent.
+**Rows 1 to 4 are the exact QWERTY block**, column by column, without a single anomaly. Row
+5 is the bottom row, row 0 the function row. This validates at a stroke the
+6 × 15 geometry and the scan order established elsewhere — matrix, pinout, and keymap all match.
 
-#### Correction : `b0` n'est pas un masque de modificateurs
+#### Correction: `b0` is not a modifier mask
 
-J'avais lu l'enregistrement comme `[modificateurs, classe, paramètre, usage]`, avec `0x02` =
-LeftShift. C'est faux, et le décalage de 24 bits le montre :
+I had read the record as `[modifiers, class, parameter, usage]`, with `0x02` =
+LeftShift. That is wrong, and the 24-bit shift shows why:
 
 ```asm
-mov r0, #0x18 ; lcall fcn.00004DC5      ; decalage de 24 bits
+mov r0, #0x18 ; lcall fcn.00004DC5      ; 24-bit shift
 mov dptr, #0x0d18 ; mov a, r7 ; movx @dptr, a
 ```
 
-`b0` va en **`XRAM 0x0D18`** — l'octet que j'avais déjà identifié comme celui recopié dans le
-tampon de rapport HID (`0x0D18 → 0x08C0`). C'est donc un **sélecteur de rapport**, pas un masque.
+`b0` goes to **`XRAM 0x0D18`** — the byte I had already identified as the one copied into the
+HID report buffer (`0x0D18 → 0x08C0`). It is therefore a **report selector**, not a mask.
 
-Ce qui explique les entrées qui n'avaient aucun sens en modificateurs : `b0 = 0x02` avec
-`b3 = 0xB5` ne peut pas être « LeftShift + usage clavier 0xB5 », parce que `0xB5` n'est pas un
-usage clavier. C'est un usage **Consumer** :
+Which explains the entries that made no sense as modifiers: `b0 = 0x02` with
+`b3 = 0xB5` cannot be "LeftShift + keyboard usage 0xB5", because `0xB5` is not a
+keyboard usage. It is a **Consumer** usage:
 
-| `b3` | Usage Consumer |
+| `b3` | Consumer Usage |
 | --- | --- |
-| `0x6F` / `0x70` | luminosité écran − / + |
-| `0xB5` / `0xB6` | piste suivante / précédente |
-| `0xCD` | lecture / pause |
-| `0xE2` | muet |
+| `0x6F` / `0x70` | screen brightness − / + |
+| `0xB5` / `0xB6` | next / previous track |
+| `0xCD` | play / pause |
+| `0xE2` | mute |
 | `0xE9` / `0xEA` | volume + / − |
 
-**La rangée de fonction porte donc les commandes multimédia, pas F1–F12** — le réglage d'usine a
-la couche Fn inversée, ce qui est l'usage courant sur ces claviers.
+**The function row therefore carries media controls, not F1–F12** — the factory setting has
+the Fn layer inverted, which is common practice on these keyboards.
 
-L'enregistrement se lit finalement :
+The record finally reads:
 
 ```
-b0  selecteur de rapport   -> 0x0D18   (neuf valeurs, toutes decodees : voir ci-dessous)
-b1  classe d'action        -> 0x0D17
-b2  parametre              -> 0x0D16
-b3  usage                  -> 0x0D15
+b0  report selector   -> 0x0D18   (nine values, all decoded: see below)
+b1  action class      -> 0x0D17
+b2  parameter         -> 0x0D16
+b3  usage             -> 0x0D15
 ```
 
-#### Le quatrième répartiteur — `0x8845`, neuf sélecteurs de rapport
+#### The fourth dispatcher — `0x8845`, nine report selectors
 
-La ligne ci-dessus portait « autres à déterminer ». Elle n'a plus lieu d'être : `b0` est la clé d'un
-**quatrième appel** au répartiteur inline `0x4E45`, en `0x8845`, et ses neuf entrées énumèrent
-exactement les valeurs que `b0` peut prendre.
+The line above previously read "others TBD". That is no longer needed: `b0` is the key for a
+**fourth call** to the inline dispatcher `0x4E45`, at `0x8845`, and its nine entries enumerate
+the exact values `b0` can take.
 
-##### La chaîne, de l'appui au répartiteur
+##### The chain, from key press to dispatcher
 
 ```asm
-0x699A  a = [0x030D] ; a += a ; dptr = 0xD800 + [0x030D] * 512   ; page de PROFIL actif
-0x69B4  a = [0x02E0]                                             ; index de touche
+0x699A  a = [0x030D] ; a += a ; dptr = 0xD800 + [0x030D] * 512   ; active PROFILE page
+0x69B4  a = [0x02E0]                                             ; key index
 0x69B9  lcall 0x8818
-        0x8818  mov b,#4 ; lcall 0x4E39      ; dptr += index * 4  -> l'enregistrement
-        0x881E  lcall 0x4DEC                 ; charger les 4 octets
-        0x8821  mov r0,#0x18 ; lcall 0x4DC5  ; decaler de 24 bits
+        0x8818  mov b,#4 ; lcall 0x4E39      ; dptr += index * 4  -> the record
+        0x881E  lcall 0x4DEC                 ; load the 4 bytes
+        0x8821  mov r0,#0x18 ; lcall 0x4DC5  ; shift by 24 bits
         0x882A  movx [0x0D18], r7            ; b0
-        0x8844  a = [0x0D18] ; lcall 0x4E45  ; <<< repartir sur b0
+        0x8844  a = [0x0D18] ; lcall 0x4E45  ; <<< dispatch on b0
 ```
 
-`b1` a déjà été extrait par l'appelant (`0x6992`, décalage de 16 bits) — les deux répartiteurs
-travaillent donc sur le **même enregistrement de quatre octets**, `b0` choisissant la voie et `b1`
-l'action à l'intérieur de la voie. Deux appelants seulement : `0x69B9` et `0x6A87`.
+`b1` has already been extracted by the caller (`0x6992`, 16-bit shift) — both dispatchers
+therefore operate on the **same four-byte record**, with `b0` choosing the path and `b1`
+the action within that path. Only two callers: `0x69B9` and `0x6A87`.
 
-Chaque arm commence par les mêmes gardes que le répartiteur de raccourcis — `0x4D` et `0x55`
-posés ⇒ abandon — encodées tantôt en `JNB`+`LJMP`, tantôt en `JB` court : c'est la même condition.
+Each arm begins with the same guards as the shortcut dispatcher — `0x4D` and `0x55`
+set ⇒ abort — encoded sometimes as `JNB`+`LJMP`, sometimes as a short `JB`: it is the same condition.
 
-##### Les neuf
+##### The nine paths
 
-| `b0` | Arm | Voie |
+| `b0` | Arm | Path |
 | --- | --- | --- |
-| `0x00` | `0x7018` | **rapport clavier** |
-| `0x01` | `0x85FB` | **rapport souris**, via une table de sauts de treize entrées |
-| `0x02` | `0x001E` | **rapport Consumer** |
-| `0x03` | `0xA37E` | **file d'émission radio** |
-| `0x04` | `0xB041` | rapport brut à trois octets |
-| `0x07` | `0x412C` | **raccourcis clavier** |
-| `0x08` | `0xA674` | **répartiteur de classe d'action** sur `b1` |
-| `0x09` | *inline `0x88B8`* | maintient une valeur 0–3 en `[0x030E]` |
-| `0x0D` | `0xAD64` | pose deux bits d'état tenus |
-| *défaut* | `0x8919` | **`RET`** — un `b0` inconnu ne fait rien |
+| `0x00` | `0x7018` | **keyboard report** |
+| `0x01` | `0x85FB` | **mouse report**, via a thirteen-entry jump table |
+| `0x02` | `0x001E` | **Consumer report** |
+| `0x03` | `0xA37E` | **radio transmit queue** |
+| `0x04` | `0xB041` | three-byte raw report |
+| `0x07` | `0x412C` | **keyboard shortcuts** |
+| `0x08` | `0xA674` | **action-class dispatcher** on `b1` |
+| `0x09` | *inline `0x88B8`* | maintains a 0–3 value in `[0x030E]` |
+| `0x0D` | `0xAD64` | sets two held status bits |
+| *default* | `0x8919` | **`RET`** — an unknown `b0` does nothing |
 
-##### Ce que chaque voie fait, et ce qu'elle confirme
+##### What each path does, and what it confirms
 
-**`b0 = 0` — le rapport clavier.** `b1` y sert de **masque** : `[0x08B2] |= b1` à l'appui,
-`[0x08B2] &= ~b1` au relâchement ; `b3` et `b2` partent dans le rapport via `0x8CF8` (appui) ou
-`0x3034` (relâchement). C'est la voie qui **valide la lecture « six modificateurs »** de la section
-suivante : les positions portant une puissance de deux en `b1` passent par ici, et c'est ici que le
-masque est appliqué.
+**`b0 = 0` — keyboard report.** Here `b1` serves as a **mask**: `[0x08B2] |= b1` on press,
+`[0x08B2] &= ~b1` on release; `b3` and `b2` go into the report via `0x8CF8` (press) or
+`0x3034` (release). This is the path that **validates the "six modifiers" reading** in the next
+section: positions carrying a power of two in `b1` go through here, and this is where the
+mask is applied.
 
-**`b0 = 1` — le rapport souris.** Une table de sauts en `0x865E`, treize entrées indexées par
-`b1 - 1`. Détail complet ci-dessous.
+**`b0 = 1` — mouse report.** A jump table at `0x865E`, thirteen entries indexed by
+`b1 - 1`. Full details below.
 
-**`b0 = 2` — le rapport Consumer.** `[0x09BD] = b3`, `[0x09BE] = b2`, bit `0x50` posé. Exactement
-la structure que cette page décrit ailleurs : `0x09BC` porte le Report ID 2 et `0x09BD:0x09BE`
-l'usage Consumer sur seize bits. Les deux relevés se rejoignent.
+**`b0 = 2` — Consumer report.** `[0x09BD] = b3`, `[0x09BE] = b2`, bit `0x50` set. This is the exact
+structure described elsewhere on this page: `0x09BC` holds Report ID 2 and `0x09BD:0x09BE`
+holds the 16-bit Consumer usage. Both findings converge.
 
-**`b0 = 3` — la file d'émission radio.** Écrit `[0x02CE]`–`[0x02D2]`, puis recopie 8 puis 16 octets
-via `memcpy_idata` dans une structure de **28 octets par hôte** indexée par `g_radio_host_idx`,
-à partir de `0x0C57`. **C'est la file circulaire de six emplacements de 28 octets** que cette page
-identifie côté radio, atteinte ici par une voie complètement différente.
+**`b0 = 3` — radio transmit queue.** Writes `[0x02CE]`–`[0x02D2]`, then copies 8 then 16 bytes
+via `memcpy_idata` into a **28-byte per-host** structure indexed by `g_radio_host_idx`,
+starting at `0x0C57`. **This is the six-slot, 28-byte ring buffer** identified on the radio side
+of this page, reached here via a completely different path.
 
-**`b0 = 4` — un rapport brut.** `[0x08C0] = b0`, `[0x08C1] = b2`, `[0x08C2] = b3` à l'appui, zéros au
-relâchement, bit `0x3C` posé.
+**`b0 = 4` — raw report.** `[0x08C0] = b0`, `[0x08C1] = b2`, `[0x08C2] = b3` on press, zeros on
+release, bit `0x3C` set.
 
-**`b0 = 7` — les raccourcis.** `0x412C` appelle `0x4E45` avec **`b3`** comme clé : c'est le
-répartiteur `0x4136` décrit plus haut. **La clé des raccourcis est donc l'octet d'usage de
-l'enregistrement de remap**, ce qui referme la boucle : les clés `0x00`–`0x1D` de cette table sont
-des valeurs de `b3` dans la page de profil.
+**`b0 = 7` — shortcuts.** `0x412C` calls `0x4E45` with **`b3`** as the key: this is the
+`0x4136` dispatcher described above. **The shortcut key is therefore the usage byte of
+the remap record**, which closes the loop: keys `0x00`–`0x1D` of that table are
+`b3` values in the profile page.
 
-Son chemin de **relâchement** décide selon `b3` :
+Its **release** path branches on `b3`:
 
-| `b3` relâché | Effet |
+| Released `b3` | Effect |
 | --- | --- |
-| `4` | remet le compteur d'appui long à zéro (abandon de la réinitialisation) |
-| `5`, `6`, `7` | si `g_transport == 2` et `0x2C.5` posé : `rf_link_select(bt_slot, 0)`, puis efface le bit |
-| `0x0A` | remet `[0x0C52:0x0C53]` à zéro |
-| `0x1D` | muet / famille d'effet |
+| `4` | zeroes the long-press counter (aborts reset) |
+| `5`, `6`, `7` | if `g_transport == 2` and `0x2C.5` is set: `rf_link_select(bt_slot, 0)`, then clears the bit |
+| `0x0A` | zeroes `[0x0C52:0x0C53]` |
+| `0x1D` | mute / effect family |
 
-**`b0 = 8` — le répartiteur de classe** `0xA674`, déjà décrit plus haut : classes 0 à 9, dont 5/6/7
-partagent `fx_mode_toggle`.
+**`b0 = 8` — class dispatcher** `0xA674`, already described above: classes 0 to 9, where 5/6/7
+share `fx_mode_toggle`.
 
-**`b0 = 9` — une valeur 0–3 en `[0x030E]`**, avec quatre opérations selon `b1` : `0` charge `b2`,
-`1` incrémente en plafonnant à 3, `2` décrémente en plancher à 0, `3` fait cycler 0→1→2→0. Puis
+**`b0 = 9` — a 0–3 value in `[0x030E]`**, with four operations depending on `b1`: `0` loads `b2`,
+`1` increments capped at 3, `2` decrements floored at 0, `3` cycles 0→1→2→0. Then
 `[0x08C0..0x08C2] = 9, 0, 1`.
 
-> **`[0x030E]` n'est lu nulle part.** Une recherche de tous les accès `mov dptr,#0x030E` sur l'image
-> entière donne **quatre sites, tous dans cet arm**, et l'adresse est hors de portée de `MOVX @Ri`
-> puisque `P2` n'est jamais qu'à zéro. Ce `b0` entretient donc un réglage que rien ne consomme dans
-> ce firmware. Constaté, pas expliqué — et à ne pas confondre avec `[0x030D]`, qui est bien lu, par
-> dix-huit sites, tous avec le même idiome `0xD800 + [0x030D] * 512`.
+> **`[0x030E]` is never read anywhere.** Searching for all `mov dptr,#0x030E` accesses across the entire
+> image yields **four sites, all inside this arm**, and the address is out of reach of `MOVX @Ri`
+> since `P2` is only ever zero. This `b0` therefore maintains a setting that nothing consumes in
+> this firmware. Observed, not explained — and not to be confused with `[0x030D]`, which is read at
+> eighteen sites, all using the same `0xD800 + [0x030D] * 512` idiom.
 
-**`b0 = 0x0D` — deux bits tenus.** Selon `b1 == 0` ou non, et selon appui ou relâchement, pose ou
-efface les bits **`0x44`** et **`0x43`**. Ce sont **exactement les deux bits que l'arm de l'effet
-`0x2D` (`0x1A04`) teste** avant d'appeler `0x8A1A`. Une touche de cette voie conditionne donc le
-travail par trame de cet effet — deux tables décodées séparément qui se referment l'une sur l'autre.
+**`b0 = 0x0D` — two held bits.** Depending on whether `b1 == 0` or not, and on press vs. release, sets or
+clears bits **`0x44`** and **`0x43`**. These are **the exact two bits that the effect
+`0x2D` arm (`0x1A04`) checks** before calling `0x8A1A`. A key on this path therefore gates the
+per-frame work of that effect — two separately decoded tables locking together.
 
-#### Les trois dernières tables de sauts — `0x391C`, `0x0495`, `0x5817`
+#### The last three jump tables — `0x391C`, `0x0495`, `0x5817`
 
-L'inventaire annonçait trois tables « hors du chemin de l'appui de touche, non décodées ». Elles le
-sont maintenant, et elles se tiennent : **l'une est le séquenceur de transfert, les deux autres sont
-le pendant USB du conteneur `0x08` radio**.
+The inventory previously listed three tables "outside the key-press path, undecoded". They are now
+decoded, and they fit together: **one is the transfer sequencer, and the other two are
+the USB counterpart to the radio `0x08` container**.
 
-##### `0x391C` — le séquenceur, dix handlers
+##### `0x391C` — the sequencer, ten handlers
 
-`FUN_CODE_3901`, appelée par `euart0_parse`, branche sur `[0x0D9E] - 1`, borné à 10 :
+`FUN_CODE_3901`, called by `euart0_parse`, branches on `[0x0D9E] - 1`, bounded to 10:
 
-| Handler | Arm | État |
+| Handler | Arm | State |
 | --- | --- | --- |
-| 1 – 7 | `0x393A`, `0x3975`, `0x3A25`, `0x3AB5`, `0x3BA7`, `0x3C42`, `0x3CD0` | déjà décrits plus haut |
-| **8**, **9** | `0x3D25` | **la queue commune — ils n'existent pas** |
-| **10** | `0x3D1D` | `[0x0D9E] = 0` puis `lcall 0xB093` : **fin de transfert explicite** |
+| 1 – 7 | `0x393A`, `0x3975`, `0x3A25`, `0x3AB5`, `0x3BA7`, `0x3C42`, `0x3CD0` | already described above |
+| **8**, **9** | `0x3D25` | **the common tail — they do not exist** |
+| **10** | `0x3D1D` | `[0x0D9E] = 0` then `lcall 0xB093`: **explicit end of transfer** |
 
-Le point ouvert « handlers 8, 9 et 10 du séquenceur » est donc réglé : deux d'entre eux ne sont pas
-des handlers du tout — la table les fait tomber sur la même adresse que le hors-borne — et le
-troisième est la clôture, qui désarme le séquenceur et émet une dernière trame `0x08`.
+The open question "sequencer handlers 8, 9, and 10" is therefore settled: two of them are not
+handlers at all — the table routes them to the same address as out-of-bounds — and the
+third is the closing step, which disarms the sequencer and sends a final `0x08` frame.
 
-> Nuance sur l'opcode `0x4A`. Cette page se demandait s'il n'était pas la fin de transfert. C'est
-> moins probable maintenant qu'un handler dédié à la clôture est identifié. La question reste
-> ouverte, mais sur une base différente.
+> Note on opcode `0x4A`. This page previously wondered whether it might be the end-of-transfer marker. That is
+> less likely now that a dedicated closing handler has been identified. The question remains
+> open, but on a different footing.
 
-##### D'où vient `IDATA[0x77]` — le chemin USB
+##### Where `IDATA[0x77]` comes from — the USB path
 
-Les deux tables suivantes branchent sur `IDATA[0x77]`, que six sites **lisent** et qu'aucun idiome
-direct n'écrit. Le décompilateur tranche : `FUN_CODE_0200` — appelée par `FUN_CODE_9926`, elle-même
-appelée par **`isr_usb`** — recopie le tampon d'endpoint `XDATA 0x1100` vers `IDATA` **à partir de
-`0x76`**. `IDATA[0x77]` est donc **l'octet de commande d'un rapport reçu sur EP0**, et `IDATA[0x78]`
-le suivant.
+The next two tables branch on `IDATA[0x77]`, which six sites **read** and no direct idiom
+writes. The decompiler settles it: `FUN_CODE_0200` — called by `FUN_CODE_9926`, itself
+called by **`isr_usb`** — copies the endpoint buffer `XDATA 0x1100` to `IDATA` **starting at
+`0x76`**. `IDATA[0x77]` is therefore **the command byte of a report received on EP0**, and `IDATA[0x78]`
+is the following byte.
 
-C'est la voie logicielle du clavier — celle par laquelle OpenRGB parle à l'appareil.
+This is the software path of the keyboard — the one OpenRGB uses to talk to the device.
 
-##### `0x0495` — les huit commandes d'ÉCRITURE
+##### `0x0495` — the eight WRITE commands
 
-Index = `IDATA[0x77] - 3`, clés **3 à 10**. La valeur `0xAA` est captée avant la table, en `0x0473`.
+Index = `IDATA[0x77] - 3`, keys **3 to 10**. Value `0xAA` is caught before the table, at `0x0473`.
 
-| Clé | Arm | Effet |
+| Key | Arm | Effect |
 | --- | --- | --- |
-| `3` | `0x04AD` | base `CODE` selon `[0x038D]` — `0xCC00`, `0xD000`, `0xD400`, `0xD800` — puis `0xEE4E` |
-| `4` | `0x04DF` | `0xEEF4` : effacement + écriture de la **page 99** (`0xC600`) |
-| `5` | `0x04E5` | `0xDC00` + séquence × 512, puis `0xEE4E` |
-| `6` | `0x0505` | `0xCA00` + séquence × 512, recopie du tampon, puis `0xEE4E` |
-| **`7`** | `0x05E9` | **rien** — même adresse que le hors-borne |
-| `8` | `0x056E` | en filaire : pose deux bits et remet `[0x0D9F:0x0DA0]` à zéro |
-| **`9`** | `0x05E9` | **rien** |
-| `10` | `0x0584` | `0xC800` + séquence × 512, puis `0xEE4E` |
-| `0xAA` | `0x05A8` | `[0x08C0] = IDATA[0x77]`, `[0x08C1] = IDATA[0x78]`, `[0x08C2] = 0` — un **écho** |
+| `3` | `0x04AD` | `CODE` base according to `[0x038D]` — `0xCC00`, `0xD000`, `0xD400`, `0xD800` — then `0xEE4E` |
+| `4` | `0x04DF` | `0xEEF4`: erase + write of **page 99** (`0xC600`) |
+| `5` | `0x04E5` | `0xDC00` + sequence × 512, then `0xEE4E` |
+| `6` | `0x0505` | `0xCA00` + sequence × 512, buffer copy, then `0xEE4E` |
+| **`7`** | `0x05E9` | **nothing** — same address as out-of-bounds |
+| `8` | `0x056E` | in wired mode: sets two bits and zeroes `[0x0D9F:0x0DA0]` |
+| **`9`** | `0x05E9` | **nothing** |
+| `10` | `0x0584` | `0xC800` + sequence × 512, then `0xEE4E` |
+| `0xAA` | `0x05A8` | `[0x08C0] = IDATA[0x77]`, `[0x08C1] = IDATA[0x78]`, `[0x08C2] = 0` — an **echo** |
 
-##### `0x5817` — les neuf commandes de LECTURE
+##### `0x5817` — the nine READ commands
 
-Index = `IDATA[0x77] - 0x82`, clés **`0x82` à `0x8A`**. Chaque arm charge un pointeur source dans
-`[0x0F45:0x0F46]`, reprend la longueur de `[0x038E:0x038F]` dans `[0x0F3A:0x0F3B]`, pose
-`[0x0F4D] = 1` et arme **EP0** (`EP0CON |= 4`). La réponse part donc par le point de terminaison de
-contrôle, pas par un canal d'interruption.
+Index = `IDATA[0x77] - 0x82`, keys **`0x82` to `0x8A`**. Each arm loads a source pointer into
+`[0x0F45:0x0F46]`, copies the length from `[0x038E:0x038F]` into `[0x0F3A:0x0F3B]`, sets
+`[0x0F4D] = 1`, and arms **EP0** (`EP0CON |= 4`). The response therefore goes out over the control
+endpoint, not an interrupt channel.
 
-| Clé | Arm | Source |
+| Key | Arm | Source |
 | --- | --- | --- |
-| `0x82` | `0x5832` | gabarit `CODE 0xB3E3` ou `0xB3FC` selon `[0x038D]` |
-| `0x83` | `0x5852` | `0xCC00` / `0xD000` / `0xD400` / `0xD800` + séquence × 512 — les **quatre profils de remap** |
-| `0x84` | `0x58AA` | `0xC600` + séquence × 512 — le **bloc de réglages** |
-| `0x85` | `0x58BB` | `0xDC00` + séquence × 512 |
-| `0x86` | `0x58CB` | `0xCA00` + séquence × 512 — l'**éclairage par touche** |
-| `0x87` | `0x58DB` | deux octets de **statut** construits en RAM (`[0x0095]`, `[0x0096]`) |
-| `0x88` | `0x591A` | `(séquence × 2 + 1) << 8 \| 0x52` — soit `0x0152` à la séquence 0 |
-| `0x89` | `0x5949` | la queue commune seule : arme EP0 sans changer la source |
-| `0x8A` | `0x592F` | `0xC800` + séquence × 512 |
+| `0x82` | `0x5832` | template `CODE 0xB3E3` or `0xB3FC` depending on `[0x038D]` |
+| `0x83` | `0x5852` | `0xCC00` / `0xD000` / `0xD400` / `0xD800` + sequence × 512 — the **four remap profiles** |
+| `0x84` | `0x58AA` | `0xC600` + sequence × 512 — the **settings block** |
+| `0x85` | `0x58BB` | `0xDC00` + sequence × 512 |
+| `0x86` | `0x58CB` | `0xCA00` + sequence × 512 — **per-key lighting** |
+| `0x87` | `0x58DB` | two **status** bytes built in RAM (`[0x0095]`, `[0x0096]`) |
+| `0x88` | `0x591A` | `(sequence × 2 + 1) << 8 \| 0x52` — i.e., `0x0152` at sequence 0 |
+| `0x89` | `0x5949` | common tail only: arms EP0 without changing the source |
+| `0x8A` | `0x592F` | `0xC800` + sequence × 512 |
 
-##### Ce que ces deux tables établissent
+##### What these two tables establish
 
-**Les bases sont exactement celles du conteneur `0x08` reçu par la radio** — `0xC600`, `0xC800`,
-`0xCA00`, `0xCC00`/`0xD000`/`0xD400`/`0xD800`, `0xDC00` — avec le même découpage par numéro de
-séquence et le même graveur `0xEE4E` → `0xAAC1`.
+**The base addresses are the exact same ones as in the `0x08` container received over radio** — `0xC600`, `0xC800`,
+`0xCA00`, `0xCC00`/`0xD000`/`0xD400`/`0xD800`, `0xDC00` — with the same slicing by sequence
+number and the same flash writer `0xEE4E` → `0xAAC1`.
 
-Le clavier expose donc **la même configuration par deux transports**, avec deux jeux de codes
-distincts : `0x01`–`0x09` et `0x41`–`0x4A` côté radio, `3`–`10` (écriture) et `0x82`–`0x8A` (lecture)
-côté USB. Ce n'est pas une redondance de lecture : ce sont deux chemins physiques différents,
-décodés séparément, qui aboutissent aux mêmes pages de flash.
+The keyboard therefore exposes **the same configuration over two transports**, using two distinct command
+sets: `0x01`–`0x09` and `0x41`–`0x4A` on the radio side, `3`–`10` (write) and `0x82`–`0x8A` (read)
+on the USB side. This is not a redundant readout: they are two different physical paths,
+decoded separately, that land on the exact same flash pages.
 
-Et les deux tables ont chacune leurs trous — clés `7` et `9` de `0x0495`, handlers `8` et `9` de
-`0x391C` — qui tombent sur l'adresse du hors-borne. Le firmware réserve des codes qu'il n'implémente
-pas.
+And both tables have their own gaps — keys `7` and `9` in `0x0495`, handlers `8` and `9` in
+`0x391C` — which land on the out-of-bounds address. The firmware reserves codes it does not
+implement.
 
-#### La table `0x865E` — les treize actions souris
+#### Table `0x865E` — the thirteen mouse actions
 
-`b0 = 1` mène en `0x85FB`, qui sépare l'appui du relâchement sur le bit `0x42`, puis, à l'appui,
-branche sur une table de sauts calculée :
+`b0 = 1` leads to `0x85FB`, which separates press from release on bit `0x42`, then, on press,
+branches through a computed jump table:
 
 ```asm
-0x8643  a = [0x0D17] ; dec a ; cjne a,#0x0D ; jc 0x8650   ; borne : b1-1 < 13
-0x864D  ljmp 0x86D0                                       ; hors borne -> queue
+0x8643  a = [0x0D17] ; dec a ; cjne a,#0x0D ; jc 0x8650   ; bound: b1-1 < 13
+0x864D  ljmp 0x86D0                                       ; out of bounds -> tail
 0x8650  dptr = 0x865E ; b = 3 ; mul ab ; ... ; jmp @a+dptr
 ```
 
-##### Ce que c'est, prouvé par le descripteur HID
+##### What it is, proven by the HID descriptor
 
-Les cinq variables que ces arms écrivent — `[0x09B1]`, `[0x09B2:0x09B3]`, `[0x09B4:0x09B5]`,
-`[0x09B6]`, `[0x09B7]` — sont le **rapport souris**. Le descripteur HID, en `CODE 0x5F7D`, le dit
-mot pour mot :
+The five variables these arms write — `[0x09B1]`, `[0x09B2:0x09B3]`, `[0x09B4:0x09B5]`,
+`[0x09B6]`, `[0x09B7]` — are the **mouse report**. The HID descriptor, at `CODE 0x5F7D`, spells it
+out word for word:
 
 ```
 05 01 09 02        Usage Page (Generic Desktop), Usage (Mouse)
 a1 01  85 07       Collection (Application), Report ID 7
 09 01  a1 00       Usage (Pointer), Collection (Physical)
-05 09  19 01 29 05   Usage Page (Button), Usage Min 1 .. Max 5   <-- CINQ boutons
-75 01 95 05 81 02    5 bits, + 95 03 81 01 : trois bits de bourrage
+05 09  19 01 29 05   Usage Page (Button), Usage Min 1 .. Max 5   <-- FIVE buttons
+75 01 95 05 81 02    5 bits, + 95 03 81 01: three padding bits
 05 01  16 00 80 26 ff 7f   Logical Min -32768, Max 32767
-09 30 09 31  75 10 95 02 81 06   Usage X, Usage Y, SEIZE bits chacun, relatifs
-15 81 25 7f  09 38  75 08 95 01 81 06   Wheel, huit bits, -127..127
+09 30 09 31  75 10 95 02 81 06   Usage X, Usage Y, SIXTEEN bits each, relative
+15 81 25 7f  09 38  75 08 95 01 81 06   Wheel, eight bits, -127..127
 05 0c  0a 38 02  ...                    Usage Page (Consumer), AC Pan
 ```
 
-La correspondance est exacte, champ par champ :
+The correspondence is exact, field for field:
 
-| Champ du rapport | Taille | Variable |
+| Report field | Size | Variable |
 | --- | --- | --- |
-| boutons 1 à 5 | 5 bits | `[0x09B1]` |
-| X | 16 bits | `[0x09B2]` (poids faible) `:` `[0x09B3]` (poids fort) |
+| buttons 1 to 5 | 5 bits | `[0x09B1]` |
+| X | 16 bits | `[0x09B2]` (low byte) `:` `[0x09B3]` (high byte) |
 | Y | 16 bits | `[0x09B4]` `:` `[0x09B5]` |
-| molette | 8 bits | `[0x09B6]` |
+| wheel | 8 bits | `[0x09B6]` |
 | AC Pan | 8 bits | `[0x09B7]` |
 
-L'ordre poids-faible-d'abord se vérifie sur le convertisseur `0x568C`, qui étend le signe d'un delta
-huit bits venu de `[0x0F66]` : il écrit `0xFF` ou `0x00` dans `[0x09B3]` selon `ACC.7`, puis le delta
-dans `[0x09B2]`.
+The little-endian byte order is verified by converter `0x568C`, which sign-extends an 8-bit
+delta from `[0x0F66]`: it writes `0xFF` or `0x00` into `[0x09B3]` depending on `ACC.7`, then writes the delta
+into `[0x09B2]`.
 
-##### Les treize
+##### The thirteen actions
 
 | `b1` | Arm | Action |
 | --- | --- | --- |
-| `1` | `0x8685` | **bouton 1** — `[0x09B1] \|= 0x01` |
-| `2` | `0x8685` | **bouton 2** — `\|= 0x02` |
-| `3` | `0x8685` | **bouton 3** — `\|= 0x04` |
-| `4` | `0x8685` | **bouton 4** — `\|= 0x08` |
-| `5` | `0x8685` | **bouton 5** — `\|= 0x10` |
+| `1` | `0x8685` | **button 1** — `[0x09B1] \|= 0x01` |
+| `2` | `0x8685` | **button 2** — `\|= 0x02` |
+| `3` | `0x8685` | **button 3** — `\|= 0x04` |
+| `4` | `0x8685` | **button 4** — `\|= 0x08` |
+| `5` | `0x8685` | **button 5** — `\|= 0x10` |
 | `6` | `0x8699` | **AC Pan +1** — `[0x09B7] = 0x01` |
 | `7` | `0x869E` | **AC Pan −1** — `[0x09B7] = 0xFF` |
-| `8` | `0x86A3` | **molette +1** — `[0x09B6] = 0x01` |
-| `9` | `0x86AB` | **molette −1** — `[0x09B6] = 0xFF` |
+| `8` | `0x86A3` | **wheel +1** — `[0x09B6] = 0x01` |
+| `9` | `0x86AB` | **wheel −1** — `[0x09B6] = 0xFF` |
 | `10` | `0x86B3` | **X = −1** — `[0x09B2:0x09B3] = 0xFF, 0xFF` |
 | `11` | `0x86B8` | **X = +1** — `= 0x01, 0x00` |
 | `12` | `0x86BD` | **Y = −1** — `[0x09B4:0x09B5] = 0xFF, 0xFF` |
 | `13` | `0x86C7` | **Y = +1** — `= 0x01, 0x00` |
 
-Les cinq premières partagent un seul corps parce qu'elles ne diffèrent que par le bit : `0x8685` lit
-`CODE 0xEF04[b1-1]`, le complémente et l'applique en `ORL`.
+The first five share a single body because they differ only by bit position: `0x8685` reads
+`CODE 0xEF04[b1-1]`, complements it, and applies it with `ORL`.
 
-##### `CODE 0xEF04` — une table, deux usages
+##### `CODE 0xEF04` — one table, two uses
 
 ```
 fe fd fb f7 ef df bf 7f | 01 02 04 08 10 20 40 80
 ```
 
-Huit masques d'**effacement** suivis des huit masques de **positionnement**. Le chemin d'appui lit le
-masque d'effacement et le `CPL` pour obtenir celui de positionnement ; le chemin de relâchement
-l'utilise tel quel. Une seule table de seize octets sert les deux sens.
+Eight **clear** masks followed by eight **set** masks. The press path reads the
+clear mask and `CPL`s it to obtain the set mask; the release path
+uses it as-is. A single sixteen-byte table serves both directions.
 
-##### `b2` est la période de répétition
+##### `b2` is the repeat period
 
-Après l'arm, la queue `0x86D0` s'exécute **si `b2 ≥ 2`** :
+After the arm, the tail `0x86D0` runs **if `b2 ≥ 2`**:
 
 ```asm
-[0x0C37 + (b1-1)] = b2 * 2      ; compte a rebours de repetition
+[0x0C37 + (b1-1)] = b2 * 2      ; repeat countdown
 [0x0390 + (b1-1)] = b3
 [0x0C45 + (b1-1)] = b3
-setb 0x41                       ; repetition armee
+setb 0x41                       ; repeat armed
 ```
 
-Et le relâchement, si `b2 == 0xFF`, remet `[0x0C37 + (b1-1)]` et `[0x0390 + (b1-1)]` à zéro. Les
-boutons (`b1 ≤ 5`) voient en plus leur bit effacé dans `[0x09B1]`.
+And on release, if `b2 == 0xFF`, it zeroes `[0x0C37 + (b1-1)]` and `[0x0390 + (b1-1)]`. Buttons
+(`b1 ≤ 5`) additionally have their bit cleared in `[0x09B1]`.
 
-Ce compte à rebours est consommé par un **bloc jumeau** : `0x7B17`, avec sa propre table de sauts en
-`0x7B25`, **treize entrées de même forme et mêmes cibles fonctionnelles**, qui réapplique l'action
-tant que la touche est tenue et décrémente `[0x0C37 + (b1-1)]` en `0x7BAE`. `b2` est donc la
-**cadence d'auto-répétition** de l'action souris, en pas de deux tics.
+This countdown is consumed by a **twin block**: `0x7B17`, with its own jump table at
+`0x7B25`, **thirteen entries of the same shape and the same functional targets**, which reapplies the action
+as long as the key is held and decrements `[0x0C37 + (b1-1)]` at `0x7BAE`. `b2` is therefore the
+**auto-repeat cadence** of the mouse action, in units of two ticks.
 
-##### Inventaire des tables de sauts de l'image
+##### Inventory of jump tables in the image
 
-Avec celle-ci, le compte est clos. **Quatre** tables inline lues par le répartiteur `0x4E45` —
-`0x0859`, `0x1744`, `0x4139`, `0x8848` — et **cinq** tables de `LJMP` adressées par
-`jmp @a+dptr` :
+With this one, the count is complete. **Four** inline tables read by dispatcher `0x4E45` —
+`0x0859`, `0x1744`, `0x4139`, `0x8848` — and **five** `LJMP` tables addressed via
+`jmp @a+dptr`:
 
-| Site | Table | Entrées | Sujet |
+| Site | Table | Entries | Subject |
 | --- | --- | --- | --- |
 | `0x0487` | `0x0495` | 8 | — |
 | `0x390E` | `0x391C` | 10 | — |
 | `0x5809` | `0x5817` | 9 | — |
-| `0x7B17` | `0x7B25` | 13 | répétition souris |
-| `0x8650` | `0x865E` | 13 | **actions souris** |
+| `0x7B17` | `0x7B25` | 13 | mouse repeat |
+| `0x8650` | `0x865E` | 13 | **mouse actions** |
 
-Les trois premières restent non décodées ; elles ne sont pas sur le chemin de l'appui de touche.
+The first three remain undecoded; they are not on the key-press path.
 
-#### Les six modificateurs, et la tension sur `0x0D17` levée
+#### The six modifiers, and resolving the tension on `0x0D17`
 
-Six positions portent une **puissance de deux** en classe d'action, sans usage :
+Six positions carry a **power of two** in the action class, with no usage:
 
-| Position | Classe | Touche |
+| Position | Class | Key |
 | --- | --- | --- |
-| L4 c0 | 2 | Maj gauche |
-| L4 c11 | 32 | Maj droite |
-| L5 c0 | 1 | Ctrl gauche |
-| L5 c1 | 4 | Win gauche |
-| L5 c2 | 8 | Alt gauche |
-| L5 c9 | 16 | Ctrl droite |
+| L4 c0 | 2 | Left Shift |
+| L4 c11 | 32 | Right Shift |
+| L5 c0 | 1 | Left Ctrl |
+| L5 c1 | 4 | Left Win |
+| L5 c2 | 8 | Left Alt |
+| L5 c9 | 16 | Right Ctrl |
 
-Ce sont **exactement les six touches modificatrices**, et rien d'autre dans la table ne porte une
-puissance de deux. Cela lève la tension notée depuis longtemps sur `0x0D17` : le champ est bien
-utilisé **à la fois** comme index de classe (0 à 9, via la table de sauts `0xA68D`) et comme
-**masque** (le `0x08B2 &= ~0x0D17` de `0x7058`) — selon qu'il désigne une action ou un
-modificateur. La borne `< 10` du dispatcher laisse passer 1, 2, 4 et 8 mais rejette 16 et 32, qui
-n'existent que sur la voie masque.
+These are **the exact six modifier keys**, and nothing else in the table carries a
+power of two. This resolves the long-standing tension on `0x0D17`: the field is indeed
+used **both** as a class index (0 to 9, via jump table `0xA68D`) and as a
+**mask** (the `0x08B2 &= ~0x0D17` at `0x7058`) — depending on whether it designates an action or a
+modifier. The `< 10` bound of the dispatcher lets 1, 2, 4, and 8 through, but rejects 16 and 32, which
+exist only on the mask path.
 
-> *À noter :* l'ordre des bits ne suit pas celui des modificateurs HID (`0x04` tombe sur Win et
-> `0x08` sur Alt, alors que HID dit l'inverse). Le masque s'applique à `0x08B2`, un octet d'état
-> interne — sa numérotation n'a pas de raison de coïncider avec celle du rapport HID, et la
-> conversion se fait ailleurs.
+> *Note:* the bit order does not follow the HID modifier bit order (`0x04` lands on Win and
+> `0x08` on Alt, whereas HID specifies the reverse). The mask is applied to `0x08B2`, an internal state
+> byte — its numbering has no reason to match the HID report's, and the
+> conversion happens elsewhere.
 
-#### Deux entrées à part
+#### Two special entries
 
-- **L5 c8** (indice 53) : `0D 00 00 00` — un sélecteur de rapport `0x0D`, aucune classe, aucun
-  usage. La position correspond à **Fn** sur un 75 % ANSI, touche que le firmware traite en
-  interne sans jamais l'émettre.
-- **L0 c14** (indice 84) : `07 00 00 1D` — rapport `0x07`, usage `0x1D`. C'est la position que
-  l'analyse de la matrice avait attribuée à **l'appui sur l'encodeur**.
+- **L5 c8** (index 53): `0D 00 00 00` — report selector `0x0D`, no class, no
+  usage. The position corresponds to **Fn** on a 75% ANSI layout, a key that the firmware handles
+  internally without ever emitting it.
+- **L0 c14** (index 84): `07 00 00 1D` — report `0x07`, usage `0x1D`. This is the position that
+  the matrix analysis had assigned to **the encoder press**.
 
-*Ces deux lectures sont inférées de la position ; le contenu des enregistrements, lui, est lu.*
+*These two readings are inferred from position; the contents of the records themselves are read directly.*
 
-#### `cl3/2` et `cl3/1` — la luminosité RGB
+#### `cl3/2` and `cl3/1` — RGB brightness
 
-Les deux entrées `08 03 02 00` et `08 03 01 00` de la rangée de fonction sont la classe d'action
-**3**, dont le handler est `0x8C0F`. Le C est sans ambiguïté :
+The two entries `08 03 02 00` and `08 03 01 00` on the function row are action class
+**3**, whose handler is `0x8C0F`. The C equivalent is unambiguous:
 
 ```c
-if (g_key_hid_usage != 0) goto rapport;     /* une entree porteuse d'usage saute tout ceci */
-switch (g_key_param) {                       /* b2 de l'enregistrement */
-  case 1:  if (brightness < tbl_max_brightness[effect]) brightness++;  break;   /* monter */
-  case 2:  if (brightness != 0)                          brightness--;  break;   /* descendre */
-  case 0:  brightness++; if (brightness > max) brightness = 0;          break;   /* cycler */
+if (g_key_hid_usage != 0) goto rapport;     /* an entry carrying a usage skips all of this */
+switch (g_key_param) {                       /* b2 of the record */
+  case 1:  if (brightness < tbl_max_brightness[effect]) brightness++;  break;   /* increase */
+  case 2:  if (brightness != 0)                          brightness--;  break;   /* decrease */
+  case 0:  brightness++; if (brightness > max) brightness = 0;          break;   /* cycle */
 }
 ```
 
-Donc **`cl3/1` = luminosité +**, **`cl3/2` = luminosité −**, et le paramètre `0` cyclerait. Sur la
-rangée de fonction, ce sont les deux touches de luminosité du rétroéclairage.
+So **`cl3/1` = brightness +**, **`cl3/2` = brightness −**, and parameter `0` would cycle. On the
+function row, these are the two backlight brightness keys.
 
-Atteindre une butée (0 ou le maximum) pose `0x2B.6` et charge `0x0D1B = 6` — un signal de fin de
-course, vraisemblablement le clignotement de confirmation.
+Reaching either limit (0 or maximum) sets `0x2B.6` and loads `0x0D1B = 6` — an end-of-travel
+signal, likely the confirmation blink.
 
-Ce handler **confirme trois lectures faites ailleurs**, par des chemins indépendants :
+This handler **confirms three readings established elsewhere**, via independent paths:
 
-1. le maximum vient bien de `tbl_max_brightness[effet]`, la table `0xA8D5` ;
-2. la persistance suit exactement l'aiguillage de l'offset 5 :
+1. the maximum indeed comes from `tbl_max_brightness[effect]`, table `0xA8D5`;
+2. persistence follows the exact switch at offset 5:
 
 ```c
 if (g_settings_per_effect == 0) {
@@ -4626,358 +4624,357 @@ if (g_settings_per_effect == 0) {
 } else                             g_global_brightness  = brightness;
 ```
 
-3. et le masque `0x80` de cette écriture **préserve le bit 7 de `b0`** — le drapeau de sens dont
-   j'avais déduit l'existence à la lecture (`rlc a ; mov 0x24.3, c`). L'écriture le confirme :
-   c'est bien un champ séparé, conservé au fil des changements de luminosité.
+3. and the `0x80` mask in this write **preserves bit 7 of `b0`** — the direction flag whose
+   existence I had deduced from the read side (`rlc a ; mov 0x24.3, c`). The write side confirms it:
+   it is indeed a separate field, preserved across brightness changes.
 
-> Une nuance : la lecture masque `b0 & 0x1F`, l'écriture n'en préserve que le bit 7 et laisse donc
-> sept bits utiles. La luminosité étant bornée à 9, la différence ne se voit jamais.
+> One nuance: reading masks `b0 & 0x1F`, while writing only preserves bit 7 and thus leaves
+> seven usable bits. Since brightness is bounded to 9, the difference never manifests.
 
-### La trame `0x03` — l'annonce de connexion
+### Frame `0x03` — connection announcement
 
-C'est la plus courte des trois branches du parseur, et **la seule qui ne vérifie aucune somme de
-contrôle** — les trames `0x02` et `0x08` la vérifient toutes deux.
+This is the shortest of the parser's three branches, and **the only one that verifies no
+checksum** — frames `0x02` and `0x08` both verify it.
 
 ```asm
-0x0778  a = [0x0120]              ; octet 0 de la trame
+0x0778  a = [0x0120]              ; byte 0 of the frame
 0x077D  cjne a, #0x03, autre
 0x0780  setb 0x2C.3
-0x0782  clr a ; movx [0x0150], a  ; compteur de repos remis a zero
+0x0782  clr a ; movx [0x0150], a  ; idle counter reset to zero
 0x0787  r5 = 0 ; r7 = 0xF0
-0x078A  lcall euart0_reply        ; -> trame 01 F0 00 00 00 <ck>
-0x078D  IDATA[0x18] = 0x06        ; banque 3, R0
-0x0790  IDATA[0x17] = 0xFF        ; banque 2, R7
+0x078A  lcall euart0_reply        ; -> frame 01 F0 00 00 00 <ck>
+0x078D  IDATA[0x18] = 0x06        ; bank 3, R0
+0x0790  IDATA[0x17] = 0xFF        ; bank 2, R7
 0x0793  ljmp sortie
 ```
 
-Les deux écritures de registre ne sont pas décoratives : chacune a **un consommateur unique et
-identifié**, et c'est ce qui donne le sens de la trame.
+The two register writes are not decorative: each has **a single, identified
+consumer**, and that is what reveals the meaning of the frame.
 
-| Écriture | Consommateur | Effet |
+| Write | Consumer | Effect |
 | --- | --- | --- |
-| `[0x0150] = 0` | branche de repos de `0x3901` | remet à cent tics l'échéance de la prochaine requête d'état `0x06` |
-| `BANK3_R0 = 6` | queue de `euart0_parse` : `if (++R0 > 5) { R0 = 0; 0x801F(); }` | **la toute prochaine trame déclenche la routine de batterie** |
-| `BANK2_R7 = 0xFF` | `0x801F` : `if (R7 == 0xFF) { R7 = [0x0151]; poser le drapeau }` | **la jauge affichée saute d'un coup à la valeur réelle** au lieu de converger |
+| `[0x0150] = 0` | idle branch of `0x3901` | resets the deadline for the next `0x06` status request to one hundred ticks |
+| `BANK3_R0 = 6` | tail of `euart0_parse`: `if (++R0 > 5) { R0 = 0; 0x801F(); }` | **the very next frame triggers the battery routine** |
+| `BANK2_R7 = 0xFF` | `0x801F`: `if (R7 == 0xFF) { R7 = [0x0151]; set flag }` | **the displayed gauge jumps straight to the actual value** instead of converging gradually |
 
-Autrement dit : à la réception d'une trame `0x03`, le clavier remet à zéro l'horloge de la
-liaison, **court-circuite l'amortissement de la jauge** pour qu'elle affiche immédiatement le vrai
-niveau, programme un envoi de batterie sans attendre, et accuse réception.
+In other words: upon receiving a `0x03` frame, the keyboard resets the link timer,
+**bypasses gauge damping** so that it immediately displays the true
+level, schedules an immediate battery report, and sends an acknowledgment.
 
-C'est le comportement d'une **annonce de (re)connexion** : on ne fait pas glisser doucement une
-jauge quand le lien vient de s'établir, on l'affiche juste. L'absence de somme de contrôle va dans
-le même sens — une trame de service minimale.
+This is the behavior of a **(re)connection announcement**: you do not slowly ramp a battery
+gauge when the link has just been established, you display it right away. The absence of a checksum points
+the same way — a minimal service frame.
 
-*Le nom « annonce de connexion » est inféré de ces trois effets ; les effets, eux, sont lus.*
+*The name "connection announcement" is inferred from these three effects; the effects themselves are read directly.*
 
-#### Les deux accusés de réception
+#### The two acknowledgments
 
-`euart0_reply(r7, r5)` compose `01 <r7> <r5> 00 00 <somme>`. Les deux seuls appels du parseur :
+`euart0_reply(r7, r5)` builds `01 <r7> <r5> 00 00 <sum>`. The only two calls in the parser:
 
-| Site | Trame émise | Déclencheur |
+| Site | Transmitted frame | Trigger |
 | --- | --- | --- |
-| `0x078A` | `01 F0 00 00 00 <ck>` | trame `0x03` reçue |
-| `0x0811` | `01 F1 00 00 00 <ck>` | trame `0x08` dont `octet[2] & 0x7F != 8` |
+| `0x078A` | `01 F0 00 00 00 <ck>` | `0x03` frame received |
+| `0x0811` | `01 F1 00 00 00 <ck>` | `0x08` frame whose `byte[2] & 0x7F != 8` |
 
-`0xF0` et `0xF1` sont donc deux **codes d'accusé** dans une plage distincte des commandes
-ordinaires (`0x01`–`0x0E`).
+`0xF0` and `0xF1` are therefore two **acknowledgment codes** in a range distinct from ordinary
+commands (`0x01`–`0x0E`).
 
-#### Un drapeau qui n'est jamais consulté
+#### A flag that is never consulted
 
-`0x2C.3` est posé ici, et effacé en un seul endroit — `fcn.0000929E` (`0x935E`), une routine de
-réinitialisation qui remplit une zone de `0xFF`, écrit `[0x0C44] = 2` et efface aussi `0x26.7`.
+`0x2C.3` is set here, and cleared in only one place — `fcn.0000929E` (`0x935E`), an initialization
+routine that fills a region with `0xFF`, writes `[0x0C44] = 2`, and also clears `0x26.7`.
 
-**Aucune instruction de bit ne le teste, et aucune lecture d'octet non plus.**
+**No bit instruction tests it, and no byte read does either.**
 
-> **Correction.** J'avais annoncé trois `orl a, 0x2c` en `0x7AD0`, `0x7AEE` et `0x7BF1`, et
-> conclu à un possible test agrégé. C'étaient **trois faux positifs**. Validés au désassemblage :
+> **Correction.** I had previously noted three `orl a, 0x2c` instructions at `0x7AD0`, `0x7AEE`, and `0x7BF1`, and
+> concluded there might be an aggregate test. Those were **three false positives**. Verified by disassembly:
 >
 > ```
-> 0x7ACF  MOV A, #0x45      ; octets 74 45
-> 0x7AD1  ADD A, R4         ; octet  2C
+> 0x7ACF  MOV A, #0x45      ; bytes 74 45
+> 0x7AD1  ADD A, R4         ; byte  2C
 > ```
 >
-> Les octets `45 2C` sont l'opérande de `mov a,#0x45` suivie de l'opcode de `add a, r4`. L'idiome
-> `mov a,#0x45 ; add a,r4` construit un pointeur vers `0x0C45 + r4`, et il apparaît trois fois.
-> Après validation instruction par instruction : **zéro** accès à l'octet `0x2C` dans toute
-> l'image.
+> The bytes `45 2C` are the immediate operand of `mov a,#0x45` followed by the opcode of `add a, r4`. The idiom
+> `mov a,#0x45 ; add a,r4` builds a pointer to `0x0C45 + r4`, and it appears three times.
+> After instruction-by-instruction validation: **zero** accesses to byte `0x2C` across the entire
+> image.
 
-`0x2C.3` est donc **un drapeau mort** : posé à la réception d'une trame `0x03`, effacé par la
-routine de réinitialisation `fcn.0000929E`, et jamais consulté — ni par bit, ni par octet.
+`0x2C.3` is therefore **a dead flag**: set upon receiving a `0x03` frame, cleared by the
+initialization routine `fcn.0000929E`, and never consulted — neither by bit nor by byte.
 
-### Les deux derniers points : l'opcode `0x4A` et le bit `b1[7]`
+### The last two points: opcode `0x4A` and bit `b1[7]`
 
-#### `0x4A` est une requête de statut, pas une fin de transfert
+#### `0x4A` is a status query, not an end of transfer
 
-Cette page supposait « probablement une fin de transfert », parce que l'opcode arme un seul bloc de
-deux octets dont la charge est remise à zéro. Le handler 7 (`0x3CD0`) dit autre chose :
+This page previously assumed "probably an end of transfer", because the opcode arms a single
+two-byte block whose payload is zeroed. Handler 7 (`0x3CD0`) tells a different story:
 
 ```c
-[0x0D9E] = 0;                                  /* desarme d'entree : une seule passe */
-IDATA[0x35] = 0x13;                            /* sous-code de reponse */
-IDATA[0x36] = 0x4A;                            /* echo de l'opcode */
-IDATA[0x37] = [0x02E2];                        /* nombre de blocs */
-IDATA[0x38] = [0x0D14];                        /* numero de sequence */
-IDATA[0x39] = ([0x038D] << 4) | [0x038F];      /* sous-index et longueur */
-memset(&IDATA[0x3A], 0, 15);                   /* <<< la « charge remplie de zeros » */
+[0x0D9E] = 0;                                  /* disarmed upfront: single pass */
+IDATA[0x35] = 0x13;                            /* response subcode */
+IDATA[0x36] = 0x4A;                            /* opcode echo */
+IDATA[0x37] = [0x02E2];                        /* block count */
+IDATA[0x38] = [0x0D14];                        /* sequence number */
+IDATA[0x39] = ([0x038D] << 4) | [0x038F];      /* sub-index and length */
+memset(&IDATA[0x3A], 0, 15);                   /* <<< the "zero-filled payload" */
 IDATA[0x3A] = [0x0C36];
 IDATA[0x3B] = 0;
 if (!bit 0x2D.3) IDATA[0x3B]  = 0x01;
 if ( bit 0x26.0) IDATA[0x3B] |= 0x10;
-... somme sur IDATA[0x35..0x48], puis euart0_send
+... sum over IDATA[0x35..0x48], then euart0_send
 ```
 
-Le `memset` de quinze octets suivi du remplissage de **deux** explique entièrement l'observation qui
-avait mené à l'hypothèse. Et le désarmement immédiat de `[0x0D9E]` confirme qu'il n'y a jamais de
-second bloc : ce n'est pas un transfert, c'est une réponse.
+The fifteen-byte `memset` followed by populating **two** bytes completely explains the observation that
+had led to the hypothesis. And immediately disarming `[0x0D9E]` confirms that there is never a
+second block: it is not a transfer, it is a response.
 
-**Le recoupement est net** : la commande USB `0x87` (`0x58DB`, table `0x5817`) construit **les deux
-mêmes octets**, aux mêmes conditions, dans `[0x0095]`/`[0x0096]`, et pose une longueur de `0x0002`.
-`0x4A` est le pendant radio d'une lecture de statut déjà présente côté USB — cohérent avec le reste :
-chaque opération existe sur les deux transports.
+**The cross-check is clean**: USB command `0x87` (`0x58DB`, table `0x5817`) builds **the exact
+same two bytes**, under the same conditions, in `[0x0095]`/`[0x0096]`, and sets a length of `0x0002`.
+`0x4A` is the radio counterpart of a status readout already present on the USB side — consistent with the rest:
+every operation exists on both transports.
 
-Ce que portent les deux octets :
+What the two bytes carry:
 
-| Octet | Contenu |
+| Byte | Contents |
 | --- | --- |
-| 1 | `[0x0C36]` — le **pourcentage de batterie**. Établi : `0x8162` y recopie `IDATA[0x17]` juste après que `0x815D` l'ait émis au module par la **commande `0x0D`**, dont cette page a déjà identifié le rôle |
-| 2 | deux drapeaux — bit 0 quand `0x2D.3` est bas, bit 4 quand `0x26.0` est haut |
+| 1 | `[0x0C36]` — **battery percentage**. Established: `0x8162` copies `IDATA[0x17]` there right after `0x815D` sends it to the module via **command `0x0D`**, whose role this page has already identified |
+| 2 | two flags — bit 0 when `0x2D.3` is low, bit 4 when `0x26.0` is high |
 
-Les deux bits sont posés et effacés au même endroit, `0x9723`–`0x97AA`, un anti-rebond à deux seuils
-(20 et 200 passages) sur `P7.6` et `P7.7`, et `0x30` pilote directement `P7.6`. *Inféré :* qu'il
-s'agisse de « en charge » et « charge terminée ». Ce qui est établi, c'est leur origine et leur
-place dans la trame.
+Both bits are set and cleared in the same place, `0x9723`–`0x97AA`, a dual-threshold debounce routine
+(20 and 200 passes) on `P7.6` and `P7.7`, and `0x30` directly drives `P7.6`. *Inferred:* that these
+represent "charging" and "charging complete". What is established is their origin and their
+position in the frame.
 
-Et la nuance apportée plus haut tombe d'elle-même : la fin de transfert existe bel et bien, mais
-c'est le **handler 10**, pas l'opcode `0x4A`.
+And the caveat noted earlier falls away on its own: the end-of-transfer handler does exist, but
+it is **handler 10**, not opcode `0x4A`.
 
-#### `b1[7]` n'a pas de lecteur, et le négatif est borné
+#### `b1[7]` has no reader, and the negative is bounded
 
-Le bit 7 de `b1`, l'octet de paramètre par effet, est préservé par le masque `0x8F` de l'écriture de
-vitesse. Aucun lecteur n'était identifié. Il n'y en a pas, et cette fois la recherche est complète.
+Bit 7 of `b1`, the per-effect parameter byte, is preserved by the `0x8F` mask when writing
+speed. No reader had been identified. There is none, and this time the search is exhaustive.
 
-Les deux octets par effet vivent en **`0x0345 + effet × 2`** (`b0`) et **`0x0346 + effet × 2`**
-(`b1`) — l'adressage se lit en clair en `0x8F5F` :
+The two per-effect bytes live at **`0x0345 + effect × 2`** (`b0`) and **`0x0346 + effect × 2`**
+(`b1`) — the addressing can be read in plain sight at `0x8F5F`:
 
 ```asm
-mov dptr,#0x009d ; movx a,@dptr ; add a,acc   ; effet x 2
+mov dptr,#0x009d ; movx a,@dptr ; add a,acc   ; effect x 2
 mov a,#0x46 ; add a,r7 ; mov dpl,a
-mov a,#0x03 ; addc a,r6 ; mov dph,a           ; DPTR = 0x0346 + effet*2
+mov a,#0x03 ; addc a,r6 ; mov dph,a           ; DPTR = 0x0346 + effect*2
 ```
 
-**Aucun `mov dptr,#0x0340`–`#0x0370` n'existe dans l'image entière**, et le seul autre calcul de base
-en `0x03xx` vise `0x030D` (trois sites, sans rapport). La zone n'est donc joignable que par cet
-idiome, et ses douze sites s'énumèrent :
+**No `mov dptr,#0x0340`–`#0x0370` exists anywhere in the entire image**, and the only other base calculation
+in `0x03xx` targets `0x030D` (three sites, unrelated). The region is therefore reachable only via this
+idiom, and all twelve of its sites can be enumerated:
 
-| Site | Octet | Opération |
+| Site | Byte | Operation |
 | --- | --- | --- |
-| `0x1166` | `b0` | `rlc a ; mov 0x23,c` — **b0[7] vers le drapeau `0x24.3`** |
-| `0x79C6`, `0x7A5C`, `0x8CBB` | `b0` | `anl a,#0x80` puis réécriture |
-| `0x79D4`, `0x7A6A`, `0x8CC9` | `b0` | lecture |
-| `0x1174` | `b1` | `anl a,#0x0F` — la **couleur** |
-| `0x8F5F`, `0x8F88` | `b1` | `anl a,#0x8F` puis `\| (vitesse << 4)` |
-| `0x93F0`, `0x9404` | `b1` | `anl a,#0xF0` puis `\| couleur` |
+| `0x1166` | `b0` | `rlc a ; mov 0x23,c` — **`b0[7]` to flag `0x24.3`** |
+| `0x79C6`, `0x7A5C`, `0x8CBB` | `b0` | `anl a,#0x80` then write-back |
+| `0x79D4`, `0x7A6A`, `0x8CC9` | `b0` | read |
+| `0x1174` | `b1` | `anl a,#0x0F` — **color** |
+| `0x8F5F`, `0x8F88` | `b1` | `anl a,#0x8F` then `\| (speed << 4)` |
+| `0x93F0`, `0x9404` | `b1` | `anl a,#0xF0` then `\| color` |
 
-Trois masques touchent `b1` : `0x0F` le jette, `0x8F` et `0xF0` le préservent. **Aucun ne
-l'interroge** — pas un `jb acc.7`, pas un `anl a,#0x80` sur cet octet. Le contraste avec `b0[7]`,
-qui a un lecteur explicite en `0x1166`, rend le négatif d'autant plus net.
+Three masks touch `b1`: `0x0F` discards it, `0x8F` and `0xF0` preserve it. **None of them
+tests it** — not a single `jb acc.7`, not a single `anl a,#0x80` on this byte. The contrast with `b0[7]`,
+which has an explicit reader at `0x1166`, makes the negative conclusion all the sharper.
 
-Ce qui ne veut pas dire que le bit ne sert à rien. Les deux octets vivent dans le **bloc de réglages
-persisté**, que l'hôte lit et écrit — commande USB `0x84`, page 99, et son pendant radio. `b1[7]` est
-donc un bit que le firmware **transporte et préserve pour le logiciel hôte**, sans jamais le
-consulter lui-même. C'est la seule lecture compatible avec les faits.
+Which does not mean the bit is useless. Both bytes live in the **persisted settings
+block**, which the host reads and writes — USB command `0x84`, page 99, and its radio counterpart. `b1[7]` is
+therefore a bit that the firmware **carries and preserves for the host software**, without ever
+consulting it itself. That is the only reading compatible with the facts.
 
-### `fcn.00007AAD` — la fonction qui contenait ces octets
+### `fcn.00007AAD` — the function that contained those bytes
 
-Appelée depuis `main` (`0x919A`), gardée par `0x28.1` et `0x29.0`. Elle balaie **trois tableaux
-parallèles** indexés par le même compteur :
+Called from `main` (`0x919A`), guarded by `0x28.1` and `0x29.0`. It scans **three parallel
+arrays** indexed by the same counter:
 
-| Base | Rôle |
+| Base | Role |
 | --- | --- |
-| `0x0C37 + i` | état / drapeau par entrée |
-| `0x0C45 + i` | valeur courante |
-| `0x0390 + i` | valeur souhaitée |
+| `0x0C37 + i` | per-entry state / flag |
+| `0x0C45 + i` | current value |
+| `0x0390 + i` | target value |
 
-La boucle est bornée à **treize entrées** — la queue de la fonction le dit sans ambiguïté :
+The loop is bounded to **thirteen entries** — the tail of the function makes this unambiguous:
 
 ```asm
 0x7C08  inc r4
 0x7C09  mov a, r4
-0x7C0A  xrl a, #0x0d      ; 13 entrees
+0x7C0A  xrl a, #0x0d      ; 13 entries
 0x7C0C  jz  0x7C11
-0x7C0E  ljmp 0x7ABD       ; tour suivant
+0x7C0E  ljmp 0x7ABD       ; next iteration
 0x7C11  ret
 ```
 
-> **Résolu : c'est le répéteur automatique de la souris.** Les trois tableaux sont exactement ceux
-> que la queue d'appui du rapport souris renseigne (voir « La table `0x865E` ») : `[0x0C37 + i]`
-> reçoit `b2 × 2`, le compte à rebours de répétition ; `[0x0C45 + i]` et `[0x0390 + i]` reçoivent
-> `b3`. Les treize créneaux sont les **treize actions souris**, `i = b1 - 1` ∈ 0–12.
+> **Solved: this is the mouse auto-repeater.** The three arrays are the exact ones populated by the
+> mouse-report press tail (see "The `0x865E` table"): `[0x0C37 + i]` receives `b2 × 2`, the repeat
+> countdown; `[0x0C45 + i]` and `[0x0390 + i]` receive `b3`. The thirteen slots are the **thirteen
+> mouse actions**, `i = b1 - 1` ∈ 0–12.
 >
-> Et la table de sauts que le décompilateur n'arrivait pas à normaliser est `0x7B25`. Ses treize
-> cibles sont **octet pour octet celles de `0x865E`** — douze sur treize sont identiques sur leurs
-> cinq premiers octets, et la treizième, l'arm des boutons, ne diffère que par le registre employé
-> (`R6`/`R4` au lieu de `R7`/`R6`). Ce n'est pas une file de transitions : c'est le **rejeu
-> périodique d'une action souris tenue**.
+> And the jump table that the decompiler failed to normalize is `0x7B25`. Its thirteen targets are
+> **byte-for-byte those of `0x865E`** — twelve out of thirteen are identical across their first five
+> bytes, and the thirteenth, the button arm, differs only in the registers used (`R6`/`R4` instead
+> of `R7`/`R6`). This is not a transition queue: it is the **periodic replay of a held mouse
+> action**.
 >
-> Le motif « si l'état est posé et la valeur courante est nulle, recopier la valeur souhaitée » se
-> lit alors sans mystère : le compte à rebours arrive à zéro, l'action est réémise, le compteur est
-> rechargé.
+> The pattern "if the state is set and the current value is zero, copy the desired value" then reads
+> with no mystery left: the countdown reaches zero, the action is re-emitted, and the counter is
+> reloaded.
 
-#### Frontières de fonction : les deux outils divergent, et r2 a raison
+#### Function boundaries: the two tools diverge, and r2 is right
 
-Ghidra donne à `0x7AAD` un corps de `0x7AAD`–`0x7D73`, soit 711 octets. r2 découpe la même plage en
-deux : `fcn.00007AAD` (245 o utiles) et `fcn.00007C12` (354 o). **Le désassemblage tranche en
-faveur de r2** — il y a un `ret` en `0x7C11`, et `0x7C12` est la cible d'un `lcall`. Ce sont deux
-routines, pas une.
+Ghidra gives `0x7AAD` a body spanning `0x7AAD`–`0x7D73`, or 711 bytes. r2 splits the same range in
+two: `fcn.00007AAD` (245 useful B) and `fcn.00007C12` (354 B). **Disassembly decides in favor of
+r2** — there is a `ret` at `0x7C11`, and `0x7C12` is the target of an `lcall`. These are two
+routines, not one.
 
-Pourquoi Ghidra les fusionne : il attribue à `0x7C12` un `COMPUTED_JUMP` venant du `jmp @a+dptr`
-de `0x7B24` — une destination que la table réelle, treize entrées en `0x7B25`, ne contient pas. Sa
-reconstruction de table déborde. Le seul appelant véritable de `0x7C12` est le site `0x1BA5`, que
-r2 place hors fonction (`fcn.0000131c`, la plus proche en amont, fait **deux octets**) et dont
-Ghidra n'a pas désassemblé les octets. Sans appelant visible d'un côté, avec un appelant imaginaire
-de l'autre, les deux outils se trompent en sens contraire.
+Why Ghidra merges them: it assigns `0x7C12` a `COMPUTED_JUMP` coming from the `jmp @a+dptr` at
+`0x7B24` — a destination that the actual table, thirteen entries at `0x7B25`, does not contain. Its
+table recovery overflows. The only true caller of `0x7C12` is the site at `0x1BA5`, which r2 places
+outside any function (`fcn.0000131c`, the nearest one upstream, is **two bytes** long) and whose
+bytes Ghidra did not disassemble. With no visible caller on one side and an imaginary caller on the
+other, the two tools err in opposite directions.
 
-> Ce site est maintenant identifié : c'est le gestionnaire d'indice 2 de l'ordonnanceur
-> d'animation RGB. Voir *L'ordonnanceur d'animation — `0x1AF0` et la table `0x1B13`*.
+> This site is now identified: it is index handler 2 of the RGB animation scheduler. See
+> *The animation scheduler — `0x1AF0` and the `0x1B13` table*.
 
 ```asm
-0x1B9B  mov dptr, #0x0300   ; compteur 16 bits
+0x1B9B  mov dptr, #0x0300   ; 16-bit counter
 0x1B9E  movx a, @dptr
 0x1B9F  subb a, r6
 0x1BA0  jnc  0x1BA5
-0x1BA2  ljmp 0x1DC2         ; seuil non atteint
-0x1BA5  lcall fcn.00007C12  ; seul appelant
+0x1BA2  ljmp 0x1DC2         ; threshold not reached
+0x1BA5  lcall fcn.00007C12  ; sole caller
 ```
 
-> **Piège de lecture.** `axt @ 0x7c12` annonce « CALL XREF from `fcn.0000131c` @ +0x889 ». C'est un
-> **nommage par drapeau le plus proche**, pas une appartenance : `fcn.0000131c` mesure deux octets
-> et ne contient évidemment pas un site situé 2 185 octets plus loin. Conclure « `fcn.0000131c`
-> appelle `0x7C12` » serait faux. Vérifier la containment (`aflj` et comparer `offset`/`size`)
-> avant d'attribuer un appel à une fonction nommée.
+> **Reading pitfall.** `axt @ 0x7c12` reports "CALL XREF from `fcn.0000131c` @ +0x889". That is
+> **nearest-flag naming**, not containment: `fcn.0000131c` is two bytes long and obviously does not
+> contain a site located 2,185 bytes further down. Concluding "`fcn.0000131c` calls `0x7C12`" would
+> be wrong. Always verify containment (`aflj` and compare `offset`/`size`) before attributing a call
+> to a named function.
 
-Aucun des deux outils n'est autorité sur les bornes. Ici c'est r2 ; ailleurs ce peut être l'inverse.
+Neither tool is authoritative on boundaries. Here r2 is right; elsewhere it can be the reverse.
 
 
-### `fcn.00007928` — le décodeur de l'encodeur rotatif
+### `fcn.00007928` — the rotary encoder decoder
 
-Appelée depuis `isr_pwm4` (`0x8284`), donc échantillonnée à chaque tic.
+Called from `isr_pwm4` (`0x8284`), so sampled on every tick.
 
 ```c
-DAT_EXTMEM_0F6D = (P0 >> 5) & 3;          /* deux bits : P0.5 et P0.6 */
-if (0x0F6D == 0x0F6C) return;              /* pas de changement */
-hist = (nouveau & 3) | (hist << 2) & 0x3C; /* trois etats de deux bits */
-if (hist == 0x0B || hist == 0x34)  ... un sens ...
-if (hist == 0x38 || hist == 0x07)  ... l'autre ...
-0x0F6C = 0x0F6D;                           /* memorise */
+DAT_EXTMEM_0F6D = (P0 >> 5) & 3;          /* two bits: P0.5 and P0.6 */
+if (0x0F6D == 0x0F6C) return;              /* no change */
+hist = (nouveau & 3) | (hist << 2) & 0x3C; /* three two-bit states */
+if (hist == 0x0B || hist == 0x34)  ... one direction ...
+if (hist == 0x38 || hist == 0x07)  ... the other ...
+0x0F6C = 0x0F6D;                           /* save state */
 ```
 
-C'est un **décodeur en quadrature** classique : deux bits, un historique glissant de six bits, et
-quatre motifs de transition reconnus — `0x0B` / `0x34` dans un sens, `0x07` / `0x38` dans l'autre.
+This is a classic **quadrature decoder**: two bits, a six-bit sliding history, and four recognized
+transition patterns — `0x0B` / `0x34` in one direction, `0x07` / `0x38` in the other.
 
-> **Ajout au brochage.** L'encodeur est sur **`P0.5`** et **`P0.6`**. Ces deux broches ne
-> figuraient nulle part dans la carte établie jusqu'ici, qui ne mentionnait de `P0` que le `P0.2`
-> du handshake EUART0. Aucun conflit : les lignes, colonnes, PWM et l'UART sont ailleurs.
+> **Pinout addition.** The encoder is on **`P0.5`** and **`P0.6`**. Neither pin appeared anywhere in
+> the map established so far, which only mentioned `P0.2` (the EUART0 handshake) on `P0`. No
+> conflict: rows, columns, PWM, and UART are all elsewhere.
 
-#### Deux comportements, choisis par l'offset 26 du bloc de réglages
+#### Two behaviors, selected by offset 26 of the settings block
 
 ```asm
-mov dptr, #0x0327 ; movx a, @dptr ; jnz  <voie luminosite>
+mov dptr, #0x0327 ; movx a, @dptr ; jnz  <brightness path>
 ```
 
-**`XRAM 0x0327` ≠ 0 → luminosité RGB.** Incrémente ou décrémente `g_rgb_brightness`, bornée à 9,
-puis persiste par exactement le même aiguillage que la classe d'action 3 : tableau par effet
-(`0x0345 + effet × 2`, masque `0x80` préservé), `0x0362 + effet`, ou la copie globale.
+**`XRAM 0x0327` ≠ 0 → RGB brightness.** Increments or decrements `g_rgb_brightness`, clamped to 9,
+then persists via the exact same dispatch as action class 3: per-effect table (`0x0345 + effect × 2`,
+`0x80` mask preserved), `0x0362 + effect`, or the global copy.
 
-**`XRAM 0x0327` = 0 → volume.** C'est la valeur du dump, donc le comportement d'usine :
+**`XRAM 0x0327` = 0 → volume.** This is the value in the dump, so the factory default behavior:
 
 ```asm
-jnb 0x25.6, fin                 ; pas d'evenement en attente
+jnb 0x25.6, fin                 ; no pending event
 clr 0x25.6
 mov dptr, #0x09BD
-jnb 0x25.7, +3 ; a = 0xE9       ; sens 1
-               a = 0xEA         ; sens 2
+jnb 0x25.7, +3 ; a = 0xE9       ; direction 1
+               a = 0xEA         ; direction 2
 movx [0x09BD] = a ; [0x09BE] = 0
 setb 0x2A.0
 ```
 
-`0xE9` et `0xEA` sont les usages **Consumer volume + et volume −**. Et `0x2A.0` est précisément le
-drapeau du premier maillon de la chaîne de rapports HID, dont le tampon est **`0x09BC`** et la
-longueur **3** dans la table `0x6045`.
+`0xE9` and `0xEA` are the **Consumer Volume Up and Volume Down** usages. And `0x2A.0` is precisely
+the flag for the first link in the HID report chain, whose buffer is **`0x09BC`** and whose length
+is **3** in the `0x6045` table.
 
-Tout se recoupe : `0x09BC` porte le Report ID 2, `0x09BD:0x09BE` l'usage Consumer sur seize bits,
-soit trois octets — la longueur annoncée. La lecture de la table des longueurs faite bien plus tôt
-se confirme ici par un chemin complètement différent.
+Everything cross-checks: `0x09BC` carries Report ID 2, `0x09BD:0x09BE` the sixteen-bit Consumer
+usage, making three bytes — the advertised length. The reading of the length table done much earlier
+is confirmed here through a completely independent path.
 
-> **Donc, sur cet exemplaire, la molette règle le volume**, et un réglage persistant (offset 26 du
-> bloc) la bascule sur la luminosité du rétroéclairage.
+> **So on this unit, the knob controls volume**, and a persistent setting (offset 26 of the block)
+> switches it to backlight brightness.
 
-`IDATA 0x6F` sert de compteur de répétition, comparé à 10 — la gestion de l'auto-répétition quand
-on tourne vite.
+`IDATA 0x6F` serves as a repeat counter, compared against 10 — handling auto-repeat when turning the
+knob quickly.
 
-> *Correction, refermée :* j'avais situé les trois `orl a, 0x2c` dans `fcn.00007928`, puis dans
-> « la ou les fonctions suivantes ». En réalité **ces trois instructions n'existent pas** : ce sont
-> des octets d'opérande lus à tort comme des opcodes. Voir *Un drapeau qui n'est jamais consulté*
-> et `fcn.00007AAD`, ci-dessus.
+> *Correction, closed:* I had placed the three `orl a, 0x2c` instructions in `fcn.00007928`, then in
+> "the following function(s)". In reality **those three instructions do not exist**: they are
+> operand bytes misread as opcodes. See *A flag that is never read* and `fcn.00007AAD`, above.
 
-### Ce qui reste ouvert sur EUART0
+### What remains open on EUART0
 
-Le sous-système est couvert de bout en bout : registres, débit, ISR, les deux handshakes, les
-onze commandes émises, les trois types de trame reçue, le protocole interne de la commande `0x08`,
-son séquenceur et la carte de relecture de la flash.
+The subsystem is covered end-to-end: registers, baud rate, ISR, both handshakes, the eleven
+transmitted commands, the three received frame types, the internal protocol of command `0x08`, its
+sequencer, and the flash readback map.
 
-> **Correction d'une note ancienne.** Mes premières notes annonçaient quatre types de trame
-> dispatchés : `0x02`, `0x03`, `0x08` et `0x15`. Le `0x15` n'existe pas : c'est
-> `xrl a,#0x15 ; orl a, r6`, la borne d'une boucle 16 bits de **21 octets** — la portée de la
-> somme de contrôle. L'octet 0 de la trame n'est comparé qu'en deux endroits, `0x060E` (`0x02`) et
-> `0x0778` (`0x03`), le reste tombant dans la branche `0x08`.
+> **Correction of an earlier note.** My initial notes listed four dispatched frame types: `0x02`,
+> `0x03`, `0x08`, and `0x15`. `0x15` does not exist: it is `xrl a,#0x15 ; orl a, r6`, the bound of
+> a 16-bit loop over **21 bytes** — the span of the checksum. Frame byte 0 is only compared in two
+> places, `0x060E` (`0x02`) and `0x0778` (`0x03`), with everything else falling through to the
+> `0x08` branch.
 
-Restent, par ordre décroissant d'intérêt :
+Remaining items, in decreasing order of interest:
 
-| Point | Ce qu'on sait |
+| Item | What is known |
 | --- | --- |
-| Passage en mode 2,4 GHz | aucune écriture directe de la valeur 1 dans `g_transport` |
-| Paramètres `0xF0` / `0xF1` de `euart0_reply` | deux appels depuis le parseur, valeurs non interprétées |
-| Opcode `0x4A` | **résolu — c'est une requête de statut**, voir ci-dessous |
-| Handlers 8, 9, 10 du séquenceur | `0x3D25` et `0x3D1D`, n'émettent aucun opcode |
+| Switching to 2.4 GHz mode | no direct write of value 1 to `g_transport` |
+| `0xF0` / `0xF1` parameters of `euart0_reply` | two calls from the parser, values not interpreted |
+| Opcode `0x4A` | **solved — it is a status request**, see below |
+| Sequencer handlers 8, 9, 10 | `0x3D25` and `0x3D1D`, emit no opcode |
 
-### Ce que le décompilateur ajoute sur `euart0_parse`
+### What the decompiler adds on `euart0_parse`
 
-Le firmware a été rechargé dans **Ghidra 12.1.3** (`8051:BE:16:default`), avec l'espace `EXTMEM`
-mappé et les noms portés. Le C de `euart0_parse` donne trois choses que le désassemblage n'avait
-pas rendues.
+The firmware was reloaded into **Ghidra 12.1.3** (`8051:BE:16:default`), with the `EXTMEM` space
+mapped and names ported over. The C output for `euart0_parse` yields three things the disassembly
+had not revealed.
 
-#### La somme de contrôle est bien vérifiée en réception
+#### The checksum is indeed verified on receive
 
 ```c
 BANK1_R0 = 0;
 do { BANK1_R0 += frame[i]; i++; } while (i != 0x15);
 BANK1_R0 = 0x55 - BANK1_R0;
-if ((DAT_EXTMEM_0135 ^ BANK1_R0) == 0) { /* trame acceptee */ }
+if ((DAT_EXTMEM_0135 ^ BANK1_R0) == 0) { /* frame accepted */ }
 ```
 
-Vingt-et-un octets sommés, `0x55 − Σ`, comparé à l'octet 21 de la trame. **La même constante
-`0x55` est donc vérifiée dans les deux sens** — ce n'était établi qu'à l'émission.
+Twenty-one bytes summed, `0x55 − Σ`, compared against byte 21 of the frame. **The same constant
+`0x55` is therefore checked in both directions** — previously this had only been established on
+transmit.
 
-#### Un sous-index dans le quartet haut de l'octet 5
+#### A sub-index in the high nibble of byte 5
 
 ```c
 bVar10 = frame[5];                    /* XDATA 0x0125 */
-DAT_EXTMEM_038f = bVar10 & 0xf;       /* longueur */
-DAT_EXTMEM_038d = bVar10 >> 4;        /* sous-index */
+DAT_EXTMEM_038f = bVar10 & 0xf;       /* length */
+DAT_EXTMEM_038d = bVar10 >> 4;        /* sub-index */
 ```
 
-`0x038D` est exactement l'adresse que la chaîne de sélection d'effet utilise comme sous-index —
-la lecture « quartet haut d'un octet de config » est confirmée, et sa **source est une trame
-radio**.
+`0x038D` is the exact address that the effect-selection chain uses as a sub-index — the reading
+"high nibble of a config byte" is confirmed, and its **source is a radio frame**.
 
-#### Deux sous-commandes de la trame `0x08`
+#### Two sub-commands of frame `0x08`
 
-| Sous-index | Effet |
+| Sub-index | Effect |
 | --- | --- |
-| `2` | remplit **toute** une table de couleurs avec un seul triplet RGB |
-| `1` | transfert **fragmenté** vers le bloc de réglages de travail |
+| `2` | fills an **entire** color table with a single RGB triplet |
+| `1` | **fragmented** transfer into the working settings block |
 
-Sous-index 2 — la boucle écrit les **mêmes** trois octets (`frame[6..8]`) partout :
+Sub-index 2 — the loop writes the **same** three bytes (`frame[6..8]`) everywhere:
 
 ```c
 for (n = 0; n != 0x15; n++)
@@ -4985,119 +4982,118 @@ for (n = 0; n != 0x15; n++)
     *(0x0152 + n*0x12 + m*3 + k) = frame[6+k];
 ```
 
-Soit une table en **XDATA `0x0152`–`0x02CB`**, 378 octets : 21 rangées de 18 octets, six triplets
-par rangée. Elle s'arrête juste avant `0x02CC`, que `bt_set_name` utilise — la borne est cohérente.
+That is a table in **XDATA `0x0152`–`0x02CB`**, 378 bytes: 21 rows of 18 bytes, six triplets per
+row. It stops right before `0x02CC`, which `bt_set_name` uses — the boundary is consistent.
 
-> *À noter sans trancher :* 21 × 6 = **126 entrées**, alors que le F75 n'a que 90 positions de
-> matrice (6 × 15). La table est donc soit surdimensionnée pour la famille de claviers qui partage
-> ce firmware, soit indexée autrement que par (ligne, colonne).
+> *Note without deciding:* 21 × 6 = **126 entries**, whereas the F75 only has 90 matrix positions
+> (6 × 15). The table is therefore either oversized for the family of keyboards sharing this
+> firmware, or indexed by something other than (row, column).
 
-Sous-index 1 — l'écriture va vers `0x09BF + offset`, c'est-à-dire le **bloc de travail des
-réglages** déjà identifié, avec `frame[4]` en numéro de séquence (contrôle
-`frame[4] == précédent + 1`, mémorisé en `0x09AA`), `frame[5] & 0x0F` en longueur, et une borne
-sur `0x76` = 118. C'est le chemin par lequel l'hôte — ou l'application mobile via le Bluetooth —
-réécrit les réglages persistés.
+Sub-index 1 — the write goes to `0x09BF + offset`, i.e. the **working settings staging block**
+already identified, with `frame[4]` as sequence number (checking `frame[4] == previous + 1`, stored
+in `0x09AA`), `frame[5] & 0x0F` as length, and a bound on `0x76` = 118. This is the path through
+which the host — or the mobile app over Bluetooth — rewrites persisted settings.
 
-#### Types de trame confirmés
+#### Confirmed frame types
 
-| Octet 0 | Traitement |
+| Byte 0 | Handling |
 | --- | --- |
-| `0x02` | branche principale |
-| `0x03` | pose `0x2C.3`, efface `0x0150`, répond par `euart0_reply` |
-| `0x08` | vérification de somme puis les sous-commandes ci-dessus |
+| `0x02` | main branch |
+| `0x03` | sets `0x2C.3`, clears `0x0150`, replies via `euart0_reply` |
+| `0x08` | checksum verification followed by the sub-commands above |
 
-### La table des commandes — établie au décompilateur
+### The command table — established in the decompiler
 
-Les douze émetteurs gardés par `P4.7` ont été décompilés. L'octet de commande est l'octet 1 de la
-trame, posé par l'appelant en IDATA `0x34` ; `euart0_send(longueur, étiquette)` fait le reste.
+All twelve transmitters gated by `P4.7` have been decompiled. The command byte is byte 1 of the
+frame, placed by the caller in IDATA `0x34`; `euart0_send(length, tag)` does the rest.
 
-| Cmd | Émetteur | Long. | Charge utile | Déclencheur |
+| Cmd | Sender | Len. | Payload | Trigger |
 | --- | --- | --- | --- | --- |
-| `0x01` | `0xED89` | 6 | slot, 0 | radio non connectée (`euart0_parse`, `0xEF5A`) |
-| `0x02` | `hid_report_radio` | **30** | 28 o tirés de la file | rapport HID de type 2 |
-| `0x03` | `hid_report_radio` | **13** | 11 o tirés de la file | rapport HID de type 3 |
-| `0x04` | `0xB06A` | 6 | un paramètre | `0x2C.4` posé |
-| `0x06` | `0xED3B` | 6 | `00 00 00` | **requête d'état** → réponse `02 06 …` |
-| `0x08` | `0xB093` | 23 | conteneur, sous-code en `[3A]` | 9 appelants |
-| `0x09` | `0xA307` | 32 | nom Bluetooth | `main` |
-| `0x0B` | `0xB0BC` | 6 | un paramètre | `0xEED1` |
-| `0x0C` | `0xAE50` | 6 | deux paramètres | — |
-| `0x0D` | `0xB108` | 6 | pourcentage de batterie | `0x801F`, une trame d'état sur six |
-| `0x0E` | `0xEC85` | 6 | — | mode filaire |
+| `0x01` | `0xED89` | 6 | slot, 0 | radio not connected (`euart0_parse`, `0xEF5A`) |
+| `0x02` | `hid_report_radio` | **30** | 28 B pulled from queue | type 2 HID report |
+| `0x03` | `hid_report_radio` | **13** | 11 B pulled from queue | type 3 HID report |
+| `0x04` | `0xB06A` | 6 | one parameter | `0x2C.4` set |
+| `0x06` | `0xED3B` | 6 | `00 00 00` | **status request** → reply `02 06 …` |
+| `0x08` | `0xB093` | 23 | container, sub-code in `[3A]` | 9 callers |
+| `0x09` | `0xA307` | 32 | Bluetooth name | `main` |
+| `0x0B` | `0xB0BC` | 6 | one parameter | `0xEED1` |
+| `0x0C` | `0xAE50` | 6 | two parameters | — |
+| `0x0D` | `0xB108` | 6 | battery percentage | `0x801F`, one status frame in six |
+| `0x0E` | `0xEC85` | 6 | — | wired mode |
 
-Tous suivent le même prologue, qui explique les deux gardes déjà relevées :
+All follow the same prologue, which explains the two guards noted earlier:
 
 ```c
-if (_c_1 != 1 && RD != 0) {        /* pas d'emission en cours, module pret */
+if (_c_1 != 1 && RD != 0) {        /* no transmission in progress, module ready */
     memset(IDATA 0x33, 0, 0x20);
-    euart0_tx_buf = 1;             /* octet 0 : en-tete constant */
-    DAT_INTMEM_34 = <commande>;
+    euart0_tx_buf = 1;             /* byte 0: constant header */
+    DAT_INTMEM_34 = <command>;
     euart0_send(...);
 }
 ```
 
-`RD` est le nom 8051 générique que Ghidra donne au bit `0xB7` : c'est **`P4.7`**, la ligne
-« module prêt ». Ghidra ne renomme pas les bits de l'espace `BITS` avec la carte SFR.
+`RD` is the generic 8051 name Ghidra gives bit `0xB7`: it is **`P4.7`**, the "module ready" line.
+Ghidra does not rename bits in the `BITS` space from the SFR map.
 
-#### Le conteneur `0x08`
+#### The `0x08` container
 
-`euart0_cmd08` transporte un sous-message. Depuis `hid_report_radio`, quand la file est vide :
+`euart0_cmd08` carries a sub-message. From `hid_report_radio`, when the queue is empty:
 
 ```c
 IDATA[0x35] = 0x13; [0x36] = 10; [0x37] = 1; [0x38] = 0; [0x39] = 4;
-IDATA[0x3A] = <sous-code>;          /* 5 = batterie, 7 = reglages */
-IDATA[0x3B] = <valeur>;             /* 0x0C36 (pourcentage) ou g_settings */
-IDATA[0x3C] = bit0 si pas plein, bit4 si en charge;
+IDATA[0x3A] = <sub-code>;           /* 5 = battery, 7 = settings */
+IDATA[0x3B] = <value>;              /* 0x0C36 (percentage) or g_settings */
+IDATA[0x3C] = bit0 if not full, bit4 if charging;
 euart0_cmd08();
 ```
 
-Le site `0x393E`, lui, pose `[35] = 0x13, [36] = 5, [37] = 1, [39] = 0x0A` puis copie dix octets
-depuis `CODE:0xB3DC` — même enveloppe, sous-message différent.
+Site `0x393E`, on the other hand, sets `[35] = 0x13, [36] = 5, [37] = 1, [39] = 0x0A` and then
+copies ten bytes from `CODE:0xB3DC` — same envelope, different sub-message.
 
-#### La structure interne de la commande `0x08`
+#### The internal structure of command `0x08`
 
-> **Correction.** J'ai d'abord présenté `IDATA[0x3A]` comme « le sous-code ». C'est faux : `0x3A`
-> est le **premier octet de charge**. Le discriminant est `IDATA[0x36]`, et `IDATA[0x35]` n'est pas
-> un marqueur mais une **longueur** — `0x13` = 19, exactement le nombre d'octets que
-> `euart0_cmd08` additionne (`IDATA 0x35..0x47`).
+> **Correction.** I initially presented `IDATA[0x3A]` as "the sub-code". That is wrong: `0x3A` is
+> the **first payload byte**. The discriminator is `IDATA[0x36]`, and `IDATA[0x35]` is not a marker
+> but a **length** — `0x13` = 19, the exact number of bytes that `euart0_cmd08` sums
+> (`IDATA 0x35..0x47`).
 
 ```
-[0x34] = 0x08            commande
-[0x35] = 0x13 = 19       longueur de la charge
-[0x36] = opcode          <-- le discriminant
-[0x37] = echo de 0x02E2  issu de l'octet 3 de la requete recue
-[0x38] = echo de 0x0D14  issu de l'octet 4 de la requete recue
-[0x39] = (n << 4) | 0x038F   quartet bas : la longueur demandee
-[0x3A .. 0x47]           charge, jusqu'a 14 octets
-[0x48] somme partielle   [0x49] somme de trame
+[0x34] = 0x08            command
+[0x35] = 0x13 = 19       payload length
+[0x36] = opcode          <-- the discriminator
+[0x37] = echo of 0x02E2  from byte 3 of the received request
+[0x38] = echo of 0x0D14  from byte 4 of the received request
+[0x39] = (n << 4) | 0x038F   low nibble: requested length
+[0x3A .. 0x47]           payload, up to 14 bytes
+[0x48] partial sum       [0x49] frame checksum
 ```
 
-Les octets 3 et 4 de la requête sont **renvoyés tels quels** : c'est un protocole
-requête/réponse apparié, pas un flux.
+Bytes 3 and 4 of the request are **echoed back verbatim**: this is a paired request/response
+protocol, not a stream.
 
-| Opcode `[0x36]` | Charge | Émis par |
+| Opcode `[0x36]` | Payload | Sent by |
 | --- | --- | --- |
-| `0x05` | gabarit `CODE:0xB3DC`, 10 o | handler 1 |
-| `0x0A` | premier octet = 5 (batterie) ou 7 (réglages) | `hid_report_radio` |
-| `0x41` | 14 o depuis `CODE:0xD800` | handler 2 |
-| `0x42` `0x43` `0x44` | 14 o depuis une base de la zone IAP | handlers 3, 4, 5 |
-| `0x49` `0x4A` | idem | handlers 6, 7 |
+| `0x05` | template `CODE:0xB3DC`, 10 B | handler 1 |
+| `0x0A` | first byte = 5 (battery) or 7 (settings) | `hid_report_radio` |
+| `0x41` | 14 B from `CODE:0xD800` | handler 2 |
+| `0x42` `0x43` `0x44` | 14 B from a base in the IAP area | handlers 3, 4, 5 |
+| `0x49` `0x4A` | same | handlers 6, 7 |
 
-L'opcode `0x0A` porte donc bien un second niveau dans son premier octet de charge — c'est là que
-vivent le 5 (batterie) et le 7 (réglages au démarrage). Les autres opcodes n'en ont pas.
+Opcode `0x0A` therefore does carry a second level in its first payload byte — that is where 5
+(battery) and 7 (startup settings) live. The other opcodes do not have one.
 
-#### Le séquenceur `0x3901`
+#### The `0x3901` sequencer
 
-Les sept handlers sont les entrées d'une table de sauts, choisie par `XRAM 0x0D9E` :
+The seven handlers are the entries of a jump table, selected by `XRAM 0x0D9E`:
 
 ```c
-if ((0x0D9E - 1) > 9) { /* repos */ }
+if ((0x0D9E - 1) > 9) { /* idle */ }
 else jump  CODE[0x391C + (0x0D9E - 1) * 3];
 ```
 
-Dix entrées de trois octets en `0x391C` :
+Ten three-byte entries at `0x391C`:
 
-| `0x0D9E` | Handler | Opcode émis |
+| `0x0D9E` | Handler | Emitted opcode |
 | --- | --- | --- |
 | 1 | `0x393A` | `0x05` |
 | 2 | `0x3975` | `0x41` |
@@ -5109,9 +5105,9 @@ Dix entrées de trois octets en `0x391C` :
 | 8, 9 | `0x3D25` | — |
 | 10 | `0x3D1D` | — |
 
-**La branche de repos (`0x0D9E == 0`) est celle qui entretient la liaison** : elle incrémente un
-compteur (`0x0150`) et, tous les cent tics, émet `euart0_cmd06` — la requête d'état dont j'ai
-décodé la réponse plus haut. Après trois passages, elle relâche le handshake :
+**The idle branch (`0x0D9E == 0`) is what keeps the link alive**: it increments a counter (`0x0150`)
+and, every hundred ticks, sends `euart0_cmd06` — the status request whose reply was decoded above.
+After three passes, it releases the handshake:
 
 ```c
 if (++counter > 99) {
@@ -5121,13 +5117,12 @@ if (++counter > 99) {
 }
 ```
 
-Les handlers se **chaînent** en réécrivant `0x0D9E` (`0x3CCE`, `0x3CD4`) et le remettent à zéro en
-fin de service (`0x393E`) : une requête déclenche une rafale de réponses, une par tic.
+The handlers **chain** into one another by rewriting `0x0D9E` (`0x3CCE`, `0x3CD4`) and reset it to
+zero upon completion (`0x393E`): a single request triggers a burst of replies, one per tick.
 
-#### Les huit octets que `0x41` ne lit pas — et `5A A5` enfin tranché
+#### The eight bytes `0x41` does not read — and `5A A5` finally settled
 
-Le handler 2 redispatche lui aussi sur `0x038D`, mais avec **quatre** bases, espacées de
-**1024** octets :
+Handler 2 also redispatches on `0x038D`, but across **four** bases spaced **1024** bytes apart:
 
 | `0x038D` | Base | Page |
 | --- | --- | --- |
@@ -5136,108 +5131,108 @@ Le handler 2 redispatche lui aussi sur `0x038D`, mais avec **quatre** bases, esp
 | 2 | `0xD400` | 106 |
 | 3 | `0xD800` | 108 |
 
-Et il en lit **504 = 512 − 8** octets. Les huit octets sautés sont la queue de la page. Les voici,
-pour la base `0xD800` :
+And it reads **504 = 512 − 8** bytes from them. The eight skipped bytes are the tail of the page.
+Here they are for base `0xD800`:
 
 ```
 offset 504..511 :  00 00 00 00 00 00 5a a5
 ```
 
-**Les seuls octets non nuls de toute la page sont ce `5A A5`** — et ils tombent précisément dans la
-zone que le firmware s'abstient de relire.
+**The only non-zero bytes in the entire page are this `5A A5`** — and they fall precisely in the
+region that the firmware refrains from reading back.
 
-##### Le marqueur, balayé sur toute la zone IAP
+##### The marker, swept across the entire IAP area
 
-| Page | Marqueur `5A A5` | Octets non nuls |
+| Page | `5A A5` marker | Non-zero bytes |
 | --- | --- | --- |
-| 99 | offset **126** (fin du bloc de 128 o) | 87 |
+| 99 | offset **126** (end of the 128 B block) | 87 |
 | 100 | offset 506 | 282 |
 | 101 | — | 18 |
-| **102 – 109** | offset **510** (deux derniers octets) | 86, 100, 75, 57, 2, 2, 2, 2 |
+| **102 – 109** | offset **510** (last two bytes) | 86, 100, 75, 57, 2, 2, 2, 2 |
 | 110 – 117 | — | **0** |
 
-Trois constats indépendants convergent :
+Three independent observations converge:
 
-1. le motif est en **fin de page** (offset 510) sur huit pages consécutives ;
-2. l'opcode `0x41` s'arrête à **512 − 8**, donc **juste avant** lui ;
-3. les pages qui le portent ont du contenu ; celles qui ne l'ont pas sont **entièrement vierges**.
+1. the pattern sits at the **end of the page** (offset 510) across eight consecutive pages;
+2. opcode `0x41` stops at **512 − 8**, so **right before** it;
+3. the pages carrying it have content; those without it are **completely blank**.
 
-> **Tranché.** `5A A5` est un **tampon de validité de page**, et le chemin de relecture le sait :
-> il renvoie les données et laisse la queue. Je l'avais signalé deux fois comme « lecture la mieux
-> étayée, non prouvée » — le `504 = 512 − 8` est la preuve structurelle qui manquait, parce qu'elle
-> vient du code et non du motif binaire.
+> **Settled.** `5A A5` is a **page validity stamp**, and the readback path knows about it: it
+> returns the data and leaves the tail behind. I had flagged it twice as the "best-supported
+> reading, unproven" — `504 = 512 − 8` is the structural proof that was missing, because it comes
+> from the code rather than from the binary pattern.
 
-Les deux octets sont complémentaires (`0101 1010` / `1010 0101`), ce qui reste la forme classique
-d'un tampon : un effacement flash laisse `FF FF` ou `00 00`, jamais cette paire.
+The two bytes are bitwise complements (`0101 1010` / `1010 0101`), the classic form of a validity
+stamp: a flash erase leaves `FF FF` or `00 00`, never this pair.
 
-##### Ce que cela change sur les profils
+##### What this changes about the profiles
 
-Les pages **102 à 109 sont marquées valides**, les pages **110 à 117 ne le sont pas** et sont
-vierges. Or l'opcode `0x43` lit exactement `0xDC00`–`0xEA00`, c'est-à-dire les **pages 110 à 117** —
-les non marquées — tandis que `0x41` lit quatre des huit marquées.
+Pages **102 to 109 are marked valid**, while pages **110 to 117 are not** and are blank. Yet opcode
+`0x43` reads `0xDC00`–`0xEA00`, i.e. **pages 110 to 117** — the unmarked ones — whereas `0x41` reads
+four of the eight marked ones.
 
-La grille `0xD800 + n × 512` établie depuis l'offset 0 du bloc de réglages reste exacte comme
-**adressage**. Mais la frontière réelle des données est ailleurs : elle passe entre la page 109 et
-la page 110, pas à `0xD800`.
+The `0xD800 + n × 512` grid established from offset 0 of the settings block remains exact as
+**addressing**. But the actual data boundary lies elsewhere: it runs between page 109 and page 110,
+not at `0xD800`.
 
-##### Pourquoi `0x41` semble sauter une page sur deux — résolu
+##### Why `0x41` appears to skip every other page — solved
 
-Il n'en saute aucune : les pages « manquantes » sont couvertes par **d'autres opcodes**. Les bases
-des trois derniers handlers complètent la carte.
+It skips none: the "missing" pages are covered by **other opcodes**. The bases of the last three
+handlers complete the map.
 
-| Opcode | Base | Page(s) | Blocs × 14 | Contenu |
+| Opcode | Base | Page(s) | Blocks × 14 | Content |
 | --- | --- | --- | --- | --- |
-| `0x44` | `0xC600` | 99 | 10 → **140** | **bloc de réglages** |
+| `0x44` | `0xC600` | 99 | 10 → **140** | **settings block** |
 | `0x49` | `0xC800` | 100 | 35 → **490** | palettes |
-| `0x42` | `0xCA00` | 101 | 27 → **378** | **table de couleurs** |
+| `0x42` | `0xCA00` | 101 | 27 → **378** | **color table** |
 | `0x41` | `0xCC00` +1024 | 102, 104, 106, 108 | 36 → **504** | — |
 | `0x43` | `0xDC00` +512 | 110 – 117 | 37 → **512** | — |
-| `0x4A` | *aucune* | — | 1 × 2 | charge mise à zéro |
+| `0x4A` | *none* | — | 1 × 2 | payload zeroed |
 
-Deux comptes se vérifient d'eux-mêmes :
+Two counts verify themselves:
 
-- `0x44` annonce **10 = ⌈128 / 14⌉**, et le bloc de réglages fait exactement **128 octets**. C'est
-  la **troisième** dérivation indépendante de cette taille, après les boucles de copie de
-  `settings_restore` / `settings_save` et l'argument de longueur de `flash_read_block`.
-- `0x42` annonce 378, la taille exacte de la table de couleurs remplie par le chemin d'écriture.
+- `0x44` advertises **10 = ⌈128 / 14⌉**, and the settings block is exactly **128 bytes**. This is
+  the **third** independent derivation of that size, after the copy loops in `settings_restore` /
+  `settings_save` and the length argument of `flash_read_block`.
+- `0x42` advertises 378, the exact size of the color table filled by the write path.
 
-##### Ce qui reste vraiment, et c'est plus intéressant
+##### What truly remains, and why it is more interesting
 
-La carte couvre les pages 99 à 117 **sauf 103, 105, 107 et 109**. Or ce ne sont pas des pages
-vides : elles portent le tampon `5A A5` et, pour la 103, **cent octets non nuls — c'est la table
-de remap `0xCE00`**.
+The map covers pages 99 to 117 **except 103, 105, 107, and 109**. Yet these are not empty pages:
+they carry the `5A A5` stamp and, for page 103, **one hundred non-zero bytes — the `0xCE00` remap
+table**.
 
-L'explication tient au pas de `0x41` : ses régions font **1024 octets**, donc chacune couvre
-*deux* pages — 102-103, 104-105, 106-107, 108-109. Les pages « manquantes » sont la **seconde
-moitié** de ses régions. Il n'annonce que 504 octets, ce qui s'arrête dans la première page.
+The explanation lies in the stride of `0x41`: its regions are **1024 bytes** wide, so each one spans
+*two* pages — 102–103, 104–105, 106–107, 108–109. The "missing" pages are the **second half** of its
+regions. It only advertises 504 bytes, which stops within the first page.
 
-Et l'adressage n'est pas borné :
+And the addressing has no bounds check:
 
 ```asm
 a = [0x0D14] ; B = 14 ; mul ab      ; offset = sequence x 14
-pointeur = base + offset            ; aucun controle de borne
+pointer = base + offset             ; no bounds check
 ```
 
-Le compte est **consultatif** : il est renvoyé à l'hôte en `IDATA[0x37]`, et rien dans le firmware
-n'empêche une requête de séquence plus élevée. `0xCC00 + 36 × 14 = 0xCDF8` — la séquence 36
-chevauche déjà la page 103, et les séquences 37 à 73 la couvriraient entièrement.
+The count is **advisory**: it is returned to the host in `IDATA[0x37]`, and nothing in the firmware
+prevents requesting a higher sequence number. `0xCC00 + 36 × 14 = 0xCDF8` — sequence 36 already
+straddles page 103, and sequences 37 to 73 would cover it completely.
 
-> **Donc la table de remap est lisible par l'opcode `0x41`, sous-index 0, aux séquences ≥ 36** —
-> au-delà du compte annoncé. C'est vérifiable : il suffirait de demander ces séquences. Non tenté,
-> rien n'ayant jamais été envoyé à l'appareil.
+> **So the remap table is readable via opcode `0x41`, sub-index 0, at sequences ≥ 36** — beyond the
+> advertised count. This is verifiable: one would simply need to request those sequences. Untested,
+> as nothing has ever been sent to the device.
 
-#### L'opcode `0x43` — un second niveau de dispatch, et ce que valent les 518 octets
+#### Opcode `0x43` — a second level of dispatch, and what the 518 bytes actually mean
 
-Le handler 4 n'émet pas directement : il **redispatche** sur `XRAM 0x038D`, le sous-index que
-`euart0_parse` a extrait du quartet haut de l'octet 5 de la requête.
+Handler 4 does not transmit directly: it **redispatches** on `XRAM 0x038D`, the sub-index that
+`euart0_parse` extracted from the high nibble of byte 5 of the request.
 
 ```asm
 0x3AB5  movx a, [0x038D] ; mov r7, a
-0x3ABA  cjne a, #0x08, +3 ; jnc sortie      ; rejette >= 8
+0x3ABA  cjne a, #0x08, +3 ; jnc exit        ; rejects >= 8
 0x3ABF  mov dptr, #0x3AC6 ; a = a*3 ; jmp @a+dptr
 ```
 
-Huit entrées en `0x3AC6`, chacune posant le poids fort du pointeur de charge :
+Eight entries at `0x3AC6`, each setting the high byte of the payload pointer:
 
 | `0x038D` | Base | Page |
 | --- | --- | --- |
@@ -5250,192 +5245,194 @@ Huit entrées en `0x3AC6`, chacune posant le poids fort du pointeur de charge :
 | 6 | `0xE800` | 116 |
 | 7 | `0xEA00` | 117 |
 
-**Ce sont exactement les pages de profil 2 à 9.** Leur disposition avait été établie ailleurs, à
-partir du `0xD800 + n × 512` de l'offset 0 du bloc de réglages — deux fonctions sans rapport qui
-donnent la même grille. Le pas de 512 octets et la borne haute `0xEA00` (= profil 9) coïncident.
+**These are the exact pages for profiles 2 through 9.** Their layout had been established elsewhere,
+from the `0xD800 + n × 512` calculation on offset 0 of the settings block — two unrelated functions
+yielding the exact same grid. The 512-byte stride and the upper bound `0xEA00` (= profile 9) match.
 
-L'opcode `0x43` est donc **la relecture d'un profil de remap**, le sous-index choisissant lequel.
+Opcode `0x43` is therefore **the readback of a remap profile**, with the sub-index choosing which
+one.
 
-##### Les 518 octets n'existent pas
+##### The 518 bytes do not exist
 
-L'accès est **aléatoire, pas séquentiel** : le pointeur est recalculé à chaque requête depuis la
-base, et non avancé.
+Access is **random, not sequential**: the pointer is recomputed from the base on every request,
+rather than advanced.
 
 ```asm
 a = [0x0D14] ; B = 14 ; mul ab        ; offset = sequence x 14
-[0x013A] += offset_lo ; [0x0139] += offset_hi     ; pointeur = base + sequence x 14
+[0x013A] += offset_lo ; [0x0139] += offset_hi     ; pointer = base + sequence x 14
 ```
 
-Et la réponse renvoie à l'hôte de quoi piloter la boucle :
+And the reply sends back what the host needs to drive its loop:
 
 ```asm
-IDATA[0x37] = [0x02E2]    ; nombre total de blocs
-IDATA[0x38] = [0x0D14]    ; numero du bloc courant
+IDATA[0x37] = [0x02E2]    ; total number of blocks
+IDATA[0x38] = [0x0D14]    ; current block number
 ```
 
-Le compte `[0x02E2]` est donc un **plafond de boucle**, pas une taille. Et il se lit :
+The count `[0x02E2]` is therefore a **loop ceiling**, not a byte size. And it reads as follows:
 
-| Opcode | Blocs | × 14 | Division | Taille réelle de la région |
+| Opcode | Blocks | × 14 | Division | Actual region size |
 | --- | --- | --- | --- | --- |
-| `0x41` | 36 | 504 | exacte | **504 o** |
-| `0x42` | 27 | 378 | exacte | **378 o** |
-| `0x43` | 37 | 518 | **reste 6** | **512 o** — `⌈512 / 14⌉ = 37` |
-| `0x44` | 10 | 140 | exacte | **140 o** |
-| `0x49` | 35 | 490 | exacte | **490 o** |
+| `0x41` | 36 | 504 | exact | **504 B** |
+| `0x42` | 27 | 378 | exact | **378 B** |
+| `0x43` | 37 | 518 | **remainder 6** | **512 B** — `⌈512 / 14⌉ = 37` |
+| `0x44` | 10 | 140 | exact | **140 B** |
+| `0x49` | 35 | 490 | exact | **490 B** |
 
-**`0x43` est le seul dont le compte ne divise pas.** C'est précisément celui qui lit une page
-entière de 512 octets : 37 blocs de 14 la couvrent, le dernier dépassant de six octets que l'hôte
-ignore. Les quatre autres tombent juste, donc leurs régions font exactement 504, 378, 490 et
-140 octets — et non des pages.
+**`0x43` is the only one whose count does not divide evenly.** It is precisely the one that reads a
+full 512-byte page: 37 blocks of 14 cover it, with the last block overshooting by six bytes that the
+host ignores. The other four come out even, so their regions are genuinely 504, 378, 490, and
+140 bytes — not full pages.
 
-Ce qui corrige la lecture du commit précédent : je parlais de « 518 octets » comme d'une taille de
-région. C'est un **nombre de blocs arrondi au-dessus**, et la région fait 512.
+Which corrects the reading from the previous commit: I spoke of "518 bytes" as a region size. It is
+a **rounded-up block count**, and the region is 512 bytes.
 
-Au passage, cela renseigne aussi l'opcode `0x41` : sa région fait **504 octets pile**, pas une page.
-Huit octets de moins qu'une page de 512 — réservés à autre chose, ou simplement hors du champ
-relu.
+In passing, this also clarifies opcode `0x41`: its region is **504 bytes on the dot**, not a full
+page. Eight bytes short of a 512-byte page — reserved for something else, or simply outside the
+readback range.
 
-#### Ce que la charge contient
+#### What the payload contains
 
-Le pointeur de charge vit dans `XRAM 0x0139:0x013A` et reçoit `0xD000`, `0xD400` ou `0xD800` selon
-le handler — **des pages de la zone IAP**. Le firmware renvoie donc, quatorze octets à la fois, le
-contenu de sa flash de configuration.
+The payload pointer lives in `XRAM 0x0139:0x013A` and receives `0xD000`, `0xD400`, or `0xD800`
+depending on the handler — **pages in the IAP area**. The firmware thus sends back, fourteen bytes
+at a time, the contents of its configuration flash.
 
-C'est le **pendant en lecture** du transfert fragmenté déjà identifié en réception (trame `0x08`,
-sous-index 1, vers `g_settings_staging`). La liaison radio porte un protocole de lecture *et*
-d'écriture sur la zone de configuration, par blocs de 14 octets, avec numéro de séquence.
+This is the **read counterpart** to the fragmented transfer already identified on receive (frame
+`0x08`, sub-index 1, into `g_settings_staging`). The radio link carries a protocol for both reading
+*and* writing the configuration area, in 14-byte blocks, with a sequence number.
 
-#### Les treize arms du conteneur `0x08` reçu
+#### The thirteen arms of the received `0x08` container
 
-`euart0_parse` aiguille les trames `0x08` reçues par un appel au répartiteur inline `0x4E45`, en
-`0x0856`. Le répartiteur se lit d'un bloc :
+`euart0_parse` dispatches received `0x08` frames via a call to the inline dispatcher `0x4E45`, at
+`0x0856`. The dispatcher reads in one piece:
 
 ```asm
-0x4E45  pop DPH ; pop DPL          ; DPTR = adresse de retour = debut des donnees inline
-0x4E49  mov R0,A                   ; R0 = la cle cherchee
+0x4E45  pop DPH ; pop DPL          ; DPTR = return address = start of inline data
+0x4E49  mov R0,A                   ; R0 = lookup key
 0x4E4B  movc a,@a+dptr             ; hi
-0x4E4C  jnz 0x4E60                 ; entree valide -> comparer
+0x4E4C  jnz 0x4E60                 ; valid entry -> compare
 0x4E50  movc a,@a+dptr (offset 1)  ; lo
 0x4E51  jnz 0x4E60
-0x4E53  inc dptr ; inc dptr        ; hi == lo == 0 : fin de table, l'adresse par defaut suit
-0x4E55  <charger hi/lo dans DPTR et jmp @a+dptr>
-0x4E60  movc a,@a+dptr (offset 2)  ; la CLE
-0x4E63  xrl a,R0 ; jz 0x4E55       ; trouvee -> sauter a l'adresse de CETTE entree
-0x4E66  inc dptr x3 ; sjmp 0x4E4A  ; entree suivante
+0x4E53  inc dptr ; inc dptr        ; hi == lo == 0: end of table, default address follows
+0x4E55  <load hi/lo into DPTR and jmp @a+dptr>
+0x4E60  movc a,@a+dptr (offset 2)  ; the KEY
+0x4E63  xrl a,R0 ; jz 0x4E55       ; found -> jump to THIS entry's address
+0x4E66  inc dptr x3 ; sjmp 0x4E4A  ; next entry
 ```
 
-**Les entrées sont `(adresse_hi, adresse_lo, clé)` — la clé en dernier**, la table se termine par une
-adresse `00 00`, et l'adresse par défaut suit le terminateur. Ce format vaut pour les **quatre**
-sites d'appel de `0x4E45` de l'image : `0x0856` (13 entrées, défaut `0x0F6A`), `0x1741` (19 entrées,
-défaut `0x1AEA` — les effets), `0x4136` (17 entrées, défaut `0x44F5` — les raccourcis) et `0x8845`
-(9 entrées, défaut `0x8919`).
+**Entries are `(addr_hi, addr_lo, key)` — with the key last**, the table ends with a `00 00`
+address, and the default address follows the terminator. This format holds across all **four** call
+sites of `0x4E45` in the image: `0x0856` (13 entries, default `0x0F6A`), `0x1741` (19 entries,
+default `0x1AEA` — effects), `0x4136` (17 entries, default `0x44F5` — shortcuts), and `0x8845`
+(9 entries, default `0x8919`).
 
-Deux recoupements indépendants ferment la lecture. L'arm `0x0C4A` se termine par `ljmp 0x0F6A`,
-c'est-à-dire **l'adresse par défaut de sa propre table** ; et les sept opcodes que cette page avait
-déjà déduits par une recherche d'octets sur `90 0d 9e` (`0x05` en `0x0C4A`, puis `0x41`…`0x4A`)
-tombent exactement sur les clés que ce parse donne.
+Two independent cross-checks close the reading. Arm `0x0C4A` ends with `ljmp 0x0F6A`, i.e. **the
+default address of its own table**; and the seven opcodes that this page had already deduced via a
+byte search for `90 0d 9e` (`0x05` at `0x0C4A`, then `0x41`…`0x4A`) land on the exact keys yielded
+by this parse.
 
-##### La table
+##### The table
 
-| Clé | Arm | Sens | Rôle |
+| Key | Arm | Direction | Role |
 | --- | --- | --- | --- |
-| `0x01` | `0x0884` | écriture | profil de **remap** — base `CODE` selon le sous-index `[0x038D]` : `0`→`0xCC00`, `1`→`0xD000`, `2`→`0xD400`, `3`→`0xD800` |
-| `0x02` | `0x09BD` | écriture | profil d'**éclairage par touche** — base `0xCA00`, sous-index `0` seulement ; **pas d'écriture flash** |
-| `0x03` | `0x0AAC` | écriture | huit profils — bases `0xDC00`, `0xDE00`, `0xE000`, `0xE200`, `0xE400`, `0xE600`, `0xE800`, `0xEA00` |
-| `0x04` | `0x0BB0` | écriture | bloc de **réglages** — page fixe, validation par `0xEEF4` |
-| `0x05` | `0x0C4A` | lecture | arme le handler **1** dans `[0x0D9E]` (gabarit `0xB3DC`) |
-| **`0x06`** | `0x0C53` | action | **réinitialisation d'usine immédiate** |
-| `0x09` | `0x0C68` | écriture | base fixe `0xC800` |
-| `0x41` | `0x0D10` | lecture | handler 2 — 36 blocs × 14 = **504 o** |
-| `0x42` | `0x0D2B` | lecture | handler 3 — 27 × 14 = **378 o** (la table de couleurs) |
-| `0x43` | `0x0D45` | lecture | handler 4 — 37 × 14 = **518 o** |
-| `0x44` | `0x0D5F` | lecture | handler 5 — 10 × 14 = **140 o** |
-| `0x49` | `0x0D79` | lecture | handler 6 — 35 × 14 = **490 o** |
-| `0x4A` | `0x0D93` | lecture | handler 7 — 1 bloc de **2 o** ; force aussi `[0x08DB] = 10` |
-| — | `0x0F6A` | — | **défaut** : sortie du parser, sans effet |
+| `0x01` | `0x0884` | write | **remap** profile — `CODE` base selected by sub-index `[0x038D]`: `0`→`0xCC00`, `1`→`0xD000`, `2`→`0xD400`, `3`→`0xD800` |
+| `0x02` | `0x09BD` | write | **per-key lighting** profile — base `0xCA00`, sub-index `0` only; **no flash write** |
+| `0x03` | `0x0AAC` | write | eight profiles — bases `0xDC00`, `0xDE00`, `0xE000`, `0xE200`, `0xE400`, `0xE600`, `0xE800`, `0xEA00` |
+| `0x04` | `0x0BB0` | write | **settings** block — fixed page, committed via `0xEEF4` |
+| `0x05` | `0x0C4A` | read | arms handler **1** in `[0x0D9E]` (template `0xB3DC`) |
+| **`0x06`** | `0x0C53` | action | **immediate factory reset** |
+| `0x09` | `0x0C68` | write | fixed base `0xC800` |
+| `0x41` | `0x0D10` | read | handler 2 — 36 blocks × 14 = **504 B** |
+| `0x42` | `0x0D2B` | read | handler 3 — 27 × 14 = **378 B** (the color table) |
+| `0x43` | `0x0D45` | read | handler 4 — 37 × 14 = **518 B** |
+| `0x44` | `0x0D5F` | read | handler 5 — 10 × 14 = **140 B** |
+| `0x49` | `0x0D79` | read | handler 6 — 35 × 14 = **490 B** |
+| `0x4A` | `0x0D93` | read | handler 7 — 1 block of **2 B**; also forces `[0x08DB] = 10` |
+| — | `0x0F6A` | — | **default**: parser exit, no-op |
 
-##### Le squelette commun des cinq arms d'écriture
+##### The common skeleton of the five write arms
 
-`0x0884`, `0x09BD`, `0x0AAC`, `0x0BB0` et `0x0C68` sont le même corps, à la base et à la validation
-près :
+`0x0884`, `0x09BD`, `0x0AAC`, `0x0BB0`, and `0x0C68` share the exact same body, up to the base
+address and commit step:
 
 ```c
-if (sub_index_selectionne)                  /* [0x038D] choisit une base CODE */
+if (sub_index_selected)                     /* [0x038D] selects a CODE base */
     { [0x0139:0x013A] = base; }
 
-if ([0x0D14] == 0)                          /* premier bloc de la sequence */
-    memcpy_code(0x09BF, base, 512);         /* amorcer le tampon avec la page actuelle */
+if ([0x0D14] == 0)                          /* first block in the sequence */
+    memcpy_code(0x09BF, base, 512);         /* prime the buffer with the current page */
 
-[0x0139:0x013A] = [0x0D14] * 14;            /* decalage = numero de sequence x 14 */
-memcpy(0x09BF + decalage, 0x0126, [0x038E:0x038F]);   /* le bloc recu */
+[0x0139:0x013A] = [0x0D14] * 14;            /* offset = sequence number x 14 */
+memcpy(0x09BF + offset, 0x0126, [0x038E:0x038F]);     /* the received block */
 
-if ([0x0D14] == [0x02E2])                   /* dernier bloc -> valider */
-    <validation propre a l'arm>;
+if ([0x0D14] == [0x02E2])                   /* last block -> commit */
+    <arm-specific commit>;
 
-for (i = 2; i < 0x16; i++)                  /* accuse : la requete renvoyee telle quelle */
+for (i = 2; i < 0x16; i++)                  /* ack: the request echoed back verbatim */
     IDATA[0x33 + i] = XRAM[0x011F + i];
 euart0_cmd08(...);
-if (!filaire) { P0CR &= 0xFB; P0.2 = 1; }   /* relacher le handshake d'emission */
+if (!wired) { P0CR &= 0xFB; P0.2 = 1; }     /* release the transmit handshake */
 ```
 
-L'amorçage est ce qui rend le protocole sûr : le tampon de 512 octets en `XRAM 0x09BF` est d'abord
-rempli avec **le contenu actuel de la page**, et seuls les octets effectivement transmis l'écrasent.
-Un transfert partiel ne détruit donc pas le reste de la page. Les arms `0x03` et `0x04` n'amorcent
-pas — ils réécrivent la page entière.
+Priming is what makes the protocol safe: the 512-byte buffer at `XRAM 0x09BF` is first filled with
+**the current contents of the page**, and only the bytes actually transmitted overwrite it. A
+partial transfer therefore does not destroy the rest of the page. Arms `0x03` and `0x04` do not
+prime — they rewrite the entire page.
 
-La validation diffère :
+The commit step differs:
 
-| Arm | Validation |
+| Arm | Commit |
 | --- | --- |
-| `0x01`, `0x03`, `0x09` | `0xEE4E` → `iap_save(page = base_hi >> 1)` → `0xAAC1`, **le même graveur de page IAP que la réinitialisation d'usine** |
-| `0x02` | **aucune écriture flash** : pose le bit `0x2C.7`, écrit `[0x0E24] = 0x20 + [0x038D]` puis appelle `0xAF99` — soit *bascule sur l'effet `0x20 + sous-index`*. Les clés `0x20`, `0x26` et `0x2D` de la table d'effets `0x1744` sont exactement ces effets-là |
-| `0x04` | `0xEEF4`, qui déroule l'IAP à la main : `EA = 0`, `matrix_cols_release(99)`, `iap_erase(99)`, `iap_write_page(src = 0x09BF, dst = 0xC600, 512)`, `iap_lock()`, `EA` restauré |
+| `0x01`, `0x03`, `0x09` | `0xEE4E` → `iap_save(page = base_hi >> 1)` → `0xAAC1`, **the exact same IAP page writer as the factory reset** |
+| `0x02` | **no flash write**: sets bit `0x2C.7`, writes `[0x0E24] = 0x20 + [0x038D]`, then calls `0xAF99` — i.e. *switches to effect `0x20 + sub-index`*. Keys `0x20`, `0x26`, and `0x2D` of the `0x1744` effect table are those exact effects |
+| `0x04` | `0xEEF4`, which unrolls the IAP sequence by hand: `EA = 0`, `matrix_cols_release(99)`, `iap_erase(99)`, `iap_write_page(src = 0x09BF, dst = 0xC600, 512)`, `iap_lock()`, `EA` restored |
 
-`page = base_hi >> 1` place toutes ces destinations dans la plage **99–117** que cette page a
-identifiée comme l'EEPROM émulée : `0xC600` → 99, `0xC800` → 100, `0xCA00` → 101, `0xCC00` → 102, et
-les huit profils de l'arm `0x03` sur **110 à 117**, la fin exacte de la plage. Le protocole d'écriture
-et la cartographie flash, établis séparément, se rejoignent sur la même borne.
+`page = base_hi >> 1` places all of these destinations inside the **99–117** range that this page
+identified as the emulated EEPROM: `0xC600` → 99, `0xC800` → 100, `0xCA00` → 101, `0xCC00` → 102,
+and the eight profiles of arm `0x03` on **110 to 117**, the exact end of the range. The write
+protocol and the flash map, established separately, meet on the exact same boundary.
 
-##### Ce que ça change pour le négatif d'appairage
+##### What this changes for the pairing negative result
 
-Les treize arms sont maintenant ouverts un par un. **Aucun ne touche l'EUART0 autrement que par
-l'accusé `euart0_cmd08`, qui renvoie la requête reçue verbatim.** Aucun n'émet la commande `0x01`, ni
-rien d'autre qui puisse détruire un lien enregistré. Le négatif tient dans les deux sens.
+All thirteen arms have now been opened one by one. **None touches EUART0 other than through the
+`euart0_cmd08` acknowledgment, which echoes the received request verbatim.** None sends command
+`0x01`, nor anything else capable of destroying a stored bond. The negative result holds in both
+directions.
 
-Une nuance à l'affirmation antérieure « les sous-opcodes du conteneur `0x08` sont tous des transferts
-de données » : **douze sur treize** le sont (cinq écritures, sept lectures). Le treizième, `0x06`, est
-une **action** — la réinitialisation d'usine. Et l'arm `0x01` ne transfère pas seulement : il choisit
-aussi une base par le sous-index.
+One nuance to the earlier statement that "the sub-opcodes of container `0x08` are all data
+transfers": **twelve out of thirteen** are (five writes, seven reads). The thirteenth, `0x06`, is an
+**action** — the factory reset. And arm `0x01` does more than transfer data: it also selects a base
+via the sub-index.
 
-#### Qui arme le séquenceur — résolu
+#### What arms the sequencer — solved
 
-Les trois écritures que Ghidra listait étaient internes au séquenceur. Une recherche du motif
-`90 0d 9e` sur l'image entière en trouve **treize**, dont sept dans une plage que la liste de
-références ne couvrait pas : `0x0C4A`, `0x0D23`, `0x0D3E`, `0x0D58`, `0x0D72`, `0x0D8C`, `0x0DA6`.
+The three writes Ghidra listed were internal to the sequencer. Searching the entire image for the
+pattern `90 0d 9e` turns up **thirteen** hits, including seven in a range that the reference list
+did not cover: `0x0C4A`, `0x0D23`, `0x0D3E`, `0x0D58`, `0x0D72`, `0x0D8C`, `0x0DA6`.
 
-Ces adresses tombent **dans le corps de `euart0_parse`** — elles se terminent toutes par
-`ljmp 0x0F6A`, l'étiquette de sortie du parser. La fonction que Ghidra avait reconstruite ne
-couvrait simplement pas cette plage, donc aucun xref n'avait été enregistré.
+These addresses fall **inside the body of `euart0_parse`** — they all end with `ljmp 0x0F6A`, the
+parser's exit label. The function Ghidra had reconstructed simply did not span this range, so no
+xref had been recorded.
 
-> **Ornière de méthode.** Une liste de références n'est complète que pour le code effectivement
-> désassemblé. Ici la recherche octet a rattrapé ce que le graphe de références manquait — comme
-> pour les pointeurs calculés, mais pour une raison différente : la plage était bien du code, elle
-> n'appartenait à aucune fonction.
+> **Methodological pitfall.** A cross-reference list is only complete for code that has actually
+> been disassembled. Here a raw byte search caught what the reference graph missed — just as with
+> computed pointers, but for a different reason: the range really was code, it just did not belong
+> to any function.
 
-Six des sept sites sont un même bloc, au comptage près :
+Six of the seven sites are the exact same block, up to the counts:
 
 ```asm
-movx [0x02E2], #<n>      ; nombre de blocs a transferer
-movx [0x0D14], #0        ; numero de sequence, remis a zero
-movx [0x038E], #0        ; longueur de bloc, poids fort
-movx [0x038F], #14       ; longueur de bloc
-movx [0x0D9E], #<h>      ; arme le handler h
-ljmp 0x0F6A              ; sortie du parser
+movx [0x02E2], #<n>      ; number of blocks to transfer
+movx [0x0D14], #0        ; sequence number, reset to zero
+movx [0x038E], #0        ; block length, high byte
+movx [0x038F], #14       ; block length
+movx [0x0D9E], #<h>      ; arm handler h
+ljmp 0x0F6A              ; parser exit
 ```
 
-| Site | Handler | Opcode | Blocs | Octets/bloc | **Total** |
+| Site | Handler | Opcode | Blocks | Bytes/block | **Total** |
 | --- | --- | --- | --- | --- | --- |
-| `0x0C4A` | 1 | `0x05` | — | — | gabarit `0xB3DC` |
+| `0x0C4A` | 1 | `0x05` | — | — | template `0xB3DC` |
 | `0x0D10` | 2 | `0x41` | 36 | 14 | **504** |
 | `0x0D2B` | 3 | `0x42` | 27 | 14 | **378** |
 | `0x0D45` | 4 | `0x43` | 37 | 14 | **518** |
@@ -5443,82 +5440,82 @@ ljmp 0x0F6A              ; sortie du parser
 | `0x0D79` | 6 | `0x49` | 35 | 14 | **490** |
 | `0x0D93` | 7 | `0x4A` | 1 | **2** | **2** |
 
-**Le total de l'opcode `0x42` vaut 378 octets — exactement la taille de la table de couleurs**
-(`XRAM 0x0152`–`0x02CB`) que le chemin d'écriture remplit, trame `0x08` sous-index 2. Les deux
-sens du protocole se recoupent sur la même structure, établis séparément.
+**The total for opcode `0x42` is 378 bytes — the exact size of the color table**
+(`XRAM 0x0152`–`0x02CB`) that the write path fills via frame `0x08` sub-index 2. Both directions of
+the protocol cross-check on the same structure, established independently.
 
-Les 504 octets de l'opcode `0x41` cadrent avec la page de profil de 512 octets en `0xD800`, à huit
-octets près.
+The 504 bytes of opcode `0x41` match the 512-byte profile page at `0xD800`, within eight bytes.
 
-Et ce sont **les mêmes trois variables** — `0x02E2` (compte), `0x0D14` (séquence), `0x038F`
-(longueur) — que `euart0_parse` renseigne depuis les octets 3, 4 et 5 d'une trame `0x08` reçue.
-Selon le chemin, le clavier **répond** à un transfert demandé par l'hôte, ou **initie** le sien.
+And these are **the exact same three variables** — `0x02E2` (count), `0x0D14` (sequence), `0x038F`
+(length) — that `euart0_parse` populates from bytes 3, 4, and 5 of a received `0x08` frame.
+Depending on the path, the keyboard either **replies** to a transfer requested by the host, or
+**initiates** its own.
 
-La boucle est donc complète :
+The loop is therefore complete:
 
 ```
-trame recue --> euart0_parse pose 0x02E2 / 0x0D14 / 0x038F / 0x0D9E
+received frame --> euart0_parse sets 0x02E2 / 0x0D14 / 0x038F / 0x0D9E
                                   |
-                       tic suivant v
-                FUN_CODE_3901 : table de sauts sur 0x0D9E
+                        next tick v
+                 FUN_CODE_3901 : jump table on 0x0D9E
                                   |
                                   v
-                cmd 0x08, opcode, 14 octets de flash, sequence incrementee
+                 cmd 0x08, opcode, 14 bytes of flash, sequence incremented
                                   |
-                        0x0D9E remis a 0 --> branche de repos
-                                             (cmd 0x06 tous les 100 tics)
+                         0x0D9E reset to 0 --> idle branch
+                                               (cmd 0x06 every 100 ticks)
 ```
 
-##### `CODE:0xB3DC` — un gabarit, pas une chaîne
+##### `CODE:0xB3DC` — a template, not a string
 
-Le site `0x393E` compose l'enveloppe puis recopie la table :
+Site `0x393E` builds the envelope and then copies the table:
 
 ```asm
 IDATA[0x35] = 0x13 ; [0x36] = 0x05 ; [0x37] = 0x01 ; [0x38] = 0 ; [0x39] = 0x0A
 r2 = 7
-boucle: IDATA[0x33 + r2] = CODE[0xB3DC + r2] ; r2++  jusqu'a r2 == 17
+loop: IDATA[0x33 + r2] = CODE[0xB3DC + r2] ; r2++  until r2 == 17
 ```
 
-L'indice de départ compte : `IDATA[0x33 + 7]` vaut `IDATA[0x3A]`, **la case du sous-code**. La
-table n'est donc pas une chaîne de dix caractères — c'est un **sous-message pré-composé** :
+The starting index matters: `IDATA[0x33 + 7]` is `IDATA[0x3A]`, **the sub-code slot**. The table is
+therefore not a ten-character string — it is a **pre-composed sub-message**:
 
 ```
 idx  0  1  2  3  4  5  6 | 7  | 8  9 10 11 12 13 14 15 16
      ff 00 ff ff ff ff ff| 03 | 00 00 00 00 cd 01 00 00 00
-                          ^sous-code    ^
+                          ^sub-code     ^
 ```
 
-Sous-code **3**, charge `00 00 00 00 CD 01 00 00 00`. Les sept premiers octets ne sont jamais lus
-par ce site.
+Sub-code **3**, payload `00 00 00 00 CD 01 00 00 00`. The first seven bytes are never read by this
+site.
 
-> *À noter, sans le conclure :* l'octet `0xCD` en cinquième position de la charge est aussi
-> l'identifiant interne que le driver OpenRGB associe à l'AULA F75
-> (`{ 0xCD, { "AULA F75", aula_f75_layout } }`). Mais `0xCD` **n'apparaît nulle part ailleurs
-> comme immédiat** dans l'image, et cette table n'a qu'un seul lecteur : rien dans le code ne relie
-> les deux. C'est une coïncidence à vérifier, pas un fait.
+> *Note, without drawing a conclusion:* byte `0xCD` in the fifth position of the payload is also the
+> internal identifier that the OpenRGB driver associates with the AULA F75
+> (`{ 0xCD, { "AULA F75", aula_f75_layout } }`). However, `0xCD` **appears nowhere else as an
+> immediate** in the image, and this table has only one reader: nothing in the code links the two.
+> It is a coincidence to check, not a fact.
 
-##### Le sous-code `7` est un envoi unique au démarrage
+##### Sub-code `7` is a one-shot transmission at startup
 
-`0x2B.5` n'est posé qu'à un seul endroit — `vec.reset`, en `0x917B` :
+`0x2B.5` is set in only one place — `vec.reset`, at `0x917B`:
 
 ```asm
-jb    0x2B.1, suite
+jb    0x2B.1, next
 lcall settings_restore        ; 0xA283
 setb  0x2A.1
 clr   0x2C.2
-setb  0x2B.5                  ; <-- arme l'envoi du sous-code 7
+setb  0x2B.5                  ; <-- arms sub-code 7 transmission
 ```
 
-Il est armé **juste après la restauration des réglages depuis la flash**, et effacé par celui des
-deux transports qui l'émet le premier (`hid_report_radio` en `0x47B0`, `hid_report_usb` en
-`0x6BDD`). Au démarrage, une fois ses réglages relus, le clavier les annonce **une fois** au module
-radio.
+It is armed **right after restoring settings from flash**, and cleared by whichever of the two
+transports sends it first (`hid_report_radio` at `0x47B0`, `hid_report_usb` at `0x6BDD`). At
+startup, once its settings have been read back, the keyboard announces them **once** to the radio
+module.
 
-### Le clavier a dix profils de remap en flash
+### The keyboard has ten remap profiles in flash
 
-La charge du sous-code 7 est `g_settings[0]`, c'est-à-dire l'**offset 0** du bloc de réglages —
-le champ le plus référencé du bloc (20 sites) et le seul que je n'avais pas identifié. Le C le
-donne :
+The payload of sub-code 7 is `g_settings[0]`, i.e. **offset 0** of the settings block — the most
+referenced field in the block (20 sites) and the only one I had not yet identified. The C code gives
+it away:
 
 ```asm
 a = [0x030D]
@@ -5526,492 +5523,490 @@ add  a, a                     ; x 2
 DPL = 0
 DPH = 0xD8 + a                ; DPTR = 0xD800 + index x 512
 ...
-mov  B, #4                    ; puis indexe par l'evenement x 4
+mov  B, #4                    ; then indexed by event x 4
 ```
 
-**`DPTR = 0xD800 + index × 512`**, puis un décalage de `événement × 4` : c'est exactement la forme
-du descripteur de remap de quatre octets. `XRAM 0x030D` est donc un **index de profil**, et chaque
-profil occupe une page de 512 octets à partir de `0xD800`.
+**`DPTR = 0xD800 + index × 512`**, followed by an offset of `event × 4`: that is the exact shape of
+the four-byte remap descriptor. `XRAM 0x030D` is therefore a **profile index**, and each profile
+occupies a 512-byte page starting at `0xD800`.
 
-| Profil | Adresse | Page | Octets non nuls |
+| Profile | Address | Page | Non-zero bytes |
 | --- | --- | --- | --- |
 | 0 | `0xD800` | 108 | 2 |
 | 1 | `0xDA00` | 109 | 2 |
 | 2–9 | `0xDC00`–`0xEBFF` | 110–117 | **0** |
 
-**La fin du profil 9 tombe sur `0xEBFF` — exactement la borne haute de la zone IAP.** Cette borne
-avait été établie indépendamment, par le `subb a, #0x76` de `iap_erase` qui rejette les pages
-au-delà de 117. Les deux se rejoignent au bit près : la zone réinscriptible est dimensionnée pour
-**page de réglages + palettes + keymap de base + dix profils**, sans un octet de rab.
+**The end of profile 9 lands on `0xEBFF` — the exact upper bound of the IAP area.** That bound had
+been established independently from the `subb a, #0x76` check in `iap_erase`, which rejects pages
+beyond 117. Both meet to the exact byte: the writable region is sized for **settings page +
+palettes + base keymap + ten profiles**, with not a single byte to spare.
 
-Le chemin profil est gardé par l'**offset 22** du bloc (`XRAM 0x0323`) :
+The profile path is gated by **offset 22** of the block (`XRAM 0x0323`):
 
 ```asm
-mov dptr, #0x0323 ; movx a, @dptr ; jz  ...   ; si 0 -> on saute le profil
+mov dptr, #0x0323 ; movx a, @dptr ; jz  ...   ; if 0 -> skip profile
 ```
 
-Dans le dump, offset 0 et offset 22 valent tous deux `0x00`, et huit des dix pages sont vierges :
-**aucun profil n'est configuré**, et c'est la table de remap de base en `0xCE00` qui s'applique.
+In the dump, offset 0 and offset 22 are both `0x00`, and eight of the ten pages are blank: **no
+profile is configured**, and the base remap table at `0xCE00` applies.
 
-> *Inféré :* que ces pages soient des tables de remap. *Établi :* l'adressage
-> `0xD800 + n × 512 + événement × 4`, la coïncidence exacte avec la borne IAP, et le fait que le
-> chemin soit désactivé sur cet exemplaire.
+> *Inferred:* that these pages are remap tables. *Established:* the `0xD800 + n × 512 + event × 4`
+> addressing, the exact match with the IAP upper bound, and the fact that the path is disabled on
+> this unit.
 
-### La trame d'état reçue — `02 06 …`
+### The received status frame — `02 06 …`
 
-C'est la branche `octet[0] == 2` de `euart0_parse`, la seule qui restait à lire. Elle est gardée
-deux fois avant tout traitement :
+This is the `byte[0] == 2` branch of `euart0_parse`, the last one remaining to be read. It is
+guarded twice before any processing:
 
 ```c
-if (frame[2] != 0)      return;    /* octet 2 impose a 0 */
-if ((frame[1] ^ 6) != 0) return;   /* octet 1 impose a 6 */
+if (frame[2] != 0)      return;    /* byte 2 required to be 0 */
+if ((frame[1] ^ 6) != 0) return;   /* byte 1 required to be 6 */
 sum = 0x55 - Σ frame[0..8];
-if (frame[9] != sum)     return;   /* somme sur NEUF octets */
+if (frame[9] != sum)     return;   /* checksum over NINE bytes */
 ```
 
-Dix octets, somme de contrôle sur les neuf premiers — ce qui confirme le format déjà relevé, en y
-ajoutant les deux contraintes. C'est la **réponse à la commande `0x06`** : requête et réponse
-portent le même code.
+Ten bytes, checksum over the first nine — confirming the format noted earlier while adding the two
+constraints. This is the **reply to command `0x06`**: request and reply carry the same code.
 
-| Octet | Destination | Rôle |
+| Byte | Destination | Role |
 | --- | --- | --- |
 | 3 | `0x0F41` | — |
-| 4 | `0x09BA` | code d'état — `0x0A` en filaire, `0x0B` autre, comparé au slot en Bluetooth |
-| 5 | `0x09AC` | **drapeau « connecté »** |
-| 6–7 | `0x02E7`:`0x02E6` | **jauge, 16 bits petit-boutiste** |
+| 4 | `0x09BA` | status code — `0x0A` when wired, `0x0B` otherwise, compared against slot in Bluetooth |
+| 5 | `0x09AC` | **"connected" flag** |
+| 6–7 | `0x02E7`:`0x02E6` | **battery gauge, 16-bit little-endian** |
 
-> **Correction.** J'avais lu la jauge comme `octet × 256` d'après le désassemblage. Le C montre
-> l'affectation finale : `0x02E6` (poids fort) reçoit `frame[7]`, `0x02E7` (poids faible) reçoit
-> `frame[6]`. C'est un **vrai champ 16 bits**, ce qui colle mieux aux seuils 737 / 781 / 846 / 912
-> et à une conversion sur 10 bits.
+> **Correction.** I had read the gauge as `byte × 256` from the disassembly. The C output shows the
+> final assignment: `0x02E6` (high byte) receives `frame[7]`, `0x02E7` (low byte) receives
+> `frame[6]`. It is a **true 16-bit field**, which fits the 737 / 781 / 846 / 912 thresholds and a
+> 10-bit ADC reading much better.
 
-Le traitement dépend ensuite du transport :
+Processing then depends on the active transport:
 
 ```c
 if (g_transport == 2) {                     /* Bluetooth */
-    if (g_bt_slot == 0 || g_bt_slot > 3) g_bt_slot = 1;   /* borne 1..3 */
-    if (frame[4] == slot && frame[5] != 0)  /* connecte */ ;
+    if (g_bt_slot == 0 || g_bt_slot > 3) g_bt_slot = 1;   /* clamped to 1..3 */
+    if (frame[4] == slot && frame[5] != 0)  /* connected */ ;
     else  cmd_01(g_bt_slot, 0);
 }
-else if (g_transport == 1) {                /* 2,4 GHz */
+else if (g_transport == 1) {                /* 2.4 GHz */
     if (frame[4] != 0 || frame[5] == 0) cmd_01(0, 0);
 }
-else if (g_transport == 0 && frame[4] != 0x0A) cmd_0E();   /* filaire */
+else if (g_transport == 0 && frame[4] != 0x0A) cmd_0E();   /* wired */
 ```
 
-**Le slot Bluetooth est borné à 1–3 par le code lui-même** — la plage n'était jusqu'ici qu'une
-déduction à partir des trois blocs de sélection.
+**The Bluetooth slot is clamped to 1–3 by the code itself** — until now that range had only been a
+deduction from the three selection blocks.
 
-Et la queue de la fonction relâche le handshake :
+And the function's tail releases the handshake:
 
 ```c
-if (_c_1 != 1) { P0CR &= 0xFB; P0_2 = 1; }   /* P0.2 en entree, relachee haute */
+if (_c_1 != 1) { P0CR &= 0xFB; P0_2 = 1; }   /* P0.2 as input, released high */
 ```
 
-### `0x801F` — la jauge de batterie, et la courbe `0xAF8D`
+### `0x801F` — the battery gauge, and the `0xAF8D` curve
 
-Appelée une fois toutes les six trames d'état. Elle convertit la valeur brute en pourcentage
-(`0x0151`, plafonné à 100, nul sous `0x02CB` = 715), puis **fait converger un pourcentage affiché**
-vers cette cible, un pas à la fois :
+Called once every six status frames. It converts the raw reading into a percentage (`0x0151`, capped
+at 100, zero below `0x02CB` = 715), and then **slews a displayed percentage** toward that target,
+one step at a time:
 
 ```c
-ecart = |affiche - cible|;
-delai = CODE[0xAF8D + ecart/10];
-if (++compteur >= delai) { compteur = 0; affiche += ±1; }
+delta = |displayed - target|;
+delay = CODE[0xAF8D + delta/10];
+if (++counter >= delay) { counter = 0; displayed += ±1; }
 ```
 
-`CODE:0xAF8D` fait **exactement douze octets** :
+`CODE:0xAF8D` is **twelve bytes long on the dot**:
 
 ```
 20 10 05 02 02 02 02 02 02 02 02 02
 ```
 
-Un **amortissement décélérant** : plus la valeur affichée approche du réel, plus elle ralentit.
+A **decelerating damping curve**: the closer the displayed value gets to the actual reading, the
+more it slows down.
 
-> Cette courbe était signalée comme inexpliquée depuis le début de l'analyse. Elle l'est.
+> This curve had been flagged as unexplained since the start of the analysis. Now it is explained.
 
-Écart de 0–9 → 20 tics par pas ; 10–19 → 10 ; 20–29 → 5 ; au-delà → 2.
+Delta of 0–9 → 20 ticks per step; 10–19 → 10; 20–29 → 5; above that → 2.
 
-> **Le listing ci-dessus est en DÉCIMAL, pas en hexadécimal**, contrairement à la plupart des
-> extraits de cette page. Le portage s'y est laissé prendre : il a « corrigé » la glose en 32, 16,
-> 5, 2 en supposant `0x20 0x10 0x05 0x02`, puis relu le dump. Les octets réels sont
-> `14 0a 05 02 02 02 02 02 02 02 02 02` — **20, 10, 5 puis 2**. La prose avait raison, la
-> correction était fausse, et le dump a tranché. Leçon retenue : sur cette page, vérifier la base
-> avant de corriger une glose.
+> **The listing above is in DECIMAL, not hexadecimal**, unlike most excerpts on this page. The port
+> got tripped up by this: it "corrected" the prose to 32, 16, 5, 2 assuming `0x20 0x10 0x05 0x02`,
+> then re-read the dump. The actual bytes are `14 0a 05 02 02 02 02 02 02 02 02 02` — **20, 10, 5,
+> then 2**. The prose was right, the correction was wrong, and the dump settled it. Lesson learned:
+> on this page, check the radix before correcting a gloss.
 
-Le sens de convergence est choisi par `0x26.0`, avec deux compteurs distincts (`0x08C5` à la
-montée, `0x08DC` à la descente) et un traitement particulier à 100 % selon `0x2D.3`.
-*Inféré :* `0x26.0` = charge en cours.
+The convergence direction is selected by `0x26.0`, using two separate counters (`0x08C5` when
+rising, `0x08DC` when falling) and special handling at 100% controlled by `0x2D.3`.
+*Inferred:* `0x26.0` = charging in progress.
 
-### La file d'émission radio — correction
+### The radio transmit queue — correction
 
-`0x0C57` n'est **pas** « un enregistrement de 28 octets par hôte apparié », comme je l'avais
-supposé. C'est une **file circulaire de six emplacements de 28 octets** :
+`0x0C57` is **not** "one 28-byte record per paired host", as I had assumed. It is a **six-slot
+ring buffer of 28-byte entries**:
 
 | | |
 | --- | --- |
-| Écriture | `g_radio_host_idx` (`XRAM 0x0307`) |
-| Lecture | `XRAM 0x030C` |
-| Bouclage | `if (idx > 5) idx = 0` — **six** emplacements |
-| Octet 0 de l'emplacement | type : **2** ou **3**, qui devient l'octet de commande |
+| Write index | `g_radio_host_idx` (`XRAM 0x0307`) |
+| Read index | `XRAM 0x030C` |
+| Wraparound | `if (idx > 5) idx = 0` — **six** slots |
+| Slot byte 0 | type: **2** or **3**, which becomes the command byte |
 
-À l'émission, le type décide de la taille :
+On transmit, the type determines the frame size:
 
 ```c
-if (type == 2) { memcpy(IDATA 0x34, slot, 0x1C); euart0_send(0x1E, 6); }  /* 28 o -> 30 */
-if (type == 3) { memcpy(IDATA 0x34, slot, 0x0B); euart0_send(0x0D, 6); }  /* 11 o -> 13 */
+if (type == 2) { memcpy(IDATA 0x34, slot, 0x1C); euart0_send(0x1E, 6); }  /* 28 B -> 30 */
+if (type == 3) { memcpy(IDATA 0x34, slot, 0x0B); euart0_send(0x0D, 6); }  /* 11 B -> 13 */
 ```
 
-Et les drapeaux qui remplissent la file sont **les mêmes** que ceux de la chaîne USB de
-`hid_report_usb` : `0x2A.4`, `0x27.0`, `0x2A.6` produisent un type 2 ; `0x2A.0` et `0x29.0` un
-type 3. Les deux transports se partagent la même source d'événements — ce qui referme le raccord
-décrit plus haut.
+And the flags that feed the queue are **the exact same ones** as in the USB chain of
+`hid_report_usb`: `0x2A.4`, `0x27.0`, and `0x2A.6` produce type 2; `0x2A.0` and `0x29.0` produce
+type 3. Both transports share the exact same event source — closing the plumbing described earlier.
 
 
-> **Portée.** `aula_rf.c` reprend la file telle quelle : six emplacements de 28 octets, index
-> d'écriture et de lecture séparés, l'octet 0 de l'emplacement servant d'octet de commande, et le
-> même découpage 28 → trame de 30 / 11 → trame de 13. Sans elle, toute frappe émise pendant qu'une
-> rafale était en vol, ou avec `P4.7` bas, était **perdue sans trace** : `rf_send_payload_long()`
-> rendait `false` et `kb.c` ignorait le retour.
+> **Ported.** `aula_rf.c` adopts the queue as-is: six 28-byte slots, separate read and write
+> indices, byte 0 of the slot serving as the command byte, and the same 28 → 30-byte frame / 11 →
+> 13-byte frame split. Without it, any keystroke emitted while a burst was in flight, or while
+> `P4.7` was low, was **silently dropped**: `rf_send_payload_long()` returned `false` and `kb.c`
+> ignored the return value.
 >
-> Le débordement écrase le plus ancien, comme en usine — son index d'écriture reboucle sans
-> consulter celui de lecture. Six emplacements représentent environ deux millisecondes de réserve à
-> 260 kbauds ; les atteindre signifie que le module ne répond plus, auquel cas la fraîcheur prime.
+> Overflow overwrites the oldest entry, just like the factory firmware — its write index wraps
+> around without checking the read index. Six slots represent roughly two milliseconds of buffer at
+> 260 kbaud; filling them means the module has stopped responding, in which case freshness wins.
 >
-> **Ce qui n'est PAS repris : l'extinction de relâchement de l'Air60.** Son pilote SPI martèle six
-> fois le dernier relâchement en alternant un rapport vide et un rapport portant `0x01` en
-> `keys[0]` (*ErrorRollOver*), pour qu'aucun des deux ne soit dédupliqué en aval. C'est un
-> contournement pour un bus sans acquittement applicatif, et **rien d'équivalent n'a été observé
-> dans le firmware d'usine du F75**. La file, elle, traite la même panne à la source : un
-> relâchement qui ne peut pas partir est mis en attente et rejoué. L'inventer par analogie aurait
-> été du code sans source.
+> **What is NOT carried over: the Air60's key-release hammering.** Its SPI driver hammers the final
+> key release six times, alternating between an empty report and a report carrying `0x01` in
+> `keys[0]` (*ErrorRollOver*), so that neither gets deduplicated downstream. That is a workaround
+> for a bus with no application-level acknowledgment, and **nothing equivalent was observed in the
+> F75's factory firmware**. The queue addresses the same failure mode at the source: a release that
+> cannot go out immediately is queued and replayed. Inventing release hammering by analogy would
+> have been ungrounded code.
 
-### Grammaire des trames — établie
+### Frame grammar — established
 
-Le format est décodé, et une commande l'est sémantiquement.
+The frame format is decoded, and one command is decoded semantically.
 
 ```
-[0] = 0x01        en-tête constant
-[1] = commande
-[2] = paramètre / sous-commande
-[3] = longueur de la charge utile
-[4..] = données
+[0] = 0x01        constant header
+[1] = command
+[2] = parameter / sub-command
+[3] = payload length
+[4..] = data
 ```
 
-#### Commande `0x09` — définir le nom Bluetooth
+#### Command `0x09` — set Bluetooth name
 
-Construite en `fcn @ 0xA307`, appelée **deux fois depuis `main()`** (`0x9148` et `0x914D`) :
+Built in `fcn @ 0xA307`, called **twice from `main()`** (`0x9148` and `0x914D`):
 
 ```asm
-mov @r0,#0x01     ; [0] en-tête
-mov @r0,#0x09     ; [1] commande
-mov @r0,#0x01     ; [2] profil  (0x00 dans la branche alternative, selon r7)
-mov @r0,#0x10     ; [3] longueur = 16
-mov dptr,#0xaf6d  ; copie 16 octets depuis la flash
+mov @r0,#0x01     ; [0] header
+mov @r0,#0x09     ; [1] command
+mov @r0,#0x01     ; [2] profile (0x00 in the alternate branch, depending on r7)
+mov @r0,#0x10     ; [3] length = 16
+mov dptr,#0xaf6d  ; copy 16 bytes from flash
 ```
 
-Et `0xAF6D` contient, en clair :
+And `0xAF6D` contains, in plain ASCII:
 
 ```
 AF6D  "AULA-F75 3.0 KB "
 AF7D  "AULA-F75 5.0 KB "
 ```
 
-**Les deux noms d'annonce Bluetooth du clavier**, 16 caractères chacun, complétés par une espace.
-Le paramètre `[2]` choisit lequel — d'où les deux appels depuis `main()`.
+**The keyboard's two Bluetooth advertising names**, 16 characters each, padded with a trailing
+space. Parameter `[2]` selects which one — hence the two calls from `main()`.
 
-#### La zone de données `0xAF6D` – `0xAF98`
+#### The `0xAF6D` – `0xAF98` data region
 
-Bloc entièrement délimité : le code reprend en `0xAF99`. **Quatre lecteurs**, tous identifiés par
-leurs chargements DPTR.
+Fully bounded block: code resumes at `0xAF99`. **Four readers**, all identified via their DPTR
+loads.
 
-| Adresse | Taille | Contenu | Lu par |
+| Address | Size | Content | Read by |
 | --- | --- | --- | --- |
-| `0xAF6D` | 16 o | `"AULA-F75 3.0 KB "` | `0xA321` — commande `0x09` |
-| `0xAF7D` | 16 o | `"AULA-F75 5.0 KB "` | `0xA348` — commande `0x09` |
-| `0xAF8D` | 12 o | `20, 10, 5, 2, 2, 2, 2, 2, 2, 2, 2, 2` | `0x808C` et `0x8114` |
+| `0xAF6D` | 16 B | `"AULA-F75 3.0 KB "` | `0xA321` — command `0x09` |
+| `0xAF7D` | 16 B | `"AULA-F75 5.0 KB "` | `0xA348` — command `0x09` |
+| `0xAF8D` | 12 B | `20, 10, 5, 2, 2, 2, 2, 2, 2, 2, 2, 2` | `0x808C` and `0x8114` |
 
-> **Portée.** `aula_rf.c` émet les deux noms au démarrage, un par passage de `rf_task()` dès que
-> `P4.7` autorise l'émission — le firmware d'usine, lui, les émet depuis `main` sans se demander si
-> le module écoute. Les seize octets sont recopiés du dump, espace de bourrage compris.
+> **Ported.** `aula_rf.c` sends both names at startup, one per `rf_task()` pass as soon as `P4.7`
+> allows transmission — whereas the factory firmware sends them from `main` without checking whether
+> the module is listening. All sixteen bytes are copied from the dump, trailing padding space
+> included.
 >
-> **Le slot Bluetooth est désormais persisté**, ce qu'il n'était pas : il retombait à 1 à chaque
-> démarrage. Il va dans `user_settings.rf_link`, libre sur ce clavier — ce champ porte ailleurs
-> l'encodage `rf_mode_t` de l'Air60, mais son unique consommateur, `restore_rf_link()` dans
-> `src/main.c`, est sous `#ifdef RF_ENABLED`, et `RF_ENABLED` et `RF_EUART0` sont mutuellement
-> exclusifs. Aucun champ n'est ajouté à `user_settings_t`, ce qui aurait invalidé les réglages
-> enregistrés des cinq cartes : `nvm.c` compare la longueur stockée et n'a aucune migration.
+> **The Bluetooth slot is now persisted**, which it previously was not: it used to reset to 1 on
+> every boot. It is stored in `user_settings.rf_link`, which is otherwise unused on this keyboard —
+> elsewhere that field holds the Air60's `rf_mode_t` encoding, but its sole consumer,
+> `restore_rf_link()` in `src/main.c`, is guarded by `#ifdef RF_ENABLED`, and `RF_ENABLED` and
+> `RF_EUART0` are mutually exclusive. No field is added to `user_settings_t`, which would have
+> invalidated saved settings across all five boards: `nvm.c` checks the stored struct length and has
+> no migration path.
 >
-> On y range le **slot**, pas le lien : sur le F75 le transport vient du sélecteur matériel, et le
-> slot est la seule chose que le sélecteur ne dit pas.
+> We store the **slot** there, not the link mode: on the F75 the transport comes from the physical
+> mode switch, and the slot is the only thing the switch does not tell us.
 
-La table de 12 octets est une **courbe d'accélération à seuil dégressif** :
+The 12-byte table is a **decreasing-threshold acceleration curve**:
 
 ```asm
-mov  B, #0x0A ; div ab      ; index = (valeur - X) / 10
-mov  dptr, #0xaf8d ; movc   ; seuil = table[index]
-movx a, @dptr               ; compteur (XRAM 0x08C5, ou 0x08DC pour l'autre lecteur)
-clr c ; subb a, r7 ; jc     ; compteur < seuil -> sortie
-clr a ; movx @dptr, a       ; sinon remise a zero
-inc  0x17                   ; et avance d'un cran
+mov  B, #0x0A ; div ab      ; index = (value - X) / 10
+mov  dptr, #0xaf8d ; movc   ; threshold = table[index]
+movx a, @dptr               ; counter (XRAM 0x08C5, or 0x08DC for the other reader)
+clr c ; subb a, r7 ; jc     ; counter < threshold -> exit
+clr a ; movx @dptr, a       ; otherwise reset to zero
+inc  0x17                   ; and advance by one step
 ```
 
-Il faut **20 passages pour le premier cran, puis 10, puis 5, puis 2** indéfiniment. Deux compteurs
-distincts (`0x08C5` et `0x08DC`) partagent la même courbe. Ce qu'elle pilote au final n'est pas
-établi — il faudrait suivre les consommateurs de `IDATA 0x17`.
+It takes **20 passes for the first step, then 10, then 5, then 2** indefinitely. Two distinct
+counters (`0x08C5` and `0x08DC`) share the same curve. What it ultimately drives is not established
+here — one would need to trace the consumers of `IDATA 0x17`.
 
-*Note : les octets `30 67 27 c2 67 53 a9 fe` qui suivent la table ne sont pas des données mais du
-**code** — `30 67 27` désassemble en `jnb 0x2c.7, 0xafc3`, début de `fcn.0000AF99`. Ils
-ressemblaient à une adresse MAC Bluetooth ; ils n'en sont pas.*
+*Note: the bytes `30 67 27 c2 67 53 a9 fe` following the table are not data but **code** —
+`30 67 27` disassembles to `jnb 0x2c.7, 0xafc3`, the start of `fcn.0000AF99`. They looked like a
+Bluetooth MAC address; they are not.*
 
-#### Autres commandes repérées
+#### Other spotted commands
 
-| Cmd | Où | Forme | Interprétation |
+| Cmd | Where | Shape | Interpretation |
 | --- | --- | --- | --- |
-| `0x04` | `0xB084` | `01 04 <octet>` | un paramètre lu en XRAM `0x0EF6` |
-| `0x06` | `0xED41` | `01 06 00 00 00`, longueur 6 | charge nulle — sonde ou requête d'état ? |
-| `0x08` | `0xB09E` | longueur 23 | remplit depuis IDATA `0x48` |
-| `0x09` | `0xA307` | longueur 32 | **nom Bluetooth** (ci-dessus) |
+| `0x04` | `0xB084` | `01 04 <byte>` | one parameter read from XRAM `0x0EF6` |
+| `0x06` | `0xED41` | `01 06 00 00 00`, length 6 | zero payload — probe or status request? |
+| `0x08` | `0xB09E` | length 23 | filled from IDATA `0x48` |
+| `0x09` | `0xA307` | length 32 | **Bluetooth name** (above) |
 
-*Correction : une version antérieure de ce document attribuait `0x05` au site `0xED53`. C'est
-faux — `0xED53` est l'appel d'émission, et la trame qu'il envoie porte la commande `0x06`,
-construite juste avant en `0xED41`.*
+*Correction: an earlier version of this document attributed `0x05` to site `0xED53`. That is
+wrong — `0xED53` is the transmit call, and the frame it sends carries command `0x06`, built right
+before at `0xED41`.*
 
-*Et la piste « HCI over UART » est écartée : le SDK BK3432 décrit bien un transport HCI pour son
-bootloader, mais `01 09 01 10` ne parse pas comme du HCI (l'opcode serait invalide). C'est un
-protocole propriétaire — dont la grammaire est maintenant connue.*
+*And the "HCI over UART" lead is ruled out: the BK3432 SDK does describe an HCI transport for its
+bootloader, but `01 09 01 10` does not parse as HCI (the opcode would be invalid). This is a
+proprietary protocol — whose grammar is now known.*
 
-### Deux voies pour obtenir la sémantique
+### Two paths to obtain the semantics
 
-#### A. Sniffer la liaison EUART0 — **recommandé, et SANS FLASHER**
+#### A. Sniffing the EUART0 link — **recommended, and WITHOUT FLASHING**
 
-**Aucun flashage. Le clavier tourne avec son firmware d'usine.** On écoute passivement le fil entre
-le 8051 et le BK3632. Risque nul pour l'appareil.
+**No flashing at all. The keyboard runs its factory firmware.** We passively tap the wire between
+the 8051 and the BK3632. Zero risk to the device.
 
-##### Où sonder
+##### Where to probe
 
-Le datasheet donne les broches d'EUART0 :
+The datasheet gives the EUART0 pins:
 
-| Signal | Broche | Sens |
+| Signal | Pin | Direction |
 | --- | --- | --- |
 | **TXD** | **P5.5** | 8051 → BK3632 |
 | **RXD** | **P5.6** | BK3632 → 8051 |
 
-✅ **Remappage écarté par vérification.** Le SH68F90 peut déplacer son EUART0 sur `P3.3`/`P3.4`
-(`TXD_M`/`RXD_M`) en écrivant `0x5A` dans le registre **`MAPPING` (SFR `0x8A`)**, dont la valeur de
-reset est `0x00`. Une recherche de toute écriture vers `0x8A` — `mov`, `anl`, `orl` — dans
-l'intégralité du firmware d'usine ne renvoie **aucun résultat**. `MAPPING` reste donc à `0x00` et
-l'UART reste sur ses broches par défaut.
+✅ **Pin remapping ruled out by verification.** The SH68F90 can relocate its EUART0 to `P3.3`/`P3.4`
+(`TXD_M`/`RXD_M`) by writing `0x5A` to the **`MAPPING` register (SFR `0x8A`)**, whose reset value
+is `0x00`. Searching the entire factory firmware for any write to `0x8A` — `mov`, `anl`, `orl` —
+returns **zero hits**. `MAPPING` therefore stays at `0x00` and the UART remains on its default pins.
 
-C'était un contrôle nécessaire : `P3.3` et `P3.4` portent aussi `PWM03` et `PWM04`, soit les canaux
-12 et 13 du rétroéclairage (ligne 4, rouge et vert). Un remappage aurait signifié que ces broches
-sont partagées, et aurait invalidé à la fois le point de sonde UART et la table RGB.
-| handshake | `P0.2` | mis à 0 avant chaque trame, relâché à la fin (optionnel, 3ᵉ voie) |
+This was a necessary check: `P3.3` and `P3.4` also carry `PWM03` and `PWM04`, which are backlight
+channels 12 and 13 (row 4, red and green). Remapping would have meant those pins were shared,
+invalidating both the UART probe point and the RGB table.
+| handshake | `P0.2` | pulled low before each frame, released at the end (optional 3rd channel) |
 
-⚠️ **Correction** : une lecture antérieure de ce document décrivait le lien comme *half-duplex avec
-la direction sur `P0.2`*. C'est faux. `TXD` et `RXD` sont **deux broches distinctes** — le lien est
-full-duplex. `P0.2` est un signal d'attention vers le BK3632, pas un sélecteur de direction :
-`clr P0.2` + `P0CR |= 0x04` (sortie) avant l'émission (`0xAB13`), puis `P0CR &= ~0x04` (entrée) +
-`setb P0.2` en fin de trame, dans l'ISR (`0xA580`).
+⚠️ **Correction**: an earlier version of this document described the link as *half-duplex with
+direction on `P0.2`*. That is wrong. `TXD` and `RXD` are **two separate pins** — the link is
+full-duplex. `P0.2` is an attention signal to the BK3632, not a direction selector:
+`clr P0.2` + `P0CR |= 0x04` (output) before transmitting (`0xAB13`), then `P0CR &= ~0x04` (input) +
+`setb P0.2` at end of frame, inside the ISR (`0xA580`).
 
-Conséquence pratique heureuse : **deux voies d'analyseur capturent les deux directions séparément**,
-sans démultiplexage.
+A welcome practical consequence: **two analyzer channels capture both directions separately**, with
+no demultiplexing needed.
 
-##### Comment configurer l'analyseur
+##### How to configure the analyzer
 
-Configuration relevée dans le firmware d'usine (`0xB1CE`) :
+Configuration found in the factory firmware (`0xB1CE`):
 
 ```asm
-mov SCON,  #0x50   ; mode 1 : asynchrone, 10 bits (1 start, 8 data, 1 stop) = 8N1, REN=1
+mov SCON,  #0x50   ; mode 1: asynchronous, 10 bits (1 start, 8 data, 1 stop) = 8N1, REN=1
 mov SBRTH, #0xFF   ; SBRTEN=1, SBRT[14:8]=0x7F
 mov SBRTL, #0xFB   ; SBRT[7:0]=0xFB      -> SBRT = 0x7FFB = 32763
 mov SFINE, #0x0C   ; BFINE = 12
 ```
 
-Formule du datasheet : `Baud = Fsys / (16 × (32768 − SBRT) + BFINE)`
+Datasheet formula: `Baud = Fsys / (16 × (32768 − SBRT) + BFINE)`
 
-→ `Fsys / (16 × 5 + 12)` = **`Fsys / 92`** = **260 870 baud**.
+→ `Fsys / (16 × 5 + 12)` = **`Fsys / 92`** = **260,870 baud**.
 
-**`Fsys` = 24 MHz, confirmé par recoupement.** Le driver UART de SMK
-(`platform/sh68f90/uart.c`) implémente la même formule ; avec `FREQ_SYS = 24000000` et
-`UART_BPS = 260870` il calcule `SBRT_INT = 5` → `SBRT = 32763 = 0x7FFB` → `SBRTH = 0xFF`,
-`SBRTL = 0xFB`, et `SFINE = 24000000/260870 − 80 = 12 = 0x0C`. **Les trois registres du firmware
-d'usine, à l'identique.** Une valeur de `Fsys` différente ne les reproduirait pas.
+**`Fsys` = 24 MHz, confirmed by cross-check.** SMK's UART driver (`platform/sh68f90/uart.c`)
+implements the exact same formula; with `FREQ_SYS = 24000000` and `UART_BPS = 260870` it computes
+`SBRT_INT = 5` → `SBRT = 32763 = 0x7FFB` → `SBRTH = 0xFF`, `SBRTL = 0xFB`, and
+`SFINE = 24000000/260870 − 80 = 12 = 0x0C`. **All three registers match the factory firmware to the
+bit.** A different `Fsys` value would not reproduce them.
 
-**En pratique, ne pas se fier à ce calcul :** un analyseur logique mesure la largeur du bit le plus
-court et en déduit le débit. PulseView (sigrok) et Saleae le font automatiquement. Le calcul sert à
-vérifier que la mesure est plausible.
+**In practice, do not rely solely on this calculation:** a logic analyzer measures the width of the
+shortest bit and deduces the baud rate. PulseView (sigrok) and Saleae do this automatically. The
+calculation serves to verify that the measurement makes sense.
 
-##### Avec quoi capturer — l'analyseur logique n'est pas obligatoire
+##### What to capture with — a logic analyzer is not mandatory
 
-| Outil | Coût | Ce qu'il donne | Limites |
+| Tool | Cost | What it gives | Limitations |
 | --- | --- | --- | --- |
-| **Adaptateur USB-TTL FTDI** | ~3 € | le flux UART décodé, directement | une voie par adaptateur ; **3,3 V obligatoire** |
-| Analyseur logique | ~10 € | les deux voies + le timing exact + `P0.2` | — |
-| Arduino / Pi Pico | ~5 € | idem FTDI, avec horodatage et débit libre | à programmer |
-| **USBPcap + Wireshark** | **0 €** | le protocole **hôte ↔ clavier** (Report ID 6) | **pas** le lien 8051 ↔ BK3632 |
+| **FTDI USB-TTL adapter** | ~€3 | decoded UART stream, directly | one channel per adapter; **3.3 V mandatory** |
+| Logic analyzer | ~€10 | both channels + exact timing + `P0.2` | — |
+| Arduino / Pi Pico | ~€5 | same as FTDI, with timestamps and arbitrary baud rate | requires programming |
+| **USBPcap + Wireshark** | **€0** | the **host ↔ keyboard** protocol (Report ID 6) | **not** the 8051 ↔ BK3632 link |
 
-**L'adaptateur USB-TTL est le meilleur rapport effort/résultat**, et beaucoup de gens en ont déjà un.
+**A USB-TTL adapter offers the best effort-to-result ratio**, and many people already have one on
+hand.
 
-Le débit non standard n'est pas un obstacle avec une puce **FTDI** : son générateur fait
-`baud = 3 000 000 / diviseur` avec un diviseur fractionnaire par 1/8. Pour 260 870 le diviseur vaut
-`11,5` — exactement réalisable. Pour 130 435 il vaut `23` — exact aussi. Sous Linux, `stty -F
-/dev/ttyUSB0 260870` suffit. Un CH340 est moins fiable sur les débits exotiques.
+The non-standard baud rate is not an obstacle with an **FTDI** chip: its baud generator computes
+`baud = 3,000,000 / divisor` with a fractional divisor in 1/8 increments. For 260,870 baud the
+divisor is `11.5` — achievable with zero error. For 130,435 baud it is `23` — also exact. On Linux,
+`stty -F /dev/ttyUSB0 260870` is all it takes. A CH340 is less reliable at exotic baud rates.
 
-⚠️ **Câblage, en RÉCEPTION SEULE :**
+⚠️ **Wiring, RECEIVE-ONLY:**
 
-- `RX` de l'adaptateur sur `P5.5` (ou `P5.6`), **masse commune** avec le clavier.
-- **Ne jamais connecter le `TX` de l'adaptateur.** Y injecter des données perturberait le lien, et
-  un adaptateur 5 V détruirait une entrée 3,3 V.
-- Un seul adaptateur ne capture qu'une direction. Deux adaptateurs, ou deux passes successives.
+- Adapter `RX` on `P5.5` (or `P5.6`), **common ground** with the keyboard.
+- **Never connect the adapter's `TX`.** Injecting data there would disrupt the link, and a 5 V
+  adapter would destroy a 3.3 V input.
+- A single adapter only captures one direction. Use two adapters, or two successive passes.
 
-##### Et l'option sans aucun matériel
+##### And the zero-hardware option
 
-**USBPcap + Wireshark** (Windows) ou `usbmon` + `tshark` (Linux) capturent le trafic USB entre le
-PC et le clavier — **gratuitement, sans rien souder**. Mais c'est une **couche différente** : on y
-voit le canal HID Report ID 6 (`0x04` write config, `0x84` read, `0x0a` table de couleurs…), pas
-les trames EUART0 vers le BK3632.
+**USBPcap + Wireshark** (Windows) or `usbmon` + `tshark` (Linux) capture USB traffic between the PC
+and the keyboard — **for free, with zero soldering**. However, that is a **different layer**: it
+shows the HID Report ID 6 channel (`0x04` write config, `0x84` read, `0x0a` color table…), not the
+EUART0 frames going to the BK3632.
 
-C'est donc l'outil pour finir de documenter le **protocole de configuration** — celui de l'article
-de xevrion, celui qui donne le RGB et le remap. Ce n'est pas celui du sans-fil. Les deux chantiers
-sont distincts, et celui-là ne coûte rien.
+That makes it the right tool for finishing the documentation of the **configuration protocol** — the
+one from xevrion's article, covering RGB and key remapping. It is not the wireless protocol. The two
+efforts are distinct, and this one costs nothing.
 
-##### Quoi capturer
+##### What to capture
 
-Ce qu'on sait déjà chercher (voir le tableau du transport plus haut) : trames commençant par
-`0x01`, deuxième octet = commande (`0x04`, `0x05`, `0x08`, `0x09` observés), longueur variable de
-6 à 32 octets.
+What we already know to look for (see the transport table above): frames starting with `0x01`,
+second byte = command (`0x04`, `0x05`, `0x08`, `0x09` observed), variable length from 6 to 32 bytes.
 
-Séquences à enregistrer, chacune isolément :
+Sequences to record, each in isolation:
 
-1. Branchement USB puis bascule en Bluetooth — la commande `0x09` part de `main()` (`0x9148`), donc
-   quelque chose passe dès l'initialisation.
-2. Appairage d'un hôte Bluetooth.
-3. Bascule vers 2.4 G.
-4. Quelques appuis de touches dans chaque mode — pour isoler la trame « rapport HID ».
-5. Mise en veille et réveil.
+1. Plugging in over USB then switching to Bluetooth — command `0x09` is sent from `main()`
+   (`0x9148`), so traffic goes out right at initialization.
+2. Pairing a Bluetooth host.
+3. Switching to 2.4 GHz.
+4. A few key presses in each mode — to isolate the "HID report" frame.
+5. Entering sleep and waking up.
 
-En croisant ces captures avec les cinq sites d'émission déjà localisés (`0x46C2` 30 o, `0x4730`
-13 o, `0xA376` 32 o, `0xB0B8` 23 o, `0xED53` 6 o), on relie chaque commande à son déclencheur.
+Cross-referencing these captures against the five transmit sites already located (`0x46C2` 30 B,
+`0x4730` 13 B, `0xA376` 32 B, `0xB0B8` 23 B, `0xED53` 6 B) links each command to its trigger.
 
 
-Le transport est déjà caractérisé (ci-dessus). Il suffit d'un analyseur logique sur la ligne de
-données du lien 8051 ↔ BK3632, en manipulant le clavier : bascule USB / BT / 2.4 G, appairage,
-appuis de touches. Les trames font 6 octets, commencent par `0x01`, et la broche `P0.2` indique le
-sens — donc on sait quoi chercher et comment séparer les deux directions.
+The transport is already characterized (above). All it takes is a logic analyzer on the data line of
+the 8051 ↔ BK3632 link while operating the keyboard: toggling USB / BT / 2.4 GHz, pairing, pressing
+keys. Frames are 6 bytes long, start with `0x01`, and pin `P0.2` indicates activity — so we know
+what to look for and how to separate the two directions.
 
-**Coût : un analyseur logique et un point de test.** Aucun flashage, aucun dessoudage, aucun
-nouveau binaire à désassembler. C'est la voie qui donne le protocole *tel qu'il est réellement
-parlé*.
+**Cost: a logic analyzer and a test point.** No flashing, no desoldering, no new binary to
+disassemble. This is the path that yields the protocol *as it is actually spoken*.
 
-#### A-bis. Sonder le BK3632 depuis un firmware maison — sans matériel externe
+#### A-bis. Probing the BK3632 from custom firmware — no external hardware
 
-Idée : au lieu d'écouter le fil de l'extérieur, faire tourner **notre propre firmware** sur le 8051
-et lui faire parler au BK3632, en journalisant tout sur la console USB de SMK.
+Idea: instead of tapping the wire from outside, run **our own firmware** on the 8051 and have it
+talk to the BK3632, logging everything over SMK's USB console.
 
-**⚠️ L'écoute passive ne marcherait PAS.** Si notre firmware tourne, celui d'usine ne tourne pas :
-plus personne n'envoie de commandes, et le BK3632 est un esclave qui attend. On n'entendrait rien.
+**⚠️ Passive listening would NOT work.** If our firmware is running, the factory firmware is not:
+nobody is sending commands anymore, and the BK3632 is a slave waiting for instructions. We would
+hear nothing.
 
-**Ce qui marche, c'est le sondage actif.** On connaît le format des trames et les codes de
-commande, relevés dans le firmware d'usine. Notre firmware peut donc **rejouer les séquences
-exactes** que l'usine construit et journaliser les réponses. Le BK3632 réel sert d'oracle.
+**What does work is active probing.** We know the frame format and command codes from the factory
+firmware. Our firmware can therefore **replay the exact sequences** that the factory firmware builds
+and log the replies. The physical BK3632 serves as an oracle.
 
-##### Tout l'outillage existe déjà dans SMK
+##### All the tooling already exists in SMK
 
-| Brique | Où |
+| Component | Where |
 | --- | --- |
-| Driver UART (init, `putc`, `getc`) | `src/platform/sh68f90/uart.c` |
-| Console de debug sur USB HID | `src/smk/console.c`, `dprintf()` |
-| Lecteur côté hôte | `tools/smk-console` |
-| Retour en ISP par USB | `src/smk/usb.c:442` → `isp_jump()` |
+| UART driver (init, `putc`, `getc`) | `src/platform/sh68f90/uart.c` |
+| Debug console over USB HID | `src/smk/console.c`, `dprintf()` |
+| Host-side reader | `tools/smk-console` |
+| Return to ISP over USB | `src/smk/usb.c:442` → `isp_jump()` |
 
-Réglages à poser : `UART_BPS = 260870`, `UART_RX_EN = 1`, et la console en sortie USB (pas UART,
-puisque l'UART sert à parler au BK3632).
+Settings to configure: `UART_BPS = 260870`, `UART_RX_EN = 1`, and console output routed to USB
+(not UART, since the UART is used to talk to the BK3632).
 
-##### Séquences à rejouer
+##### Sequences to replay
 
-Les cinq sites d'émission repérés donnent les trames à reproduire, avec leur longueur :
+The five located transmit sites give the frames to reproduce, along with their lengths:
 
-| Site | Longueur | Commande | Déclencheur connu |
+| Site | Length | Command | Known trigger |
 | --- | --- | --- | --- |
-| `0xA376` | 32 | `0x09` | appelé depuis `main()` (`0x9148`) — init du lien |
+| `0xA376` | 32 | `0x09` | called from `main()` (`0x9148`) — link init |
 | `0x46C2` | 30 | ? | — |
 | `0xB0B8` | 23 | `0x08` | — |
 | `0x4730` | 13 | ? | — |
 | `0xED53` | 6 | `0x05` | — |
 
-Le contenu exact des charges utiles se lit dans le désassemblage de chaque site.
+The exact payload contents can be read from the disassembly at each site.
 
-##### Profil de risque — **il faut flasher**
+##### Risk profile — **flashing required**
 
-C'est la seule voie de cette section qui l'exige. Ce qui l'atténue :
+This is the only path in this section that requires flashing. Mitigating factors:
 
-- **Firmware minimal** : USB + UART seulement, ni matrice, ni RGB, ni veille. Moins de code, moins
-  de chances de se bloquer avant que l'USB monte.
-- **Deux retours ISP vérifiés sur cet appareil** : le bootloader teste `0xEFFB` au reset
-  (`0xF024`), et `isp_jump()` fonctionne via l'entrée magique `0xFF00`.
-- **Image d'usine disponible** : `assets/f75_full.bin`, MD5 relevé, restaurable.
+- **Minimal firmware**: USB + UART only, no matrix, no RGB, no sleep. Less code means fewer chances
+  of hanging before USB enumerates.
+- **Two ISP recovery paths verified on this unit**: the bootloader checks `0xEFFB` at reset
+  (`0xF024`), and `isp_jump()` works via the magic entry point `0xFF00`.
+- **Factory image on hand**: `assets/f75_full.bin`, MD5 recorded, restorable.
 
-Ce qui reste : **`sinowisp write` n'a jamais été testé sur ce modèle** (case décochée dans
-l'issue #96), et pas de programmateur externe de secours.
+Remaining risks: **`sinowisp write` has never been tested on this model** (unchecked box in issue
+#96), and there is no external backup programmer.
 
-##### Comparaison
+##### Comparison
 
-| | Sonde externe (USB-TTL / analyseur) | Firmware maison |
+| | External probe (USB-TTL / analyzer) | Custom firmware |
 | --- | --- | --- |
-| Flashage | **aucun** | **requis** |
-| Matériel | adaptateur ~3 € + 2 points de soudure | aucun |
-| Observe | le dialogue **réel** de l'usine | seulement ce qu'on provoque |
-| Risque | nul | brique possible |
+| Flashing | **none** | **required** |
+| Hardware | ~€3 adapter + 2 solder points | none |
+| Observes | the **actual** factory dialogue | only what we trigger |
+| Risk | zero | potential brick |
 
-**Les deux sont complémentaires.** La sonde externe montre ce que l'usine dit *vraiment*, dans
-l'ordre et le contexte. Le firmware maison permet d'*interroger* le BK3632 librement, y compris sur
-des commandes que l'usine n'émet jamais. Commencer par la sonde externe reste plus sage : elle
-donne la vérité de terrain sans rien risquer.
+**The two approaches are complementary.** An external probe shows what the factory firmware *truly*
+says, in order and in context. Custom firmware lets us *query* the BK3632 freely, including with
+commands the factory firmware never sends. Starting with the external probe remains wiser: it yields
+ground truth at zero risk.
 
-#### La voie ICP du BYK916 de référence — **ne s'applique PAS au F75**
+#### The reference BYK916 ICP path — **does NOT apply to the F75**
 
-Les notes de reverse [`swiftgeek/hykker-re`, issue #4](https://github.com/swiftgeek/hykker-re/issues/4)
-documentent les conventions du BYK916 et signalent une piste séduisante :
+The reverse-engineering notes in [`swiftgeek/hykker-re`, issue #4](https://github.com/swiftgeek/hykker-re/issues/4)
+document the BYK916 conventions and point out an appealing lead:
 
 > `CSNA` / `CLKA` / `MOSIA` / `MISOA` — SPI/JTAG interface for BK3632, **could be used for ICP/ISP of
 > flash in BK3632**.
 
-Sur la conception de référence, le 8051 est donc câblé au BK3632 par SPI, ce qui offrirait un accès
-ICP tout fait. **Vérifié sur ce clavier : ce n'est pas le cas.**
+On the reference design, the 8051 is wired to the BK3632 over SPI, which would provide ready-made
+ICP access. **Verified on this keyboard: that is not the case.**
 
-Broches SPI par défaut du SH68F90, d'après le datasheet :
+Default SPI pins on the SH68F90, per the datasheet:
 
-| Signal | Broche |
+| Signal | Pin |
 | --- | --- |
 | `SCK` | `P7.4` |
-| `SS` | `P7.3` (aussi `INT45`) |
-| `MOSI` | `P7.2` (aussi `INT44`) |
-| `MISO` | `P7.1` (aussi `INT41`) |
+| `SS` | `P7.3` (also `INT45`) |
+| `MOSI` | `P7.2` (also `INT44`) |
+| `MISO` | `P7.1` (also `INT41`) |
 
-Or sur le F75, **`P7.1`, `P7.2` et `P7.3` sont les lignes de matrice R1, R2 et R3** — établi par
-quatre sources concordantes (table de scan `0x72F4`, parking de veille `0x006E`, init GPIO `0xA7EC`,
-routine de lecture `0x73A6`). Ces broches portent le clavier, pas un bus SPI.
+Yet on the F75, **`P7.1`, `P7.2`, and `P7.3` are matrix rows R1, R2, and R3** — established by four
+independent sources (scan table `0x72F4`, sleep parking `0x006E`, GPIO init `0xA7EC`, read routine
+`0x73A6`). Those pins carry the keyboard matrix, not an SPI bus.
 
-Et le firmware le confirme lui-même : `fcn.0000EFA6`, appelée depuis l'init `fcn.0000ECC5`, fait
+And the firmware confirms this itself: `fcn.0000EFA6`, called from init `fcn.0000ECC5`, executes
 
 ```asm
 clr a ; mov SPCON, a ; mov SPSTA, a ; ret
 ```
 
-soit **la désactivation explicite du périphérique SPI au démarrage**. Recherche exhaustive :
-aucun autre accès à `SPCON`, `SPSTA` ou `SPDAT` dans tout le firmware.
+which **explicitly disables the SPI peripheral at startup**. Exhaustive search: there is no other
+access to `SPCON`, `SPSTA`, or `SPDAT` anywhere in the firmware.
 
-**Conclusion : le F75 relie son BK3632 par EUART0 uniquement.** L'ICP via le SPI du 8051 est fermé —
-les broches sont prises par la matrice.
+**Conclusion: the F75 connects to its BK3632 via EUART0 only.** ICP through the 8051's SPI bus is a
+dead end — those pins are taken by the matrix.
 
-*(Les broches SPI/JTAG propres au BK3632 — `GPIOA[3..7]` selon le datasheet BK3633 — existent
-évidemment toujours sur la puce. Mais rien ne dit qu'elles soient routées vers des pastilles
-accessibles sur ce PCB.)*
+*(The BK3632's own SPI/JTAG pins — `GPIOA[3..7]` according to the BK3633 datasheet — obviously still
+exist on the package. But nothing says they are routed to accessible pads on this PCB.)*
 
-### Au passage : le câblage RGB de référence confirme l'inversion
+### In passing: the reference RGB wiring confirms the inversion
 
-La même issue liste le câblage RGB « de référence » du BYK916 :
+The same issue lists the BYK916 "reference" RGB wiring:
 
 ```
 Row0: VR0->P4_1  VG0->P6_0  VB0->P4_0
@@ -6022,22 +6017,22 @@ Row4: VR4->P4_5  VG4->P6_4  VB4->P4_6
 Row5: VR5->P4_3  VG5->P6_5  VB5->P4_4
 ```
 
-C'est **exactement** le brochage du NuPhy Air60 (`RGB_R0R P0_4`, `RGB_R0G P6_1`, `RGB_R0B P0_3`, …),
-à un décalage de ligne près. L'Air60 suit donc la conception de référence.
+That is **the exact pinout** of the NuPhy Air60 (`RGB_R0R P0_4`, `RGB_R0G P6_1`, `RGB_R0B P0_3`, …),
+up to a one-row shift. The Air60 therefore follows the reference design.
 
-Le F75, lui, met ses **colonnes de matrice sur P6/P5/P4** et ses **18 canaux RGB sur les broches PWM
-P1/P2/P3**. C'est la topologie inverse déjà documentée plus haut — et cette issue en fournit la
-confirmation externe : le F75 s'écarte délibérément du design de référence.
+The F75, by contrast, places its **matrix columns on P6/P5/P4** and its **18 RGB channels on the
+P1/P2/P3 PWM pins**. That is the inverted topology already documented earlier — and this issue
+provides external confirmation: the F75 deliberately departs from the reference design.
 
-#### B-bis. Le bootloader UART Beken — la voie la plus prometteuse pour un dump
+#### B-bis. The Beken UART bootloader — the most promising path for a dump
 
-⚠️ **On n'a pas le firmware du BK3632.** Il est dans la puce ; l'obtenir *est* le but de cette
-section. Ce qui suit vient du SDK **BK3432** (`Cdreamyao/tuya_ble_sdk_Demo_Project_bk3432`), pas
-d'un dump.
+⚠️ **We do not have the BK3632 firmware.** It sits inside the chip; obtaining it *is* the goal of
+this section. What follows comes from the **BK3432** SDK
+(`Cdreamyao/tuya_ble_sdk_Demo_Project_bk3432`), not from a dump.
 
-##### Le BIM expose un bootloader UART
+##### The BIM exposes a UART bootloader
 
-`bk3432/projects/bim/app/bim_uart.h` déclare :
+`bk3432/projects/bim/app/bim_uart.h` declares:
 
 ```c
 typedef enum _UART_CMD_STATE {
@@ -6054,382 +6049,379 @@ typedef enum _UART_CMD_STATE {
 #define STAY_ROM_CMD       0xAA
 ```
 
-Trame : `HEAD, OPCODE_ONE, OPCODE_TWO, LENGTH, CMD, [payload]`, avec des sous-états dédiés aux
-commandes flash.
+Frame layout: `HEAD, OPCODE_ONE, OPCODE_TWO, LENGTH, CMD, [payload]`, with dedicated sub-states for
+flash commands.
 
-##### Ce sont les MÊMES codes que le BK7231
+##### These are the EXACT SAME codes as the BK7231
 
-`BK7231GUIFlashTool/BK7231Flasher/Flashers/BK7231Flasher.cs` construit ses trames ainsi :
+`BK7231GUIFlashTool/BK7231Flasher/Flashers/BK7231Flasher.cs` builds its frames as follows:
 
 ```csharp
 ret[0] = 0x01; ret[1] = 0xe0; ret[2] = 0xfc; ret[3] = len; ret[4] = cmd;
 enum CommandCode { LinkCheck = 0, ..., CheckCRC = 0x10, SetBaudRate = 0x0f, ... }
 ```
 
-`HEAD = 0x01`, `OPCODE_ONE = 0xE0`, `OPCODE_TWO = 0xFC` — exactement les états nommés du BK3432.
-Et `LinkCheck = 0x00`, `SetBaudRate = 0x0F`, `CheckCRC = 0x10` **coïncident avec les `#define` du
-BIM**.
+`HEAD = 0x01`, `OPCODE_ONE = 0xE0`, `OPCODE_TWO = 0xFC` — matching the named states of the BK3432.
+And `LinkCheck = 0x00`, `SetBaudRate = 0x0F`, `CheckCRC = 0x10` **match the BIM `#define`s**.
 
-**La famille Beken partage donc son protocole de bootloader UART.**
+**The Beken family therefore shares its UART bootloader protocol.**
 
-##### Pourquoi cela change la voie B
+##### Why this changes path B
 
-| | Voie SPI (décrite plus haut) | Voie UART |
+| | SPI path (described below) | UART path |
 | --- | --- | --- |
-| Matériel | CH341 (~5 €) | **adaptateur USB-TTL (~3 €)** |
-| Accès physique | pads SPI + CEN + VPP d'un **QFN32** | **les lignes UART, déjà localisées** |
-| Séquence d'entrée | inconnue pour le BK3632 | codes connus, à tenter |
-| Dessoudage | probable | **non** |
+| Hardware | CH341 (~€5) | **USB-TTL adapter (~€3)** |
+| Physical access | SPI pads + CEN + VPP on a **QFN32** | **the UART lines, already located** |
+| Entry sequence | unknown for the BK3632 | known codes, worth trying |
+| Desoldering | likely | **no** |
 
-Les lignes UART sont celles reliant le 8051 au BK3632 — les mêmes qu'on sonderait pour écouter le
-dialogue (voie A). **Un seul point d'accès physique sert aux deux usages.**
+The UART lines are the ones connecting the 8051 to the BK3632 — the exact same lines we would probe
+to sniff the conversation (path A). **A single physical access point serves both purposes.**
 
-Config UART du BIM, relevée dans `bim_uart.c` : **115200 bauds, 8 bits, parité PAIRE, 1 stop**
-(`data_len 0x3`, `parity_en 0x1`, `parity_mode 0x1`, `stop_bits 0x0`). La parité paire est
-inhabituelle, donc discriminante : si un `01 E0 FC 01 00` en 8E1 obtient une réponse, on est dans
-le bootloader.
+BIM UART configuration, taken from `bim_uart.c`: **115,200 baud, 8 data bits, EVEN parity, 1 stop
+bit** (`data_len 0x3`, `parity_en 0x1`, `parity_mode 0x1`, `stop_bits 0x0`). Even parity is unusual
+and therefore a good discriminator: if sending `01 E0 FC 01 00` at 8E1 gets a reply, we are talking
+to the bootloader.
 
-Le SDK embarque aussi `bk3432/doc/BK3432 Download by UART User's Guide V3.0.pdf`, qui **contredit
-la doc Tuya** (« BK3432 only supports firmware flashing through SPI »).
+The SDK also bundles `bk3432/doc/BK3432 Download by UART User's Guide V3.0.pdf`, which
+**contradicts Tuya's documentation** ("BK3432 only supports firmware flashing through SPI").
 
-##### Ce qui reste incertain
+##### What remains uncertain
 
-- Le `uart_cmd_dispath()` n'est **pas** dans les sources livrées — il est déclaré dans le header
-  mais réside vraisemblablement en ROM. Les codes viennent du header et du recoupement BK7231.
-- Le BK3632 n'est pas le BK3432.
-- Entrer dans le bootloader suppose que la puce reste en ROM au démarrage — `STAY_ROM_CMD 0xAA`
-  suggère un mécanisme, non documenté ici.
-- Sur le clavier, l'UART du BK3632 est reliée au 8051 : il faudrait probablement empêcher celui-ci
-  de parler pendant la tentative.
+- `uart_cmd_dispath()` is **not** in the shipped sources — it is declared in the header but likely
+  lives in ROM. The command codes come from the header and the BK7231 cross-check.
+- The BK3632 is not the BK3432.
+- Entering the bootloader requires keeping the chip in ROM at boot — `STAY_ROM_CMD 0xAA` hints at a
+  mechanism, undocumented here.
+- On the keyboard, the BK3632's UART is wired to the 8051: we would likely need to keep the 8051
+  quiet during the attempt.
 
-#### B. Dumper le firmware du BK3632 par SPI — plus lourd
+#### B. Dumping the BK3632 firmware over SPI — heavier
 
-Le BK3632 est un **ARM9**, 20 Ko de RAM, 160 Ko de flash, BLE 5.0 + 2.4 G propriétaire.
+The BK3632 is an **ARM9** with 20 KB of RAM, 160 KB of flash, BLE 5.0 + proprietary 2.4 GHz.
 
-Sur le **BK3432**, son frère, la [doc Tuya](https://developer.tuya.com/en/docs/iot/burn-and-authorize-BK3432-chip?id=Katc9lq3p4w1t)
-donne le câblage : MOSI/MISO sur **P0.4/P0.5**, deux lignes de contrôle sur **P0.6/P0.7**, **VPP sur
-RST**, plus 3 V et masse. Il faut un dongle *BEKEN SPI flasher* et le *HID Download Tool* en mode
-« SPI SOFT ». Le firmware s'y présente en trois parties : boot, stack, app.
+On its sibling the **BK3432**, the [Tuya documentation](https://developer.tuya.com/en/docs/iot/burn-and-authorize-BK3432-chip?id=Katc9lq3p4w1t)
+gives the pinout: MOSI/MISO on **P0.4/P0.5**, two control lines on **P0.6/P0.7**, **VPP on RST**,
+plus 3 V and ground. It requires a *BEKEN SPI flasher* dongle and the *HID Download Tool* in
+"SPI SOFT" mode. The firmware is split into three parts: boot, stack, and app.
 
-Ce que ça implique concrètement pour le F75 :
+What that concretely entails for the F75:
 
-1. Accéder aux pads `P0.4`-`P0.7`, `RST`, `VCC`, `GND` d'un **QFN32** sur le PCB — loupe, pointes
-   fines, voire dessoudage.
-2. Un programmateur. Le dongle *BEKEN SPI flasher* (vendeur), ou la voie communautaire décrite
-   plus bas — **mais la séquence d'init du BK3632 n'est pas établie**.
-3. Puis désassembler un binaire **ARM9** de 160 Ko : une cible entièrement neuve.
+1. Reaching the `P0.4`–`P0.7`, `RST`, `VCC`, and `GND` pads of a **QFN32** on the PCB — magnifier,
+   fine probes, or even desoldering.
+2. A programmer. Either the vendor *BEKEN SPI flasher* dongle, or the community path described
+   below — **though the BK3632 init sequence is not established**.
+3. Then disassembling a 160 KB **ARM9** binary: a brand-new target.
 
-##### La méthode Beken « SPI flash mode », et sa limite
+##### The Beken "SPI flash mode" method, and its limitation
 
-Le mode SPI des Beken est documenté en détail pour le **BK7231T**
-([elektroda, p.kaczmarek2](https://www.elektroda.com/rtvforum/topic3931424.html)). Principe : la
-puce **expose sa propre flash interne comme une mémoire SPI esclave**, qui s'identifie comme un
+Beken's SPI mode is documented in detail for the **BK7231T**
+([elektroda, p.kaczmarek2](https://www.elektroda.com/rtvforum/topic3931424.html)). The principle:
+the chip **exposes its own internal flash as an SPI slave memory**, which identifies itself as an
 EN25QH16B.
 
 ```
-SPI mode 3, 30 kHz          (les fréquences plus hautes échouent)
-CEN bas -> attendre 1 s -> CEN haut
-envoyer 0xD2 x 250          -> réponse : un 0xD2 puis 249 x 0x00
-identifier : 9F 00 00 00    -> 00 15 70 1C
+SPI mode 3, 30 kHz          (higher frequencies fail)
+CEN low -> wait 1 s -> CEN high
+send 0xD2 x 250             -> reply: one 0xD2 followed by 249 x 0x00
+identify: 9F 00 00 00       -> 00 15 70 1C
 ```
 
-Ensuite, commandes de flash standard : `0x03` lecture page, `0x02` programmation page,
-`0x20` effacement secteur, pages de **256 octets**, adresses sur 3 octets. L'écriture exige
-l'effacement préalable.
+After that, standard SPI flash commands apply: `0x03` page read, `0x02` page program, `0x20` sector
+erase, **256-byte** pages, 3-byte addresses. Writing requires erasing first.
 
-Broches sur BK7231 : `P20`-`P23` = SCK, CSN, SI, SO, plus **CEN** (reset).
+Pins on the BK7231: `P20`–`P23` = SCK, CSN, SI, SO, plus **CEN** (reset).
 
-Outillage recommandé aujourd'hui : [`BK7231GUIFlashTool`](https://github.com/openshwprojects/BK7231GUIFlashTool)
-avec un **programmateur CH341** (~5 €), en mode « Beken SPI » et non générique, avec **D2 du CH341
-relié à CEN** pour piloter le reset. C'est nettement plus accessible que le Raspberry/Banana Pi de
-l'article d'origine, ou que le dongle vendeur.
+Recommended tooling today: [`BK7231GUIFlashTool`](https://github.com/openshwprojects/BK7231GUIFlashTool)
+with a **CH341 programmer** (~€5), in "Beken SPI" mode rather than generic mode, with **CH341 pin D2
+wired to CEN** to drive reset. That is much more accessible than the Raspberry/Banana Pi setup from
+the original article, or the vendor dongle.
 
-**⚠️ Aucun outil ne *déclare* la famille BK3xxx — mais le code d'entrée SPI est générique.**
+**⚠️ No tool *declares* support for the BK3xxx family — but the SPI entry code is generic.**
 
-Vérifié :
-[`BK7231GUIFlashTool`](https://github.com/openshwprojects/BK7231GUIFlashTool) (428 ★, maintenu,
-dernier push 2026-08-10) liste ses modes — BK7231M/N/T/U, BK7236, BK7238, BK7252, BK7252N, BK7258,
-« Beken SPI CH341 » et « Generic SPI CH341 » — soit **uniquement la famille WiFi BK72xx**. Une
-recherche de `BK3xxx` dans l'intégralité de ses sources C# ne renvoie **aucune occurrence**.
+Verified:
+[`BK7231GUIFlashTool`](https://github.com/openshwprojects/BK7231GUIFlashTool) (428 ★, maintained,
+last push 2026-08-10) lists its supported modes — BK7231M/N/T/U, BK7236, BK7238, BK7252, BK7252N,
+BK7258, "Beken SPI CH341", and "Generic SPI CH341" — covering **only the BK72xx WiFi family**. A
+search for `BK3xxx` across all of its C# source files returns **zero hits**.
 
-Le mode « Generic SPI CH341 » sert à lire une flash SPI *externe* (boîtier SOIC8). Celle du BK3632
-est **interne** : il faudrait la séquence d'entrée en mode esclave SPI, qui est spécifique à la
-famille BK72xx.
+The "Generic SPI CH341" mode is meant for reading an *external* SPI flash chip (SOIC8 package). The
+BK3632's flash is **internal**: reading it requires the SPI slave mode entry sequence, which is
+documented only for the BK72xx family.
 
-#### Nuance : l'entrée SPI Beken est paramétrable
+#### Nuance: the Beken SPI entry sequence is parameterized
 
-`BK7231Flasher/Flashers/SPIFlasher_Beken.cs` fait **90 lignes** et se révèle largement agnostique :
+`BK7231Flasher/Flashers/SPIFlasher_Beken.cs` is **90 lines long** and turns out to be largely
+chip-agnostic:
 
 ```csharp
-ChipReset()                  // CEN bas via D2 du CH341 -> 100 ms -> CEN haut
-BK_EnterSPIMode(byte data)   // <-- l'octet magique est un PARAMÈTRE
-    // envoie `data` x 250 (10 blocs de 25)
-    // puis 9F 00 00 00
-    // succès si resp[0] != 0x00 ET resp[1..3] == 0x00
-    // puis vidange : 25 000 zéros
-Sync()                       // 10 tentatives de (reset + entrée), 1 s d'intervalle
+ChipReset()                  // CEN low via CH341 D2 -> 100 ms -> CEN high
+BK_EnterSPIMode(byte data)   // <-- the magic byte is a PARAMETER
+    // sends `data` x 250 (10 blocks of 25)
+    // then 9F 00 00 00
+    // succeeds if resp[0] != 0x00 AND resp[1..3] == 0x00
+    // then flushes: 25,000 zeros
+Sync()                       // 10 attempts of (reset + entry), 1 s apart
 ```
 
-Deux points comptent :
+Two points matter:
 
-1. **`0xD2` n'est pas codé en dur** — c'est l'argument de `BK_EnterSPIMode`. Essayer une autre
-   valeur est une modification d'une ligne.
-2. **Le test de succès ne vérifie pas l'ID `00 15 70 1C`** — seulement « premier octet non nul,
-   trois suivants nuls ». Il accepterait donc l'identifiant d'une autre puce.
+1. **`0xD2` is not hardcoded** — it is the argument to `BK_EnterSPIMode`. Trying another byte value
+   is a one-line change.
+2. **The success check does not require ID `00 15 70 1C`** — only "first byte non-zero, next three
+   bytes zero". It would therefore accept the ID of a different chip.
 
-L'outil ne *déclare* pas la famille BK3xxx, mais rien dans ce chemin ne l'exclut techniquement.
-**Tenter coûte un CH341 (~5 €) et une modification triviale.**
+The tool does not *claim* support for the BK3xxx family, but nothing in this code path technically
+rules it out. **Trying it costs a CH341 (~€5) and a trivial code edit.**
 
-#### Ce qui reste incertain
+#### What remains uncertain
 
-- Le BK3632 expose-t-il seulement un mode esclave SPI ? Non établi.
-- La doc Tuya du BK3432 mentionne **VPP sur RST**, ce qui suggère un mécanisme différent d'un
-  simple basculement de CEN — possiblement une tension de programmation.
-- Les broches SPI diffèrent déjà entre BK7231 (`P20`-`P23`) et BK3432 (`P0.4`-`P0.7`). Celles du
-  BK3632 sont inconnues.
+- Does the BK3632 even expose an SPI slave mode? Unestablished.
+- Tuya's BK3432 documentation mentions **VPP on RST**, suggesting a mechanism different from a
+  simple CEN toggle — possibly a programming voltage.
+- The SPI pins already differ between the BK7231 (`P20`–`P23`) and the BK3432 (`P0.4`–`P0.7`). Those
+  of the BK3632 are unknown.
 
-*(`BK7231Flasher.cs` lui-même est le protocole **bootloader UART** du BK72xx — trames
-`01 e0 fc <len> <cmd>` — sans rapport avec la voie SPI.)*
+*(`BK7231Flasher.cs` itself implements the BK72xx **UART bootloader** protocol — `01 e0 fc <len>
+<cmd>` frames — unrelated to the SPI path.)*
 
-**La transposition à la famille BK34xx n'est PAS établie.** La question a été posée
-textuellement sur ce fil le 21 juillet 2025 — « I have a bk3432 chip […] is the initialization
-sequence the same? » — et la seule réponse, en octobre 2025, a été « Just try ». Personne n'a
-publié de confirmation.
+**Whether this carries over to the BK34xx family is NOT established.** The exact question was asked
+on that thread on July 21, 2025 — "I have a bk3432 chip […] is the initialization sequence the
+same?" — and the only reply, in October 2025, was "Just try". Nobody has posted a confirmation.
 
-Deux indices qu'elle **diffère** : les broches SPI sont `P20`-`P23` sur BK7231 mais `P0.4`-`P0.7`
-sur BK3432, et VPP passe par RST. Le BK3632 est encore un autre membre de la famille.
+Two clues that it **differs**: the SPI pins are `P20`–`P23` on the BK7231 but `P0.4`–`P0.7` on the
+BK3432, and VPP goes through RST. The BK3632 is yet another member of the family.
 
-Et au bout, on obtiendrait l'implémentation du protocole, pas les échanges réels — alors que la
-voie A donne directement ces derniers.
+And at the end of the road, we would get the protocol implementation rather than live traffic —
+whereas path A gives the live traffic directly.
 
-**Conclusion : la voie A d'abord.** La voie B ne se justifie que si l'on veut modifier le firmware
-du BK3632 lui-même.
+**Conclusion: path A first.** Path B is only justified if we want to modify the BK3632 firmware
+itself.
 
-*(Les fils elektroda cités ici sont inaccessibles depuis cet environnement — timeouts systématiques,
-probablement un filtrage des IP datacenter. À lire depuis un navigateur.)*
+*(The elektroda threads cited here are unreachable from this environment — systematic timeouts,
+likely datacenter IP filtering. Read them from a browser.)*
 
-### Ce qui est porté, et ce qui ne l'est pas
+### What is ported, and what is not
 
-Les cinq objections qui figuraient ici ont été levées une à une par le travail ci-dessus : les
-codes de commande ont leur sémantique, la trame d'état reçue est décodée, l'entrée en mode est
-tranchée (sélecteur `P7.4`/`P4.5`, commande `0x01`). Reste la cinquième, qui ne se lève pas au
-désassemblage : **rien n'a été flashé, donc rien n'a été exécuté.**
+The five objections that used to sit here have been lifted one by one through the work above: the
+command codes have their semantics, the received status frame is decoded, and mode entry is settled
+(mode switch on `P7.4`/`P4.5`, command `0x01`). The fifth objection remains, and cannot be lifted by
+disassembly: **nothing has been flashed, so nothing has been executed.**
 
-`src/platform/bk3632/rf_controller.c` de SMK suppose le SPI bit-bangé de l'Air60 et n'est pas
-réutilisable ici ; le transport EUART0 a donc été écrit à part. `meson.build` déclare
-`'wireless': 'euart0'` pour ce clavier, ce qui ajoute `-DRF_EUART0=1` et refuse tout
-`debug_sink` autre que `console` — l'EUART0 n'a qu'un seul maître.
+SMK's `src/platform/bk3632/rf_controller.c` assumes the Air60's bit-banged SPI and cannot be reused
+here; the EUART0 transport was therefore written separately. `meson.build` declares
+`'wireless': 'euart0'` for this keyboard, which adds `-DRF_EUART0=1` and rejects any `debug_sink`
+other than `console` — EUART0 can only have one master.
 
-| Fichier | Contenu |
+| File | Contents |
 | --- | --- |
-| `src/keyboards/aula-f75/aula_rf.c` | le pilote : ISR, trames, somme de contrôle, machine à états du sélecteur, sonde de présence |
-| `src/keyboards/aula-f75/aula_rf.h` | l'API, avec les deux encodages de slot distingués (`rf_link_t` contre `rf_slot_t`, qui se croisent sur la valeur 0) |
-| `src/keyboards/aula-f75/kb.c` | aiguillage des rapports HID, et `LNK_BT1..3` sur `Fn`+`1/2/3` |
-| `src/platform/sh68f90/interrupts.h` | le vecteur `_INT_EUART0` revendiqué, avec une erreur de compilation si `DEBUG_SINK_UART` le réclame aussi |
+| `src/keyboards/aula-f75/aula_rf.c` | the driver: ISR, frames, checksum, mode-switch state machine, presence probe |
+| `src/keyboards/aula-f75/aula_rf.h` | the API, keeping the two slot encodings distinct (`rf_link_t` vs. `rf_slot_t`, which collide on value 0) |
+| `src/keyboards/aula-f75/kb.c` | HID report routing, and `LNK_BT1..3` on `Fn`+`1/2/3` |
+| `src/platform/sh68f90/interrupts.h` | claims the `_INT_EUART0` vector, with a build error if `DEBUG_SINK_UART` also claims it |
 
-Trois écarts assumés par rapport au firmware d'usine, chacun commenté sur place :
+Three deliberate departures from the factory firmware, each commented in the code:
 
-1. **Le transport de départ est lu sur le sélecteur**, pas supposé filaire. Le firmware d'usine
-   part de `g_transport = 0` et laisse l'anti-rebond converger ; pendant ces dix tics les frappes
-   partiraient sur l'USB alors que la glissière dit « sans fil ».
-2. **La commande `0x01` est mise en file**, pas émise une fois pour toutes. Le firmware d'usine la
-   perd si `P4.7` est bas à cet instant précis ; `rf_task()` la rejoue dès que le module se
-   déclare prêt.
-3. **`usb_hw_deinit()` à la place du seul `anl USBCON,#0x7F`** : même coupure du module, plus le
-   désarmement de l'interruption USB — sans quoi l'ISR de SMK continuerait à tourner sur un
-   périphérique éteint.
+1. **The initial transport is read from the mode switch**, not assumed to be wired. The factory
+   firmware starts at `g_transport = 0` and lets debouncing converge; during those ten ticks,
+   keystrokes would go out over USB even when the physical slider says "wireless".
+2. **Command `0x01` is queued**, rather than fired once and forgotten. The factory firmware drops it
+   if `P4.7` happens to be low at that exact instant; `rf_task()` replays it as soon as the module
+   reports ready.
+3. **`usb_hw_deinit()` instead of a bare `anl USBCON,#0x7F`**: shuts down the module the same way,
+   plus disarms the USB interrupt — without which SMK's ISR would keep firing on a powered-down
+   peripheral.
 
-#### Trois défauts corrigés après coup
+#### Three bugs fixed after the fact
 
-Une relecture croisée du pilote contre cette page en a sorti trois, dont un qui rendait la
-détection de lien inopérante.
+Cross-reading the driver against this page caught three bugs, including one that made link detection
+completely non-functional.
 
-**1. La longueur des trames reçues dépend du type.** La première rédaction attendait 22 octets pour
-toutes les trames et sommait les 21 premiers — le format de la seule `0x08`. Une trame d'état de
-dix octets restait donc en attente, les octets de la suivante complétaient le tampon, la somme
-échouait toujours, et la sonde de présence déclarait le lien mort en permanence.
+**1. Received frame length depends on the frame type.** The initial draft waited for 22 bytes on
+every frame and summed the first 21 — the format of `0x08` alone. A ten-byte status frame therefore
+sat incomplete in the buffer until bytes from the next frame filled it up, the checksum always
+failed, and the presence probe declared the link permanently dead.
 
-Le firmware d'usine ne découpe pas non plus dans son ISR : elle empile dans 23 octets d'IDATA et
-jette le dépassement ; c'est `euart0_parse` qui dispatche sur l'octet 0 et vérifie la somme **à la
-position propre au type**. Le portage fait désormais pareil, avec les deux gardes d'usine sur les
-octets 1 et 2 de la trame d'état.
+The factory firmware does not split frames in its ISR either: it pushes bytes into a 23-byte IDATA
+buffer and drops any overflow; `euart0_parse` then dispatches on byte 0 and checks the checksum
+**at the offset appropriate for that frame type**. The port now does the same, including the two
+factory guards on bytes 1 and 2 of the status frame.
 
-**2. `usb_deinit()` tuait le NKRO en sans-fil.** Il remet toute la machine à états USB à zéro, dont
-`interface0_protocol`, et `host_nkro_active()` exige `USB_PROTOCOL_REPORT`. Le clavier retombait
-donc en 6KRO dès l'entrée en mode sans-fil, alors que `NKRO_REPORT_BITS` vaut 20 *« limited by
-wireless dongle hid descriptor »*. `usb_hw_deinit()` ne coupe que le matériel — plus fidèle au
-`anl USBCON,#0x7F` d'usine, et le NKRO survit.
+**2. `usb_deinit()` killed NKRO in wireless mode.** It resets the entire USB state machine to zero,
+including `interface0_protocol`, whereas `host_nkro_active()` requires `USB_PROTOCOL_REPORT`. The
+keyboard therefore fell back to 6KRO as soon as it entered wireless mode, even though
+`NKRO_REPORT_BITS` is set to 20 *("limited by wireless dongle hid descriptor")*. `usb_hw_deinit()`
+only shuts down the hardware — closer to the factory `anl USBCON,#0x7F`, and NKRO survives.
 
-**3. Deux défauts dans `aula_rgb.c`**, encore inactif à ce stade : `value * (0x04B0 / 255)` — la
-division entière vaut **4**, donc l'intensité maximale donnait un rapport cyclique de 180 au lieu
-de 0 ; et deux tables d'adresses `const __xdata` de 72 octets remplacées par les jetons
-`SET_PWM_DUTY_2` de `platform/sh68f90/pwm.h`.
+**3. Two bugs in `aula_rgb.c`**, still inactive at this stage: `value * (0x04B0 / 255)` — integer
+division evaluates to **4**, so maximum brightness gave a duty cycle of 180 instead of 0; and two
+72-byte `const __xdata` address tables were replaced with the `SET_PWM_DUTY_2` tokens from
+`platform/sh68f90/pwm.h`.
 
-Coût mesuré à la compilation (SDCC 4.5.0, zéro avertissement, `check_interrupts` OK) :
-**+251 o de flash**, **+4 o de XDATA**, **3 o de RAM interne** — la marge interne passe de 22 à
-19 octets, la pile reste à 222.
+Measured build cost (SDCC 4.5.0, zero warnings, `check_interrupts` OK):
+**+251 B flash**, **+4 B XDATA**, **3 B internal RAM** — internal RAM margin goes from 22 down to
+19 bytes, stack stays at 222.
 
-## EEPROM émulée en flash — l'IAP
+## Flash-emulated EEPROM — IAP
 
-Le F75 n'a pas d'EEPROM (le `settings_store` de SMK vaut `flash` pour le `sh68f90`). Les
-réglages persistants sont écrits **dans la flash de programme elle-même**, par une routine IAP
-que voici de bout en bout.
+The F75 has no dedicated EEPROM (SMK's `settings_store` is `flash` for the `sh68f90`). Persistent
+settings are written **into the program flash itself**, via an IAP routine traced end-to-end below.
 
-### `fcn.0000AAC1` — enregistrer une page de réglages
+### `fcn.0000AAC1` — saving a settings page
 
-Douze appelants, dont la grappe du parseur EUART0 (`0x77CE`, `0x77FF`, `0x7830`, `0x7861`,
-`0x7892`, `0x78C3`, `0x78F4`) et `fcn.0000AF99` (publication d'un effet RGB, en `0xAFB3`) :
-c'est la routine qui **rend un réglage permanent**, qu'il vienne du sans-fil ou des touches.
+Twelve callers, including the EUART0 parser cluster (`0x77CE`, `0x77FF`, `0x7830`, `0x7861`,
+`0x7892`, `0x78C3`, `0x78F4`) and `fcn.0000AF99` (publishing an RGB effect, at `0xAFB3`): this is
+the routine that **makes a setting permanent**, whether it came from wireless or from keystrokes.
 
 ```asm
-mov  dptr,#0x0F18 ; sauve r6, r7, r5 en 0x0F18-0x0F1A
-mov  c, EA ; mov 0x2E.5, c   ; memorise l'etat de EA
-clr  EA                      ; toutes interruptions coupees
-lcall fcn.0000EEE3           ; relache la matrice (voir plus bas)
-movx a, [0x0F1A] ; -> 0x0302 ; numero de page
-lcall fcn.0000AEE4           ; efface la page
+mov  dptr,#0x0F18 ; save r6, r7, r5 to 0x0F18-0x0F1A
+mov  c, EA ; mov 0x2E.5, c   ; save EA state
+clr  EA                      ; all interrupts disabled
+lcall fcn.0000EEE3           ; release matrix (see below)
+movx a, [0x0F1A] ; -> 0x0302 ; page number
+lcall fcn.0000AEE4           ; erase page
 ...
 mov  r3,#0x01 ; r2,#0x09 ; r1,#0xBF    ; source = 0x09BF
-movx [0x0F20] = 0x02, [0x0F21] = 0x00  ; longueur = 0x0200 = 512
-lcall fcn.00000181           ; ecrit la page
+movx [0x0F20] = 0x02, [0x0F21] = 0x00  ; length = 0x0200 = 512
+lcall fcn.00000181           ; write page
 movx [0x0302] = 0
-lcall fcn.0000EDBB           ; reverrouille
-mov  c, 0x2E.5 ; ...         ; restaure EA
+lcall fcn.0000EDBB           ; relock
+mov  c, 0x2E.5 ; ...         ; restore EA
 ```
 
-### `fcn.0000AEE4` — la borne, et donc la carte de la zone
+### `fcn.0000AEE4` — the bounds check, and thus the map of the region
 
 ```asm
-mov a,r7 ; setb c ; subb a,#0x62 ; jc  ret   ; rejette page < 99
-mov a,r7 ;         subb a,#0x76 ; jc  corps  ; rejette page > 117
+mov a,r7 ; setb c ; subb a,#0x62 ; jc  ret   ; reject page < 99
+mov a,r7 ;         subb a,#0x76 ; jc  body   ; reject page > 117
 ...
 add  a, 0xE0                                 ; direct E0H = ACC -> a = r7 × 2
 mov  0xF7, a                                 ; XPAGE = page × 2
-mov  r7,#0xE6 ; lcall fcn.0000989F           ; declenche l'effacement
+mov  r7,#0xE6 ; lcall fcn.0000989F           ; trigger erase
 ```
 
-`XPAGE` (F7H) reçoit `page × 2`, soit l'octet de poids fort de l'adresse : **une page vaut 512
-octets** — ce qui est exactement le `sector_size` déclaré par SMK pour le `sh68f90`.
+`XPAGE` (F7H) receives `page × 2`, i.e. the high byte of the byte address: **one page is 512
+bytes** — which is the exact `sector_size` declared by SMK for the `sh68f90`.
 
 | | |
 | --- | --- |
-| Pages autorisées | **99 à 117** (bornes vérifiées dans le code, pas déduites) |
-| Adresses | **`0xC600` – `0xEBFF`** |
-| Taille | 19 pages × 512 o = **9 728 octets** |
+| Allowed pages | **99 to 117** (bounds verified in code, not inferred) |
+| Addresses | **`0xC600` – `0xEBFF`** |
+| Size | 19 pages × 512 B = **9,728 bytes** |
 
-La zone tombe entièrement dans les 61 440 octets du firmware (`0xEBFF < 0xF000`) : cohérent.
+The region falls entirely within the 61,440 bytes of the firmware image (`0xEBFF < 0xF000`):
+consistent.
 
-`fcn.0000989F` écrit ensuite `IB_CON1..IB_CON5` (F2H–F6H) après avoir revérifié **une seconde
-fois** que `XPAGE / 2` est bien dans `[99, 117]` et que `EA` est nul — double garde contre un
-effacement hors zone.
+`fcn.0000989F` then writes `IB_CON1..IB_CON5` (F2H–F6H) after checking **a second time** that
+`XPAGE / 2` lies within `[99, 117]` and that `EA` is zero — a double guard against out-of-bounds
+erasure.
 
-### Vérification sur le dump : la zone est vivante, et à moitié utilisée
+### Verification against the dump: the region is live, and half-used
 
-Entropie par page de 512 octets sur `assets/f75_firmware.bin` :
+Entropy per 512-byte page across `assets/f75_firmware.bin`:
 
-| Page | Adresse | Entropie | Octets nuls |
+| Page | Address | Entropy | Zero bytes |
 | --- | --- | --- | --- |
-| 98 | `0xC400` | 6.53 | 46 | *(code — hors zone)* |
+| 98 | `0xC400` | 6.53 | 46 | *(code — outside region)* |
 | 99 | `0xC600` | 1.20 | 425 |
 | 100 | `0xC800` | 1.10 | 230 |
 | 101 | `0xCA00` | 0.22 | 494 |
 | 102–105 | `0xCC00`–`0xD3FF` | 1.0 – 1.9 | 412 – 455 |
 | 106–109 | `0xD400`–`0xDBFF` | 0.04 | 510 |
 | 110–117 | `0xDC00`–`0xEBFF` | **0.00** | **512** |
-| 118 | `0xEC00` | 6.40 | 11 | *(code — hors zone)* |
+| 118 | `0xEC00` | 6.40 | 11 | *(code — outside region)* |
 
-Les pages 98 et 118, juste au-delà des bornes, sont du code dense (entropie > 6) ; les pages
-99 à 117 sont à faible entropie et majoritairement nulles. **Les bornes déduites du code
-coïncident exactement avec la frontière code/données observée dans le dump** — confirmation
-indépendante. Les huit dernières pages sont intégralement vierges : la zone est
-surdimensionnée par rapport à ce que le firmware d'usine y range.
+Pages 98 and 118, just outside the bounds, are dense code (entropy > 6); pages 99 through 117 have
+low entropy and consist mostly of zeros. **The bounds deduced from the code match the exact
+code/data boundary observed in the dump** — an independent confirmation. The last eight pages are
+completely blank: the region is oversized relative to what the factory firmware actually stores
+there.
 
-Cette page 101 (`0xCA00`) est celle que `fcn.0000AF99` sauvegarde : les constantes `r6 = 0xCA`
-(202 = 101 × 2) et `r5 = 101` du site `0xAFB3` s'expliquent enfin — c'est **la page où l'effet
-RGB courant est rendu persistant**.
+Page 101 (`0xCA00`) is the one saved by `fcn.0000AF99`: the constants `r6 = 0xCA` (202 = 101 × 2)
+and `r5 = 101` at site `0xAFB3` finally make sense — that is **the page where the current RGB effect
+is persisted**.
 
-### `fcn.0000EEE3` — cinquième confirmation du brochage des colonnes
+### `fcn.0000EEE3` — fifth confirmation of the column pinout
 
-Appelée juste avant de couper les interruptions, elle relâche la matrice — le balayage étant
-suspendu pendant l'écriture flash :
+Called right before disabling interrupts, it releases the matrix — scanning being suspended during
+flash writes:
 
 ```asm
-mov 0xC0, #0xFF   ; P6 = 0xFF    -> colonnes P6.0 .. P6.7
-orl 0x88, #0x87   ; P5 |= 0x87   -> colonnes P5.0, P5.1, P5.2, P5.7
-orl 0xB0, #0x0D   ; P4 |= 0x0D   -> colonnes P4.0, P4.2, P4.3
+mov 0xC0, #0xFF   ; P6 = 0xFF    -> columns P6.0 .. P6.7
+orl 0x88, #0x87   ; P5 |= 0x87   -> columns P5.0, P5.1, P5.2, P5.7
+orl 0xB0, #0x0D   ; P4 |= 0x0D   -> columns P4.0, P4.2, P4.3
 ```
 
-Les trois masques reproduisent **exactement** la carte des 15 colonnes établie par ailleurs.
-C'est une cinquième source indépendante, et elle n'a pas été cherchée pour ça.
+The three masks reproduce **the exact same** 15-column map established elsewhere. That makes a fifth
+independent source, found without even looking for it.
 
-> ⚠️ Cette routine n'a **jamais été exécutée** : rien n'a été flashé sur l'appareil. Ce qui
-> précède est du désassemblage, pas de l'observation.
+> ⚠️ This routine has **never been executed**: nothing has been flashed to the device. Everything
+> above comes from disassembly, not runtime observation.
 
-## Récupération : ce que le bootloader garantit vraiment
+## Recovery: what the bootloader truly guarantees
 
-Vérifié par désassemblage du bootloader de **cet** appareil (`assets/f75_full.bin`, zone
-`0xF000-0xFFFF`). Deux chemins de retour existent.
+Verified by disassembling the bootloader from **this** unit (`assets/f75_full.bin`, region
+`0xF000-0xFFFF`). Two recovery paths exist.
 
-### 1. Au reset — le bootloader décide
+### 1. At reset — the bootloader decides
 
 ```asm
-0xf000   clr EA ; mov SP,#0x70 ; init horloge
+0xf000   clr EA ; mov SP,#0x70 ; clock init
 0xf017   mov 0x3b,#0xef ; mov 0x3c,#0xfb   ; DPTR <- 0xEFFB
-0xf024   movc a, @a+dptr                   ; lit l'octet en 0xEFFB
-0xf025   xrl  a, #0x02                     ; opcode LJMP ?
-0xf027   jz   0xf053                       ; oui  -> part vers le firmware
-         ...                               ; non  -> init USB + PLL, RESTE EN ISP
+0xf024   movc a, @a+dptr                   ; read byte at 0xEFFB
+0xf025   xrl  a, #0x02                     ; LJMP opcode?
+0xf027   jz   0xf053                       ; yes -> jump to firmware
+         ...                               ; no  -> init USB + PLL, STAY IN ISP
 ```
 
-Le bootloader tourne **toujours** en premier (`0x0000: LJMP 0xF000`). Si l'octet en
-`firmware_size-5` n'est pas `0x02`, il s'énumère en USB en mode ISP. Et `sinowisp write` ne
-touche **jamais** la zone bootloader.
+The bootloader **always** runs first (`0x0000: LJMP 0xF000`). If the byte at `firmware_size-5` is
+not `0x02`, it enumerates over USB in ISP mode. And `sinowisp write` **never** touches the
+bootloader region.
 
-**Limite** : un firmware SMK correctement lié *aura* ce `0x02`. Ce chemin ne sauve donc que d'une
-image tronquée ou mal écrite, pas d'un firmware qui démarre puis se plante.
+**Limitation**: a properly linked SMK firmware *will* have that `0x02`. This path therefore only
+saves us from a truncated or corrupted write, not from a firmware that boots and then crashes.
 
-### 2. Depuis le firmware — l'entrée magique `0xFF00`
+### 2. From the firmware — the magic entry point `0xFF00`
 
 ```asm
-0xff00   xrl a, #0x5a     ; A doit valoir 0x5A
+0xff00   xrl a, #0x5a     ; A must be 0x5A
 0xff02   jnz 0xff36
-0xff04   mov a, B         ; B doit valoir 0xA5
+0xff04   mov a, B         ; B must be 0xA5
 0xff06   xrl a, #0xa5
 0xff08   jnz 0xff36
 0xff0a   clr EA ; mov SP,#0x70
 0xff15   mov USBCON,a ; USBIF1,a ; USBIF2,a ; USBIE1,a ; USBIE2,a ; USBADDR,a
 ```
 
-C'est **exactement** le protocole de `isp_jump()` de SMK
-(`src/platform/sh68f90/isp.c` : `mov B,#0xa5 ; mov A,#0x5a ; ljmp 0xff00`), et SMK l'expose déjà
-par USB (`src/smk/usb.c:442`). **Ce bootloader l'implémente**, donc la porte de sortie logicielle
-fonctionnera — à condition que la pile USB du firmware flashé démarre.
+This is **the exact protocol** of SMK's `isp_jump()` (`src/platform/sh68f90/isp.c`:
+`mov B,#0xa5 ; mov A,#0x5a ; ljmp 0xff00`), which SMK already exposes over USB
+(`src/smk/usb.c:442`). **This bootloader implements it**, so the software escape hatch will work —
+provided the flashed firmware's USB stack actually starts up.
 
-### Risque résiduel, énoncé précisément
+### Residual risk, stated precisely
 
-| Scénario | Récupérable ? |
+| Scenario | Recoverable? |
 | --- | --- |
-| Image tronquée, pas de `0x02` en `0xEFFB` | ✅ le bootloader reste en ISP au branchement |
-| Firmware qui démarre et dont l'USB monte | ✅ `isp_jump()` par USB |
-| **Firmware qui démarre mais se plante avant sa pile USB** | ❌ **programmateur externe requis** |
+| Truncated image, no `0x02` at `0xEFFB` | ✅ bootloader stays in ISP on plug-in |
+| Firmware boots and USB enumerates | ✅ `isp_jump()` over USB |
+| **Firmware boots but hangs before its USB stack** | ❌ **external programmer required** |
 
-Le seul cas perdant est le troisième — c'est précisément celui qu'un **brochage faux** provoque :
-le scan de matrice part sur de mauvaises broches, le firmware boucle ou se bloque, et l'USB ne
-monte jamais.
+The only losing scenario is the third one — and that is precisely what a **wrong pinout** causes:
+matrix scanning drives the wrong pins, the firmware loops or hangs, and USB never comes up.
 
-**Conclusion : le brochage est le seul vrai verrou.** Une fois établi et vérifié, le risque
-devient acceptable même sans programmateur externe. Tant qu'il ne l'est pas, ne rien écrire.
+**Conclusion: the pinout is the only real gate.** Once established and verified, the risk becomes
+acceptable even without an external programmer. Until then, write nothing.
 
-État du filet de sécurité :
+Safety net status:
 
 | | |
 | --- | --- |
-| Dump firmware d'usine | ✅ `assets/f75_full.bin`, bootloader identique au bit près à la référence amont |
-| Bootloader préservé par `sinowisp write` | ✅ documenté en amont, zone `0xF000+` non touchée |
-| Retour ISP au reset | ✅ vérifié sur cet appareil (`0xF024`) |
-| Retour ISP logiciel (`isp_jump`) | ✅ vérifié sur cet appareil (`0xFF00`) |
-| Programmateur externe | ❌ absent — [sinodude-serial](https://github.com/carlossless/sinodude) sur Arduino Nano |
-| `sinowisp` write testé sur ce modèle | ❌ annoncé ✅ en amont mais décoché dans l'issue #96 |
+| Factory firmware dump | ✅ `assets/f75_full.bin`, bootloader bit-for-bit identical to upstream reference |
+| Bootloader preserved by `sinowisp write` | ✅ documented upstream, `0xF000+` region untouched |
+| Return to ISP at reset | ✅ verified on this unit (`0xF024`) |
+| Software return to ISP (`isp_jump`) | ✅ verified on this unit (`0xFF00`) |
+| External programmer | ❌ none on hand — [sinodude-serial](https://github.com/carlossless/sinodude) on Arduino Nano |
+| `sinowisp` write tested on this model | ❌ marked ✅ upstream but unchecked in issue #96 |
 
-Un shim `tools/shim/sinowisp` (dans le projet parent) **refuse les écritures** tant que le
-brochage n'est pas établi. Le retirer volontairement, pas par accident.
+A `tools/shim/sinowisp` wrapper (in the parent project) **refuses writes** until the pinout is
+established. Remove it deliberately, not by accident.

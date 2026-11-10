@@ -3,94 +3,93 @@
 #include <stdint.h>
 
 /*
- * Données et primitives des moteurs de rendu du firmware d'usine.
+ * Data and primitives for the stock firmware's rendering engines.
  *
- * Ce fichier ne porte que ce qui a été RELEVÉ dans `assets/f75_full_jtag.bin` :
- * quatre tables recopiées telles quelles, plus le générateur pseudo-aléatoire
- * dont le rôle -- et non le polynôme -- est transcrit. L'ordonnancement et
- * l'état des effets vivent dans `layouts/default/indicators.c`.
+ * This file only contains what was EXTRACTED from `assets/f75_full_jtag.bin`:
+ * four tables copied verbatim, plus the pseudo-random generator whose role --
+ * rather than polynomial -- is transcribed. Effect scheduling and state live in
+ * `layouts/default/indicators.c`.
  *
- * Encodage d'identifiant de touche du firmware d'usine : `colonne * 8 + ligne`,
- * `0xFF` pour « pas de touche ». C'est celui que `0x9659` déplie en
- * `(id >> 3, id & 7)` avant d'appeler `rgb_key_suppressed`, et celui des
- * couronnes ci-dessous -- la couronne 0 vaut `0x3A` = (colonne 7, ligne 2),
- * exactement le centre que la feuille de relevé annonce pour l'onde.
+ * Stock firmware key ID encoding: `col * 8 + row`, `0xFF` for "no key". This is
+ * what `0x9659` unpacks into `(id >> 3, id & 7)` before calling
+ * `rgb_key_suppressed`, and what the rings below use -- ring 0 is `0x3A` =
+ * (col 7, row 2), the exact center documented in the reverse-engineering notes
+ * for the wave effect.
  *
- * Rien de tout ceci n'a été exécuté : aucun firmware n'a jamais été flashé sur
- * l'appareil.
+ * None of this has been executed: no firmware has ever been flashed to the
+ * device.
  */
 
 #define AULA_FX_COLS 15
 #define AULA_FX_ROWS 6
 
-/* Seconde palette d'usine, CODE 0x2D6D : 128 triplets (R,G,B), 384 octets.
- * Distincte de la roue de 192 entrées de `aula_rgb.c` -- ses rampes sont plus
- * saturées et son cercle se referme en 128 pas. Lue par le moteur d'indice 15. */
+/* Second stock palette, CODE 0x2D6D: 128 (R,G,B) triplets, 384 bytes.
+ * Distinct from the 192-entry wheel in `aula_rgb.c` -- its ramps are more
+ * saturated and its circle closes in 128 steps. Read by engine index 15. */
 #define AULA_FX_PALETTE_SIZE 128
 void aula_fx_palette(uint8_t index, uint8_t out[3]);
 
 /*
- * Modes de couleur d'usine : 0 à 6 sont des couleurs fixes (CODE 0xC800), 7 est
- * l'arc-en-ciel, qui lit la roue de teintes au lieu de la palette. Le firmware
- * d'usine range ce mode dans `b1[3:0]` de son enregistrement par effet, et le
- * verrouille en XRAM 0x0897.
+ * Stock color modes: 0 to 6 are fixed colors (CODE 0xC800), 7 is rainbow,
+ * which reads the hue wheel instead of the palette. The stock firmware stores
+ * this mode in `b1[3:0]` of its per-effect record, and latches it in XRAM
+ * 0x0897.
  */
 #define AULA_FX_COLOR_MODES  8
 #define AULA_FX_COLOR_WHEEL  ((uint8_t)(AULA_FX_COLOR_MODES - 1))
 void aula_fx_color(uint8_t mode, uint8_t out[3]);
 
-/* Couronnes de l'onde concentrique, CODE 0x2959 : 9 groupes de 13 identifiants,
- * `0xFF` = emplacement vide. Lues par le moteur d'indice 1 (et d'indice 17, qui
- * est le même moteur avec le paramètre figé à 9). */
+/* Concentric wave rings, CODE 0x2959: 9 groups of 13 IDs, `0xFF` = empty slot.
+ * Read by engine index 1 (and index 17, which is the same engine with its
+ * parameter fixed to 9). */
 #define AULA_FX_RINGS      9
 #define AULA_FX_RING_SLOTS 13
 uint8_t aula_fx_ring(uint8_t ring, uint8_t slot);
 
 /*
- * Carte de touches d'usine, CODE 0xC500, indexée `colonne * 6 + ligne` : elle
- * rend l'identifiant `colonne * 8 + ligne`, ou AULA_FX_NO_KEY quand la grille
- * ne porte pas de touche. Elle sert à la fois de test de présence et de carte
- * spatiale -- voir le commentaire dans aula_fx.c.
+ * Stock key map, CODE 0xC500, indexed as `col * 6 + row`: returns the ID
+ * `col * 8 + row`, or AULA_FX_NO_KEY when the grid slot has no key. Serves
+ * as both a presence test and a spatial map -- see the comment in aula_fx.c.
  */
 #define AULA_FX_NO_KEY ((uint8_t)0xFF)
 uint8_t aula_fx_key_id(uint8_t col, uint8_t row);
 
 /*
- * Colonne spatiale d'une colonne électrique : `aula_fx_key_id() >> 3`. Identité
- * partout sauf sur la ligne 4, qui permute.
+ * Spatial column of an electrical column: `aula_fx_key_id() >> 3`. Identity
+ * everywhere except on row 4, which permutes.
  */
 uint8_t aula_fx_render_col(uint8_t col, uint8_t row);
 
-/* Image « gaming », plan bleu de CODE 0xCAFC : Échap, W A S D et le pavé
- * fléché. Même encodage en masque de lignes. */
+/* "Gaming" mask from CODE 0xCAFC: Esc, W A S D, and the arrow cluster.
+ * Same row-mask encoding. */
 uint8_t aula_fx_gaming(uint8_t col);
 
 /*
- * Champ de phase par touche de l'effet 15, CODE 0x9FEA.
+ * Per-key phase field for effect 15, CODE 0x9FEA.
  *
- * Ce n'est pas du code qui l'écrit, c'est l'INITIALISEUR C : la table de
- * décompression Keil en CODE 0x9FDE ne compte que trois enregistrements, et le
- * troisième copie 126 octets vers XDATA 0x0E49 au démarrage. `fcn @ 0xACA3` les
- * y recopie ensuite transposés (pas de 21 -> pas de 6) dans le plan de phase
- * 0x0017. Voilà pourquoi aucune instruction de l'image ne référence 0x0E49 en
- * écriture : c'est une constante, pas une variable.
+ * It is not written by code, but by the C INITIALIZER: the Keil decompression
+ * table at CODE 0x9FDE has only three records, and the third copies 126 bytes
+ * to XDATA 0x0E49 at startup. `fcn @ 0xACA3` then copies them transposed
+ * (stride 21 -> stride 6) into the phase plane at 0x0017. That explains why no
+ * instruction in the image references 0x0E49 for writing: it is a constant,
+ * not a variable.
  *
- * Les valeurs vont de 1 à 127 -- très exactement la plage d'un index dans la
- * palette de 128 -- et dessinent un balayage angulaire : la phase croît le long
- * de la première ligne jusqu'à repasser par zéro entre les colonnes 12 et 13,
- * et décroît vers le bas à gauche. Une vague qui tourne, pas qui translate.
+ * Values range from 1 to 127 -- matching the exact index range of the
+ * 128-entry palette -- and form an angular sweep: phase increases along the
+ * top row until wrapping past zero between columns 12 and 13, and decreases
+ * downward to the left. A rotating wave, not a translating one.
  */
 /*
- * Phase par touche du scintillement (effet d'usine 6) : CODE 0x2A2E en mode
- * arc-en-ciel, CODE 0x2AAC en couleur fixe. Rangées `colonne * 6 + ligne`.
+ * Per-key phase for shimmer (stock effect 6): CODE 0x2A2E in rainbow mode,
+ * CODE 0x2AAC in fixed-color mode. Laid out as `col * 6 + row`.
  */
 uint8_t aula_fx_shimmer_phase(uint8_t col, uint8_t row, uint8_t rainbow);
 
-/* Rampe de respiration, CODE 0x29CE : 96 entrées, 22 -> 255 -> 22. */
+/* Breathing ramp, CODE 0x29CE: 96 entries, 22 -> 255 -> 22. */
 #define AULA_FX_BREATH_SIZE 96
 uint8_t aula_fx_breath(uint8_t phase);
 
 uint8_t aula_fx_keywave(uint8_t col, uint8_t row);
 
-/* Tirage pseudo-aléatoire, 0-255. */
+/* Pseudo-random draw, 0-255. */
 uint8_t aula_fx_rand(void);

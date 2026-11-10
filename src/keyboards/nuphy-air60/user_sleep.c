@@ -91,15 +91,4 @@ void user_sleep_wake(void)
     user_gpio_init();
 }
 
-
-/* Rien à signaler avant l'endormissement sur cette carte : voir `user_sleep.h`. */
-bool user_sleep_ready(void)
-{
-    return true;
-}
-
-void user_sleep_cancel(void)
-{
-}
-
 #endif // SLEEP_ENABLE

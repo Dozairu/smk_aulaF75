@@ -3,30 +3,30 @@
 #include <stdint.h>
 
 /*
- * Les motifs, un octet d'intensité par pas.
+ * Patterns, one intensity byte per step.
  *
- * UN PAS = UN BOUCLAGE DU BALAYAGE DE RÉGÉNÉRATION, soit ~37,9 ms. Le moteur
- * n'avance pas plus vite, et ce n'est pas un choix de confort : les quatre-
- * vingt-dix cellules sont repeintes UNE PAR SOUS-TRAME, donc changer la valeur
- * ailleurs qu'au bouclage la ferait tomber au milieu d'un cycle de repeinte.
- * Même contrainte que le coeur de la frappe automatique, même solution.
+ * ONE STEP = ONE WRAP OF THE REFRESH SCAN, i.e. ~37.9 ms. The engine does not
+ * step any faster, and that is not a matter of convenience: the ninety cells
+ * are repainted ONE PER SUB-FRAME, so changing the value anywhere other than at
+ * wrap-around would land in the middle of a repaint cycle. Same constraint as
+ * the auto-type core, same solution.
  *
- *   AULA_STATUS_WIRED        1 éclat long           16 pas  0.61 s
- *   AULA_STATUS_24G          2 éclats courts        17 pas  0.64 s
- *   AULA_STATUS_BT           3 éclats courts        28 pas  1.06 s
- *   AULA_STATUS_PAIRING      clignotement rapide     8 pas  0.30 s  (boucle)
- *   AULA_STATUS_LINKED       une respiration        24 pas  0.91 s
- *   AULA_STATUS_LOST         2 éclats longs         32 pas  1.21 s
- *   AULA_STATUS_SLEEP_IN     fondu sortant          21 pas  0.80 s
- *   AULA_STATUS_SLEEP_OUT    fondu entrant          11 pas  0.42 s
- *   AULA_STATUS_LOW_BATT     pulsation lente        40 pas  1.52 s  (boucle)
- *   AULA_STATUS_AZERTY_ON    4 éclats courts        24 pas  0.91 s
- *   AULA_STATUS_AZERTY_OFF   1 éclat court           5 pas  0.19 s
- *   AULA_STATUS_AZERTY       lueur faible fixe       1 pas           (boucle)
+ *   AULA_STATUS_WIRED        1 long flash           16 steps  0.61 s
+ *   AULA_STATUS_24G          2 short flashes        17 steps  0.64 s
+ *   AULA_STATUS_BT           3 short flashes        28 steps  1.06 s
+ *   AULA_STATUS_PAIRING      fast blink              8 steps  0.30 s  (loops)
+ *   AULA_STATUS_LINKED       single breath          24 steps  0.91 s
+ *   AULA_STATUS_LOST         2 long flashes         32 steps  1.21 s
+ *   AULA_STATUS_SLEEP_IN     fade out               21 steps  0.80 s
+ *   AULA_STATUS_SLEEP_OUT    fade in                11 steps  0.42 s
+ *   AULA_STATUS_LOW_BATT     slow pulse             40 steps  1.52 s  (loops)
+ *   AULA_STATUS_AZERTY_ON    4 short flashes        24 steps  0.91 s
+ *   AULA_STATUS_AZERTY_OFF   1 short flash           5 steps  0.19 s
+ *   AULA_STATUS_AZERTY       steady dim glow         1 step           (loops)
  *
- * Tout tient dans un seul tableau plat avec des tables d'offset et de longueur :
- * un tableau de pointeurs `__code` coûterait plus de flash et une indirection de
- * plus à chaque pas, pour rien.
+ * Everything fits in a single flat array with offset and length tables: an
+ * array of `__code` pointers would cost more flash and an extra indirection on
+ * every step, for nothing.
  */
 static const __code uint8_t pat_data[227] = {
     255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
@@ -46,13 +46,13 @@ static const __code uint8_t pat_data[227] = {
      40,  28,  18,  10,   4,   0,   0,   0,   0,   0,   0,   0,
       0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
       0,   0,   0,   0,   0,
-    /* AZERTY_ON : quatre éclats courts, 3 pas allumés / 3 éteints. */
+    /* AZERTY_ON: four short flashes, 3 steps on / 3 steps off. */
     255, 255, 255,   0,   0,   0, 255, 255, 255,   0,   0,   0,
     255, 255, 255,   0,   0,   0, 255, 255, 255,   0,   0,   0,
-    /* AZERTY_OFF : un seul éclat court. */
+    /* AZERTY_OFF: a single short flash. */
     255, 255, 255,   0,   0,
-    /* AZERTY : un unique pas en boucle, donc une lueur fixe. Assez faible pour
-     * ne pas se confondre avec un éclat, assez visible dans le noir. */
+    /* AZERTY: a single looping step, hence a steady glow. Dim enough not to
+     * be mistaken for a flash, bright enough to be visible in the dark. */
      40,
 };
 
@@ -60,8 +60,8 @@ static const __code uint8_t pat_off[12] = {0,  16, 33,  61,  69,  93,
                                            125, 146, 157, 197, 221, 226,};
 static const __code uint8_t pat_len[12] = {16, 17, 28, 8, 24, 32, 21, 11, 40, 24, 5, 1,};
 
-/* Bit N à 1 : le motif N boucle au lieu de se terminer. Douze motifs, donc
- * douze bits : le masque ne tient PAS dans un octet. */
+/* Bit N set: pattern N loops instead of ending. Twelve patterns, hence
+ * twelve bits: the mask does NOT fit in a single byte. */
 #define PAT_LOOPING 0x0908u
 
 #define PAT_LOOPS(p) ((PAT_LOOPING & (uint16_t)(1u << (p))) != 0u)
@@ -69,8 +69,8 @@ static const __code uint8_t pat_len[12] = {16, 17, 28, 8, 24, 32, 21, 11, 40, 24
 static __xdata uint8_t st_pat = AULA_STATUS_NONE;
 static __xdata uint8_t st_pos;
 
-/* Fronts, pour `aula_status_poll()`. `0xFF` force l'annonce du transport au
- * tout premier passage : le clavier dit sur quoi il démarre. */
+/* Edge tracking for `aula_status_poll()`. `0xFF` forces the transport to be
+ * announced on the very first pass: the keyboard reports what it boots into. */
 static __xdata uint8_t prev_link = 0xFF;
 static __bit           prev_conn;
 static __bit           prev_low;
@@ -79,17 +79,17 @@ static __bit           az_rest;
 
 void aula_status_event(uint8_t event)
 {
-    /* `st_pat` et `st_pos` sont lus par l'ISR à chaque sous-trame : les écrire
-     * en deux temps montrerait un pas pris dans l'autre motif. */
+    /* `st_pat` and `st_pos` are read by the ISR on every sub-frame: writing
+     * them non-atomically would sample a step from the wrong pattern. */
     ET2    = 0;
     st_pat = event;
     st_pos = 0;
     ET2    = 1;
 }
 
-/* Ce qui reste à l'écran quand aucun motif ponctuel ne joue. La priorité est
- * documentée dans `aula_status.h` : deux états de repos sur une LED blanche
- * unique ne se distinguent pas, il faut donc en choisir un. */
+/* What remains displayed when no one-shot pattern is playing. Priority is
+ * documented in `aula_status.h`: two resting states on a single white LED
+ * cannot be told apart, so one must be chosen. */
 static void status_rest(void)
 {
     if (low_batt) {
@@ -106,8 +106,8 @@ void aula_status_set_azerty(bool on)
 {
     az_rest = on ? 1 : 0;
     if (!aula_status_busy()) {
-        /* Le motif de basculement est posté juste après par `aula_layout.c` ; ce
-         * repos est celui qu'il trouvera en finissant. */
+        /* The toggle pattern is posted right after by `aula_layout.c`; this
+         * resting state is what it will fall back to when it finishes. */
         ET2 = 0;
         status_rest();
         ET2 = 1;
@@ -157,8 +157,8 @@ uint8_t aula_status_level(void)
 
 void aula_status_poll(uint8_t link, bool connected, bool low)
 {
-    /* La batterie faible ne déclenche pas de motif ponctuel : c'est un ÉTAT, il
-     * tient le voyant au repos et cède la place à tout évènement. */
+    /* Low battery does not trigger a one-shot pattern: it is a STATE that
+     * holds the indicator at rest and yields to any event. */
     if (low != prev_low) {
         prev_low = low;
         low_batt = low;
@@ -169,8 +169,8 @@ void aula_status_poll(uint8_t link, bool connected, bool low)
 
     if (link != prev_link) {
         prev_link = link;
-        /* `rf_link()` rend 0 filaire, 1 la 2,4 GHz, 2 le Bluetooth -- le même
-         * ordre que les trois premiers motifs, à dessein. */
+        /* `rf_link()` returns 0 for wired, 1 for 2.4 GHz, 2 for Bluetooth --
+         * the exact same order as the first three patterns, by design. */
         aula_status_event((link <= AULA_STATUS_BT) ? link : (uint8_t)AULA_STATUS_WIRED);
         prev_conn = connected;
         return;

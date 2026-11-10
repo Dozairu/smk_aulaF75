@@ -3,34 +3,34 @@
 #include <stdbool.h>
 
 /*
- * Mode « frappe automatique » de l'AULA F75.
+ * "Auto-type" mode for the AULA F75.
  *
- * Tape une lettre au hasard, l'efface aussitôt d'un retour arrière, et
- * recommence toutes les 1 s ± 500 ms. Le texte de l'hôte reste donc inchangé,
- * mais la session le voit comme active. Rien de tel dans le firmware d'usine.
+ * Types a random letter, immediately deletes it with Backspace, and repeats
+ * every 1 s +/- 500 ms. The host's text remains unchanged, while keeping the
+ * user session active. There is no such feature in the stock firmware.
  *
- * Le découpage en deux fonctions n'est pas du style, c'est la même contrainte
- * que pour `aula_encoder.c` : `send_keyboard_report()` traverse la pile de
- * rapports, injoignable depuis une ISR sans collision de recouvrement SDCC --
- * ce que `utils/check_interrupts.py` casse le build pour empêcher.
+ * Splitting this into two functions is not a stylistic choice, but the same
+ * constraint as in `aula_encoder.c`: `send_keyboard_report()` traverses the
+ * report stack, which cannot be called from an ISR without an SDCC overlay
+ * collision -- something `utils/check_interrupts.py` fails the build to
+ * prevent.
  */
 
-/* Depuis `kb_process_record` : arme le mode (touche MACRO_TG enfoncée). */
+/* From `kb_process_record`: arms the mode (when MACRO_TG is pressed). */
 void aula_macro_arm(void);
 
 /*
- * Depuis `kb_process_record`, pour TOUT évènement de touche. Rend true quand
- * l'évènement doit être avalé -- c'est ce qui rend muette la touche qui arrête
- * le mode, et ce qui empêche le relâchement de la combinaison d'activation de
- * l'arrêter aussitôt.
+ * From `kb_process_record`, for EVERY key event. Returns true when the event
+ * must be swallowed -- silencing the key press that cancels the mode, and
+ * preventing the release of the activation combo from immediately stopping it.
  */
 bool aula_macro_intercept(bool pressed);
 
-/* Depuis l'ISR (rendu LED) : le mode tape-t-il en ce moment ? */
+/* From the ISR (LED rendering): is the mode currently typing? */
 bool aula_macro_active(void);
 
-/* Depuis la sous-trame LED (ISR, ~420 µs) : fait courir le minuteur. */
+/* From the LED subframe (ISR, ~420 us): advances the timer. */
 void aula_macro_tick(void);
 
-/* Depuis la boucle principale : émet les rapports et surveille l'annulation. */
+/* From the main loop: sends reports and monitors for cancellation. */
 void aula_macro_task(void);

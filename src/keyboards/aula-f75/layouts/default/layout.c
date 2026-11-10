@@ -5,29 +5,29 @@
 #include <stdint.h>
 
 /*
- * Disposition physique dérivée de la table de couleurs d'OpenRGB
+ * Physical layout derived from OpenRGB's color table
  * (Controllers/SinowealthController/SinowealthKeyboard10cController,
- *  aula_f75_layout), où index_LED = colonne * 6 + ligne.
+ *  aula_f75_layout), where LED_index = col * 6 + row.
  *
- * Recoupé avec une capture HID physique indépendante (tiagoluizo/smk,
- * docs/superpowers/evidence/2026-08-07-aula-f75-keymap-capture.md), qui mappe
- * la matrice 6x15 sur des usages HID uniques 0x04..0x5D. Les six rangées
- * correspondent position par position.
+ * Cross-checked against an independent physical HID capture (tiagoluizo/smk,
+ * docs/superpowers/evidence/2026-08-07-aula-f75-keymap-capture.md), which maps
+ * the 6x15 matrix onto unique HID usages 0x04..0x5D. All six rows match
+ * position for position.
  *
- * Une seule différence, et elle compte : la capture donne **81** commutateurs,
- * pas 80. La position [ligne 0][colonne 14] est l'**appui d'encodeur** -- une
- * vraie position de matrice, sans LED sous son capuchon.
+ * One single difference, and it matters: the capture yields **81** switches,
+ * not 80. Position [row 0][col 14] is the **encoder press** -- a real matrix
+ * position, with no LED under its cap.
  *
- * ⚠️ Cette position a bel et bien une LED, et même trois canaux utiles : ses
- * canaux RGB pilotent les VOYANTS D'ÉTAT, câblés ailleurs sur la carte (rouge =
- * Verr. Maj, vert et bleu = le voyant entre Échap et F1). Mesuré sur l'appareil.
- * Voir `indicators.c`. C'est pourquoi OpenRGB ne rattache que 80 de ses 90 LED à
- * une touche : les dix autres ne sont pas des trous.
+ * ⚠️ That position actually does have an LED, and even three useful channels:
+ * its RGB channels drive the STATUS INDICATORS wired elsewhere on the board
+ * (red = Caps Lock, green and blue = the indicator between Esc and F1).
+ * Measured on the device. See `indicators.c`. That is why OpenRGB only maps 80
+ * of its 90 LEDs to a key: the other ten are not all gaps.
  *
- * La ROTATION de l'encodeur est hors matrice : phases sur P0.5 et P0.6, lues
- * par le poller @ 0x7928 (mov a,P0 ; swap ; rrc ; anl #0x03), appelé depuis le
- * tick. Transcrite dans `aula_encoder.c` et confirmée sur l'appareil -- SMK n'a
- * pas de support d'encodeur, elle est câblée à la main pour ce clavier.
+ * Encoder ROTATION is off-matrix: phases on P0.5 and P0.6, read by the poller
+ * @ 0x7928 (mov a,P0 ; swap ; rrc ; anl #0x03), called from the tick.
+ * Transcribed in `aula_encoder.c` and confirmed on the device -- SMK has no
+ * encoder support, so it is wired by hand for this keyboard.
  */
 
 // clang-format off

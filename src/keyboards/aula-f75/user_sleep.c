@@ -13,36 +13,35 @@
 #ifdef SLEEP_ENABLE
 
 /*
- * Veille -- transcrite de la séquence du firmware d'usine.
+ * Sleep -- transcribed from the factory firmware sequence.
  *
- *   fcn @ 0x006E  parking du panneau (lignes en entrée + pull-up, colonnes basses)
- *   0x7DCB-0x7DF1 parking des broches hors matrice
+ *   fcn @ 0x006E  panel parking (rows as inputs + pull-up, columns low)
+ *   0x7DCB-0x7DF1 parking of off-matrix pins
  *   0x7DF4        EXF1 = 0            (extint_wake_clear)
- *   0x7DF6        IENC = 0xF3         (identique à platform/sh68f90/extint.c)
- *   0x7DF9        EXF0 = 0x40         (idem)
+ *   0x7DF6        IENC = 0xF3         (identical to platform/sh68f90/extint.c)
+ *   0x7DF9        EXF0 = 0x40         (ditto)
  *   0x7DFC        IEN0 |= 0x02        (EX4 = 1)
  *   0x7E34        PCON |= 0x02        (power-down)
  *
- * Mécanisme de réveil : toutes les colonnes sont tenues BASSES et les lignes
- * sont en entrée avec pull-up. Un appui quelconque tire une ligne au 0, ce qui
- * déclenche INT4.
+ * Wake mechanism: all columns are held LOW and rows are inputs with pull-ups.
+ * Pressing any key pulls a row to 0, triggering INT4.
  *
- * L'ordre des écritures est celui du firmware d'usine et doit le rester : la
- * mise à l'état bas précède le passage en sortie.
+ * The write order matches the factory firmware and must remain so: driving pins
+ * low precedes switching them to outputs.
  *
- * ⚠️ Non vérifié sur matériel. Un parking faux, c'est un clavier qui ne se
- * réveille pas et qu'il faut reflasher.
+ * ⚠️ Unverified on hardware. Incorrect parking means a keyboard that never
+ * wakes up and must be reflashed.
  */
 
 /*
- * Le mode suit le sélecteur en direct, comme chez le NuPhy Air60 :
- * `sleep_task()` interroge ce crochet à CHAQUE passage.
+ * The mode tracks the selector live, as on the NuPhy Air60:
+ * `sleep_task()` queries this hook on EVERY pass.
  *
- * La distinction n'est pas cosmétique. En `USER_SLEEP_USB`, l'endormissement est
- * décidé par la suspension du bus ; en `USER_SLEEP_RF`, il l'est par le
- * compteur d'inactivité de `sleep.c` — et hors mode RF ce compteur est remis à
- * zéro à chaque passage, donc il ne sert à rien. Rendre `USB` en dur, comme le
- * faisait ce fichier, revenait à n'avoir aucune veille sur batterie.
+ * The distinction is not cosmetic. In `USER_SLEEP_USB`, sleep entry is
+ * triggered by bus suspend; in `USER_SLEEP_RF`, it is triggered by the
+ * inactivity counter in `sleep.c` — and outside RF mode that counter is reset
+ * to zero on every pass, making it a no-op. Hardcoding `USB`, as this file
+ * previously did, meant having no sleep at all on battery.
  */
 user_sleep_mode_t user_sleep_supported(void)
 {
@@ -55,14 +54,14 @@ user_sleep_mode_t user_sleep_supported(void)
 
 static void park_panel(void)
 {
-    /* Lignes : entrée + pull-up (fcn @ 0x006E, 0x006E-0x0091) */
+    /* Rows: input + pull-up (fcn @ 0x006E, 0x006E-0x0091) */
     GPIO_INPUT(7, KB_R_P7_MASK);
     GPIO_PULLUP_ON(7, KB_R_P7_MASK);
     GPIO_INPUT(5, KB_R_P5_MASK);
     GPIO_PULLUP_ON(5, KB_R_P5_MASK);
 
-    /* Colonnes et broches annexes : niveau bas AVANT de passer en sortie
-     * (0x0092-0x00B9), puis direction sortie (0x00BC et suivants). */
+    /* Columns and auxiliary pins: drive low BEFORE switching to output
+     * (0x0092-0x00B9), then set output direction (0x00BC onwards). */
     GPIO_LOW(6, KB_C_P6_MASK);
     GPIO_LOW(5, KB_C_P5_MASK);
     GPIO_LOW(4, (uint8_t)(KB_C_P4_MASK | _P4_5 | _P4_6));
@@ -73,12 +72,12 @@ static void park_panel(void)
     GPIO_OUTPUT(5, KB_C_P5_MASK);
     GPIO_OUTPUT(4, (uint8_t)(KB_C_P4_MASK | _P4_5 | _P4_6));
 
-    /* Broches hors matrice (0x7DCB-0x7DF1) */
+    /* Off-matrix pins (0x7DCB-0x7DF1) */
     GPIO_PULLUP_OFF(0, (uint8_t)(_P0_0 | _P0_1));
     GPIO_OUTPUT(0, (uint8_t)(_P0_0 | _P0_1));
     GPIO_LOW(0, (uint8_t)(_P0_0 | _P0_1));
 
-    GPIO_PULLUP_OFF(0, (uint8_t)(_P0_5 | _P0_6)); /* phases d'encodeur */
+    GPIO_PULLUP_OFF(0, (uint8_t)(_P0_5 | _P0_6)); /* encoder phases */
     GPIO_OUTPUT(0, (uint8_t)(_P0_5 | _P0_6));
     GPIO_LOW(0, (uint8_t)(_P0_5 | _P0_6));
 
@@ -97,19 +96,19 @@ static void park_panel(void)
 void user_sleep_prepare(void)
 {
 #ifdef RF_EUART0
-    rf_sleep_prepare(); /* vidange l'émission puis coupe l'EUART0, comme 0x7D74 */
+    rf_sleep_prepare(); /* drains TX then disables EUART0, like 0x7D74 */
 #endif
     park_panel();
-    extint_wake_arm(); /* IENC=0xF3, EXF0=0x40, EX4=1 -- mêmes valeurs qu'en usine */
+    extint_wake_arm(); /* IENC=0xF3, EXF0=0x40, EX4=1 -- same values as factory */
 }
 
 /*
- * Le motif d'endormissement doit jouer AVANT que `sleep_task()` ne coupe le tick
- * et le PWM -- après, plus rien ne s'affiche. D'où ces trois états plutôt qu'un
- * simple drapeau : `ARMED` lance le fondu et fait patienter la veille, `DONE`
- * la laisse partir, et `user_sleep_cancel()` remet à `IDLE` dès que la veille
- * n'est plus due, ce qui rattrape le cas où l'utilisateur interrompt
- * l'endormissement pendant le fondu.
+ * The sleep animation must play BEFORE `sleep_task()` shuts down the tick
+ * and PWM -- afterwards, nothing can be displayed. Hence these three states
+ * rather than a simple flag: `ARMED` starts the fade-out and holds off sleep,
+ * `DONE` lets it proceed, and `user_sleep_cancel()` resets to `IDLE` as soon
+ * as sleep is no longer due, catching the case where the user interrupts sleep
+ * entry during the fade-out.
  */
 #define SLEEP_ANIM_IDLE  0
 #define SLEEP_ANIM_ARMED 1
@@ -147,10 +146,10 @@ void user_sleep_wake(void)
     user_gpio_init();
 #ifdef RF_EUART0
     /*
-     * APRÈS `user_gpio_init()`, et pas avant : c'est lui qui rend P7.4 et P4.5
-     * au sélecteur (P4CR=0x4D, P7CR=0x60 les laissent en entrée avec pull-up),
-     * broches que `park_panel()` tenait en sortie basse pendant le sommeil --
-     * comme le firmware d'usine en 0x7DCB-0x7DF1.
+     * AFTER `user_gpio_init()`, not before: that function hands P7.4 and P4.5
+     * back to the selector (P4CR=0x4D, P7CR=0x60 leave them as inputs with
+     * pull-ups), pins that `park_panel()` held as low outputs during sleep --
+     * just like the factory firmware at 0x7DCB-0x7DF1.
      */
     rf_sleep_wake();
 #endif

@@ -4,70 +4,69 @@
 #include <stdint.h>
 
 /*
- * Voyant d'état de l'AULA F75 — la LED blanche entre Échap et F1.
+ * AULA F75 status indicator — the white LED between Esc and F1.
  *
- * Ce n'est pas une LED de touche. Elle est câblée sur les canaux VERT et BLEU de
- * la position de grille `[ligne 0][colonne 14]`, celle de l'appui molette, à
- * l'autre bout du clavier ; le canal ROUGE de cette même position pilote le
- * voyant de Verr. Maj. Mesuré sur l'appareil, voir `indicators.c`.
+ * This is not a key LED. It is wired to the GREEN and BLUE channels of matrix
+ * position `[row 0][col 14]`, the encoder click position at the far end of the
+ * keyboard; the RED channel of that same position drives the Caps Lock
+ * indicator. Measured on hardware, see `indicators.c`.
  *
- * Les deux canaux allument la MÊME LED blanche et leurs intensités s'ajoutent :
- * il n'y a donc ni couleur ni second voyant à exploiter. Les motifs se
- * distinguent uniquement par leur RYTHME -- d'où un, deux ou trois éclats pour
- * les trois transports, qui se comptent d'un coup d'oeil.
+ * Both channels light the SAME white LED and their intensities add up: there is
+ * therefore neither color nor a second indicator to work with. Patterns are
+ * distinguished solely by their CADENCE -- hence one, two, or three flashes for
+ * the three transports, which can be counted at a glance.
  *
- * Découpage ISR / boucle principale identique à `aula_encoder.c` et
- * `aula_macro.c` : le moteur avance dans l'ISR, les évènements sont postés par
- * la boucle principale.
+ * ISR / main-loop split identical to `aula_encoder.c` and `aula_macro.c`: the
+ * engine steps in the ISR, events are posted by the main loop.
  */
 
-#define AULA_STATUS_WIRED     0 /* passage en filaire        : 1 éclat long   */
-#define AULA_STATUS_24G       1 /* passage en 2,4 GHz        : 2 éclats       */
-#define AULA_STATUS_BT        2 /* passage en Bluetooth      : 3 éclats       */
-#define AULA_STATUS_PAIRING   3 /* appairage en cours        : clignotement   */
-#define AULA_STATUS_LINKED    4 /* liaison établie           : une respiration*/
-#define AULA_STATUS_LOST      5 /* liaison perdue            : 2 éclats longs */
-#define AULA_STATUS_SLEEP_IN  6 /* entrée en veille          : fondu sortant  */
-#define AULA_STATUS_SLEEP_OUT 7 /* sortie de veille          : fondu entrant  */
-#define AULA_STATUS_LOW_BATT  8 /* batterie faible           : pulsation lente*/
-#define AULA_STATUS_AZERTY_ON  9 /* mode AZERTY allumé       : 4 éclats courts*/
-#define AULA_STATUS_AZERTY_OFF 10 /* mode AZERTY éteint      : 1 éclat court  */
-#define AULA_STATUS_AZERTY    11 /* mode AZERTY actif        : lueur faible fixe */
+#define AULA_STATUS_WIRED     0 /* switch to wired           : 1 long flash    */
+#define AULA_STATUS_24G       1 /* switch to 2.4 GHz         : 2 flashes       */
+#define AULA_STATUS_BT        2 /* switch to Bluetooth       : 3 flashes       */
+#define AULA_STATUS_PAIRING   3 /* pairing in progress       : fast blink      */
+#define AULA_STATUS_LINKED    4 /* link established          : single breath   */
+#define AULA_STATUS_LOST      5 /* link lost                 : 2 long flashes  */
+#define AULA_STATUS_SLEEP_IN  6 /* entering sleep            : fade out        */
+#define AULA_STATUS_SLEEP_OUT 7 /* waking from sleep         : fade in         */
+#define AULA_STATUS_LOW_BATT  8 /* low battery               : slow pulse      */
+#define AULA_STATUS_AZERTY_ON  9 /* AZERTY mode enabled      : 4 short flashes */
+#define AULA_STATUS_AZERTY_OFF 10 /* AZERTY mode disabled    : 1 short flash   */
+#define AULA_STATUS_AZERTY    11 /* AZERTY mode active       : steady dim glow */
 #define AULA_STATUS_NONE      0xFF
 
-/* Depuis la boucle principale : joue un motif, en écrasant celui en cours. */
+/* From the main loop: plays a pattern, overriding whichever is currently running. */
 void aula_status_event(uint8_t event);
 
 /*
- * Depuis `rf_task()` : détecte les transitions de transport, de connexion et de
- * batterie, et poste l'évènement correspondant. Toute la logique de front vit
- * ici pour que `aula_rf.c` n'ait qu'une ligne à appeler.
+ * From `rf_task()`: detects transport, connection, and battery transitions, and
+ * posts the corresponding event. All edge-detection logic lives here so that
+ * `aula_rf.c` only has a single line to call.
  */
 void aula_status_poll(uint8_t link, bool connected, bool low_batt);
 
-/* Vrai tant qu'un motif PONCTUEL joue. Les motifs en boucle -- appairage,
- * batterie faible -- ne comptent pas : ils ne finissent jamais. */
+/* True while a ONE-SHOT pattern is playing. Looping patterns -- pairing,
+ * low battery -- do not count: they never finish on their own. */
 bool aula_status_busy(void);
 
 /*
- * Témoin permanent du mode AZERTY. C'est un ÉTAT de repos, comme la batterie
- * faible -- et sur une LED blanche unique deux états de repos ne se distinguent
- * pas. La priorité est donc tranchée ici, une fois pour toutes :
+ * Permanent indicator for AZERTY mode. This is a resting STATE, like low
+ * battery -- and on a single white LED two resting states cannot be told apart.
+ * Priority is therefore settled here, once and for all:
  *
- *   batterie faible  >  AZERTY actif  >  éteint
+ *   low battery  >  AZERTY active  >  off
  *
- * La batterie passe devant : elle est urgente, alors que le mode AZERTY reste
- * annoncé par son motif de basculement.
+ * Battery comes first: it is urgent, whereas AZERTY mode has already been
+ * announced by its toggle pattern.
  */
 void aula_status_set_azerty(bool on);
 
-/* Vrai dès que le voyant montre quelque chose, motif ponctuel ou état de repos.
- * Sert de porte au rendu : sans elle, les motifs seraient invisibles
- * rétroéclairage éteint -- justement quand on les regarde. */
+/* True whenever the indicator is showing something, whether a one-shot pattern
+ * or a resting state. Acts as a rendering gate: without it, patterns would be
+ * invisible when the backlight is off -- right when you look at them. */
 bool aula_status_lit(void);
 
-/* Depuis l'ISR, au bouclage du balayage de régénération (~37,9 ms). */
+/* From the ISR, when the refresh scan wraps around (~37.9 ms). */
 void aula_status_tick(void);
 
-/* Depuis l'ISR : intensité à écrire sur les canaux vert et bleu. */
+/* From the ISR: intensity to write to the green and blue channels. */
 uint8_t aula_status_level(void);

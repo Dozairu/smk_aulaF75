@@ -5,68 +5,69 @@
 #include <stdbool.h>
 
 /*
- * Décodeur en quadrature, transcrit de `fcn.00007928`.
+ * Quadrature decoder, transcribed from `fcn.00007928`.
  *
- *   état = (P0 >> 5) & 3            deux bits : P0.5 et P0.6
- *   hist = (état & 3) | (hist << 2) & 0x3C
- *   0x0B, 0x34 -> un sens          0x07, 0x38 -> l'autre
+ *   state = (P0 >> 5) & 3           two bits: P0.5 and P0.6
+ *   hist  = (state & 3) | (hist << 2) & 0x3C
+ *   0x0B, 0x34 -> one direction     0x07, 0x38 -> the other
  *
- * Les deux broches sont déjà en entrée avec rappel sous la configuration
- * d'usine reprise telle quelle par `user_init.c` : `P0CR = 0x9C` laisse les
- * bits 5 et 6 à zéro, `P0PCR = 0xF8` les met à un. Rien à configurer ici.
+ * Both pins are already configured as inputs with pull-ups by the stock
+ * setup replicated verbatim in `user_init.c`: `P0CR = 0x9C` leaves bits 5
+ * and 6 cleared, and `P0PCR = 0xF8` sets them to 1. Nothing to configure here.
  *
- * L'usine émet les usages Consumer `0xE9` et `0xEA` -- volume + et volume - --
- * par le tampon `0x09BD`. Un réglage persistant (offset 26 du bloc) bascule la
- * molette sur la luminosité du rétroéclairage ; la valeur du dump vaut 0, donc
- * volume. On suit le dump.
+ * The stock firmware sends Consumer usages `0xE9` and `0xEA` -- Volume Up and
+ * Volume Down -- through buffer `0x09BD`. A persistent setting (block offset 26)
+ * switches the knob to backlight brightness; its value in the dump is 0, so
+ * volume. We follow the dump.
  */
 
 #define ENC_VOL_UP   0x00E9
 #define ENC_VOL_DOWN 0x00EA
 
 /*
- * L'hôte sonde l'endpoint toutes les millisecondes (`bInterval = 1`). Un appui
- * plus court qu'un sondage serait écrasé par son propre relâchement et ne
- * serait JAMAIS vu -- c'est le piège de tout évènement synthétique, qui n'a pas
- * la durée naturelle d'un doigt sur une touche.
+ * The host polls the endpoint every millisecond (`bInterval = 1`). A press
+ * shorter than one poll interval would be overwritten by its own release and
+ * would NEVER be seen -- the classic pitfall of any synthetic event, which
+ * lacks the natural duration of a finger on a key.
  *
- * Compté en sous-trames LED, soit ~420 µs pièce une fois les balayages de
- * matrice amortis : huit d'appui font ~3,4 ms, quatre de silence ~1,7 ms. Une
- * détente coûte donc ~5 ms, ce qui plafonne à deux cents détentes par seconde --
- * hors d'atteinte d'une molette réelle.
+ * Counted in LED subframes, i.e., ~420 us each once matrix scans are amortized:
+ * eight ticks held gives ~3.4 ms, four ticks of silence ~1.7 ms. One detent
+ * therefore takes ~5 ms, capping at two hundred detents per second -- well
+ * beyond the reach of a physical knob.
  */
 #define ENC_GAP  4
 #define ENC_HOLD (ENC_GAP + 8)
 
 /*
- * BATTEMENT DE LA MOLETTE.
+ * KNOB HEARTBEAT.
  *
- * Le motif est celui du coeur de la frappe automatique, mais sa CADENCE suit le
- * sens : monter accélère, descendre ralentit. C'est le seul retour possible sur
- * cette action -- l'hôte ne dit jamais au clavier où en est son volume, donc le
- * niveau affiché est RELATIF, pas le volume réel.
+ * The pattern is the same heartbeat as auto-type, but its PACE follows the
+ * rotation direction: turning up speeds it up, turning down slows it down. This
+ * is the only possible feedback for this action -- the host never tells the
+ * keyboard its current volume, so the displayed level is RELATIVE, not the
+ * actual host volume.
  *
- * Les huit cadences sont géométriques, de raison ~1,159 : l'oreille et l'oeil
- * perçoivent le tempo en rapport, pas en différence, donc des crans également
- * espacés en rapport se lisent comme également espacés.
+ * The eight rates form a geometric progression with a ratio of ~1.159: the ear
+ * and eye perceive tempo as a ratio rather than a difference, so steps spaced
+ * equally in ratio read as equally spaced.
  *
- * 256 = un pas de motif par bouclage de balayage (~37,9 ms). Le cycle complet
- * fait 24 pas, donc cycle_ms = 24 x 256 x 37,9 / cadence : la table couvre
- * 2,8 s au plus bas à 1,0 s au plus haut.
+ * 256 = one pattern step per scan wrap (~37.9 ms). A full cycle is 24 steps,
+ * so cycle_ms = 24 x 256 x 37.9 / rate: the table spans from 2.8 s at the
+ * lowest setting to 1.0 s at the highest.
  */
 #define ENC_BEAT_LEVELS 8
 #define ENC_BEAT_START  3
 
-/* ~1,5 s après la dernière détente, en sous-trames de ~420 µs. */
+/* ~1.5 s after the last detent, in ~420 us subframes. */
 #define ENC_BEAT_HOLD 3570u
 
 static const __code uint16_t enc_beat_rates[ENC_BEAT_LEVELS] = {
     83, 96, 111, 129, 150, 174, 201, 233,
 };
 
-/* Touchés uniquement depuis l'ISR -- `aula_encoder_sample()` les écrit, le rendu
- * LED les lit, et les deux vivent dans l'ISR Timer2. Aucune section critique à
- * poser, et aucune lecture 16 bits à cheval sur une écriture. */
+/* Touched only from the ISR -- `aula_encoder_sample()` writes them, the LED
+ * renderer reads them, and both live inside the Timer2 ISR. No critical section
+ * needed, and no 16-bit read can straddle a write. */
 static __xdata uint8_t  beat_lvl = ENC_BEAT_START;
 static __xdata uint16_t beat_to;
 
@@ -74,9 +75,9 @@ static volatile __data uint8_t enc_hold;
 static volatile __data int8_t  enc_pending;
 static volatile __bit          enc_release_due;
 
-/* En XDATA : ces deux-là ne sont touchés que par l'ISR, qui accède déjà à la
- * XRAM pour le rendu. La RAM interne n'a que dix-neuf octets de marge sur cette
- * carte, et ils valent mieux ailleurs. */
+/* In XDATA: these two are only touched by the ISR, which already accesses XRAM
+ * for rendering. Internal RAM only has nineteen bytes of headroom on this
+ * board, which are better spent elsewhere. */
 static __xdata uint8_t enc_state;
 static __xdata uint8_t enc_hist;
 
@@ -103,9 +104,9 @@ void aula_encoder_sample(void)
     enc_state = now;
 
     /*
-     * Les détentes font la queue plutôt que d'être perdues quand la boucle est
-     * plus lente que la molette. La borne évite qu'un balayage parasite ne
-     * remplisse le compteur et ne fasse défiler le volume tout seul.
+     * Detents are queued rather than dropped when the main loop is slower than
+     * the knob. The cap prevents a noisy scan from filling the counter and
+     * scrolling the volume on its own.
      */
     if (enc_hist == 0x0B || enc_hist == 0x34) {
         if (enc_pending < 8) enc_pending++;
@@ -146,9 +147,9 @@ void aula_encoder_task(void)
         return;
     }
 
-    /* `enc_pending` est incrémenté par l'ISR et décrémenté ici : la
-     * lecture-modification-écriture doit être protégée, sinon une détente se
-     * perd quand les deux tombent ensemble. */
+    /* `enc_pending` is incremented by the ISR and decremented here: the
+     * read-modify-write must be protected, otherwise a detent is lost when
+     * both happen together. */
     ET2     = 0;
     pending = enc_pending;
     if (pending > 0) {

@@ -14,16 +14,15 @@
 #endif
 
 /*
- * Logique clavier.
+ * Keyboard logic.
  *
- * Le sans-fil passe par l'EUART0 (BK3632), pas par le SPI bit-bangé de l'Air60 :
- * voir `aula_rf.c`. Le sélecteur à glissière est échantillonné par `rf_task()`,
- * qui décide seul du transport ; ici on se contente d'aiguiller les rapports.
+ * Wireless goes through EUART0 (BK3632), not the bit-banged SPI of the Air60:
+ * see `aula_rf.c`. The slide switch is sampled by `rf_task()`, which alone
+ * decides the transport; here we only route reports.
  *
- * Pas de switch mode-OS : sa broche n'est pas établie. Restent inconnues P0.0,
- * P0.1, P0.5, P0.6, P4.1, P4.4 et P7.7 — P7.4 et P4.5 sont maintenant
- * identifiées comme le sélecteur de connexion, et P4.7 comme la ligne « module
- * prêt » de la liaison série.
+ * No OS-mode switch: its pin has not been identified. P0.0, P0.1, P0.5, P0.6,
+ * P4.1, P4.4, and P7.7 remain unknown — P7.4 and P4.5 are now identified as the
+ * connection selector, and P4.7 as the serial link's "module ready" line.
  */
 
 void kb_init(void)
@@ -50,28 +49,28 @@ extern void indicators_toggle_rf_diag(void);
 #endif
 
 /*
- * Les keycodes LNK_BT1..3 ne choisissent que l'emplacement Bluetooth : le
- * transport, lui, vient de la glissière. Appuyer sur l'emplacement déjà actif
- * relance l'appairage, comme le raccourci d'usine qui pose le bit 0x2C.5.
+ * The LNK_BT1..3 keycodes only select the Bluetooth slot: the transport itself
+ * comes from the slide switch. Pressing the already-active slot restarts
+ * pairing, like the factory shortcut that sets bit 0x2C.5.
  *
- * Les six keycodes RGB étaient posés dans la keymap depuis le début sans que
- * rien ne les traite : ni ce fichier ni `layout_process_record` ne les
- * reconnaissaient, et ils tombaient dans `send_keycode()` où aucun prédicat ne
- * les prend. Ils appellent maintenant le moteur de rendu.
+ * The six RGB keycodes were placed in the keymap from the start without
+ * anything handling them: neither this file nor `layout_process_record`
+ * recognized them, and they fell through to `send_keycode()` where no predicate
+ * matched them. They now call the rendering engine.
  */
 bool kb_process_record(uint16_t keycode, bool key_pressed)
 {
     uint8_t slot;
 
-    /* Tant que la frappe automatique n'est pas revenue au repos, elle avale
-     * TOUT : c'est ce qui rend muette la touche qui l'arrête, et ce qui empêche
-     * le relâchement de la combinaison d'activation de l'arrêter aussitôt. */
+    /* As long as auto-typing has not returned to idle, it swallows EVERYTHING:
+     * this is what silences the key that stops it, and what prevents releasing
+     * the activation combo from stopping it immediately. */
     if (aula_macro_intercept(key_pressed)) {
         return false;
     }
 
-    /* Après la frappe automatique, avant le répartiteur : la traduction ne
-     * touche que les keycodes 0x04-0x38, donc les keycodes maison passent. */
+    /* After auto-typing, before the dispatcher: translation only touches
+     * keycodes 0x04-0x38, so custom keycodes pass through. */
     if (aula_layout_intercept(keycode, key_pressed)) {
         return false;
     }

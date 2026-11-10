@@ -2,7 +2,7 @@
 
 ## Specs
 
-- MCU: BYK901(-0997A) (SH68F90A)
+- MCU: BYK901(-0997A) ([SH68F90A](../platforms/sh68f90.md))
 - Backlight: Single Color LEDs (Yellow)
 - Indicators: Single CAPS_LOCK LED
 - Wireless: None
@@ -11,7 +11,7 @@
 
 | PCB | MCU | JTAG Setup |
 | --- | --- | ---------- |
-| ![e-yooso-z11-pcb](https://github.com/carlossless/smk/assets/498906/8335b453-d8ef-45ce-ae17-d5c9ffe432c1) | ![e-yooso-z11-mcu](https://github.com/carlossless/smk/assets/498906/ce7b8f84-7359-4c8d-a012-b90a1927bc6a) | ![e-yooso-z11-jtag](https://github.com/carlossless/smk/assets/498906/a872b662-24c5-47f8-98af-09b74ef02885) |
+| ![e-yooso-z11-pcb](https://github.com/karstx/smk/assets/498906/8335b453-d8ef-45ce-ae17-d5c9ffe432c1) | ![e-yooso-z11-mcu](https://github.com/karstx/smk/assets/498906/ce7b8f84-7359-4c8d-a012-b90a1927bc6a) | ![e-yooso-z11-jtag](https://github.com/karstx/smk/assets/498906/a872b662-24c5-47f8-98af-09b74ef02885) |
 
 ## SMK Supported Features
 

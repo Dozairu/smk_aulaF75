@@ -7,22 +7,22 @@
 #include <stdint.h>
 
 /*
- * ATTENTE DU RELÂCHEMENT COMPLET -- ce n'est pas du confort.
+ * WAITING FOR FULL KEY RELEASE -- this is not a convenience feature.
  *
- * `Fn` est une touche `MO()` : `process_key_state()` (src/smk/matrix.c) la
- * traite AVANT d'appeler `kb_process_record()` et retourne tôt, donc notre
- * crochet ne la voit jamais. Pire, son relâchement appelle `clear_keys()`, qui
- * vide le rapport clavier sans l'émettre. Si la machine démarrait à
- * l'activation, la séquence `Fn v  Espace v  Espace ^  Fn ^` viderait le
- * rapport en plein milieu de la première lettre.
+ * `Fn` is an `MO()` key: `process_key_state()` (src/smk/matrix.c) handles it
+ * BEFORE calling `kb_process_record()` and returns early, so our hook never
+ * sees it. Worse, releasing it calls `clear_keys()`, which wipes the keyboard
+ * report without sending it. If the state machine started immediately upon
+ * activation, the sequence `Fn v  Space v  Space ^  Fn ^` would wipe the report
+ * right in the middle of the first letter.
  *
- * D'où l'état MACRO_WAIT, traversé DEUX fois : avant la première frappe, et
- * après une annulation. Il avale tout jusqu'à ce que la matrice soit vide.
+ * Hence the MACRO_WAIT state, entered TWICE: before the first keystroke, and
+ * after a cancellation. It swallows all events until the matrix is completely
+ * clear.
  *
- * `user_matrix_pressed()` (kbdef.h) donne cet état brut par colonne, déjà
- * masqué aux six lignes réelles. Il voit `Fn`, contrairement au crochet : c'est
- * lui qui rattrape le cas « l'utilisateur n'appuie que sur Fn » pendant que le
- * mode tourne.
+ * `user_matrix_pressed()` (kbdef.h) returns this raw per-column state, already
+ * masked to the six physical rows. Unlike the hook, it sees `Fn`: that is what
+ * catches the "user presses only Fn" case while the mode is running.
  */
 #define MACRO_OFF   0
 #define MACRO_WAIT  1
@@ -35,23 +35,23 @@
 #define STEP_BSP_UP   3
 
 /*
- * Il n'existe pas de compteur de millisecondes libre sur ce firmware. La
- * sous-trame LED est la seule cadence régulière : `src/smk/tick.c` alterne un
- * balayage de matrice et quinze sous-trames, ce qui amortit le créneau de
- * 400 µs à ~420 µs. C'est la base de temps que suit déjà `aula_encoder.c`.
+ * There is no free-running millisecond counter in this firmware. The LED
+ * subframe is the only regular timebase: `src/smk/tick.c` alternates one matrix
+ * scan with fifteen subframes, which amortizes the 400 us slot to ~420 us.
+ * This is the same timebase already used by `aula_encoder.c`.
  *
- * L'intermédiaire en `uint32_t` est délibéré : `1500 * 1000` déborde un
- * `uint16_t`, et une cadence plus lente demandée un jour déborderait sans
- * bruit. Une seconde vaut ~2 381 sous-trames, donc compteur 16 bits obligé.
+ * The `uint32_t` intermediate is deliberate: `1500 * 1000` overflows a
+ * `uint16_t`, and a slower rate requested in the future would silently
+ * overflow. One second is ~2,381 subframes, so a 16-bit counter is required.
  */
 #define MACRO_MS(ms) ((uint16_t)(((uint32_t)(ms) * 1000ul) / 420ul))
 
 /*
- * L'hôte sonde l'endpoint toutes les millisecondes (`bInterval = 1`). Un appui
- * plus court qu'un sondage serait écrasé par son propre relâchement et ne
- * serait JAMAIS vu -- le piège de tout évènement synthétique, qui n'a pas la
- * durée naturelle d'un doigt sur une touche. Huit sous-trames font ~3,4 ms,
- * soit trois sondages au minimum.
+ * The host polls the endpoint every millisecond (`bInterval = 1`). A press
+ * shorter than one poll interval would be overwritten by its own release and
+ * would NEVER be seen -- the classic pitfall of any synthetic event, which
+ * lacks the natural duration of a finger on a key. Eight subframes come out to
+ * ~3.4 ms, or at least three polls.
  */
 #define MACRO_HOLD 8
 
@@ -59,28 +59,28 @@
 #define MACRO_SPAN MACRO_MS(1000)
 
 /*
- * Garde-fou de MACRO_WAIT. Une touche restée collée rendrait `matrix_busy()`
- * vrai pour toujours : l'état ne déboucherait jamais, et comme il avale TOUT,
- * le clavier n'écrirait plus une seule lettre jusqu'au redémarrage. Au bout de
- * cinq secondes on retombe au repos, quoi qu'il arrive.
+ * Safeguard timeout for MACRO_WAIT. A stuck key would keep `matrix_busy()`
+ * true forever: the state would never exit, and since it swallows EVERYTHING,
+ * the keyboard would never type another letter until rebooted. After five
+ * seconds we fall back to idle no matter what.
  *
- * Retomber au repos plutôt que démarrer : avec une touche collée, démarrer
- * enchaînerait annulation et redémarrage sans fin. Contrepartie assumée --
- * tenir la combinaison d'activation plus de cinq secondes ne lance rien.
+ * Falling back to idle rather than starting: with a stuck key, starting would
+ * loop endlessly between cancellation and restart. Accepted trade-off --
+ * holding the activation combo for more than five seconds does nothing.
  */
 #define MACRO_WAIT_MAX MACRO_MS(5000)
 
-/* Décrémenté par l'ISR, armé par la boucle principale.
+/* Decremented by the ISR, armed by the main loop.
  *
- * En XDATA et non en RAM interne : cette carte n'a que dix-sept octets de marge
- * interne contre plus de deux mille en XRAM, et l'ISR y accède déjà en
- * permanence pour le rendu. Le surcoût est une décroissance 16 bits par
- * sous-trame, soit ~1 µs sur un créneau de 400. Même arbitrage que pour
- * `enc_state`/`enc_hist` dans `aula_encoder.c`. */
+ * Placed in XDATA rather than internal RAM: this board only has seventeen bytes
+ * of internal headroom versus over two thousand in XRAM, and the ISR already
+ * accesses XRAM continuously for rendering. The overhead is one 16-bit
+ * decrement per subframe, i.e. ~1 us out of a 400 us slot. Same trade-off as
+ * `enc_state`/`enc_hist` in `aula_encoder.c`. */
 static volatile __xdata uint16_t macro_wait;
 
-/* Le tick lève ce bit plutôt que de laisser la boucle lire le compteur : un
- * test de bit est atomique sur 8051, une lecture 16 bits ne l'est pas. */
+/* The tick sets this bit rather than letting the main loop read the counter: a
+ * bit test is atomic on 8051, whereas a 16-bit read is not. */
 static volatile __bit macro_due;
 
 static __xdata uint8_t  macro_state;
@@ -88,7 +88,7 @@ static __xdata uint8_t  macro_step;
 static __xdata uint8_t  macro_letter;
 static __xdata uint16_t macro_rnd;
 
-/* MACRO_WAIT sert deux fois ; ce bit dit où il débouche. */
+/* MACRO_WAIT serves two purposes; this bit selects which state it transitions to. */
 static __bit macro_go_after_wait;
 
 void aula_macro_tick(void)
@@ -136,8 +136,8 @@ static bool matrix_busy(void)
 
 static void macro_release_all(void)
 {
-    /* Sans ça, la touche en cours reste enfoncée côté hôte : il n'y a pas de
-     * doigt pour la relever. */
+    /* Without this, the current key remains held on the host side: there is no
+     * physical finger to release it. */
     if (macro_letter != 0) {
         del_key(macro_letter);
         macro_letter = 0;
@@ -149,14 +149,13 @@ static void macro_release_all(void)
 static void macro_cancel(void)
 {
     /*
-     * Une lettre est À L'ÉCRAN si elle a été tapée et pas encore effacée,
-     * c'est-à-dire entre son appui et celui du retour arrière -- soit les
-     * sous-états STEP_KEY_UP et STEP_BSP_DOWN, et eux seuls. Dès que
-     * STEP_BSP_DOWN a émis son appui, l'effacement est parti : plus rien à
-     * rattraper. Et en STEP_KEY_DOWN rien n'a encore été tapé.
+     * A letter is ON SCREEN if it has been typed and not yet erased, i.e.,
+     * between its key-down and the Backspace key-down -- which corresponds to
+     * substates STEP_KEY_UP and STEP_BSP_DOWN, and only those. Once
+     * STEP_BSP_DOWN has sent its press, the deletion is already in flight:
+     * nothing left to clean up. And in STEP_KEY_DOWN nothing has been typed yet.
      *
-     * Le calcul se fait AVANT `macro_release_all()`, qui remet `macro_letter`
-     * à zéro.
+     * Evaluated BEFORE `macro_release_all()`, which zeroes `macro_letter`.
      */
     const bool letter_pending = (macro_step == STEP_KEY_UP || macro_step == STEP_BSP_DOWN);
 
@@ -164,13 +163,12 @@ static void macro_cancel(void)
 
     if (letter_pending) {
         /*
-         * Le retour arrière de sortie ne peut PAS partir d'ici en un bloc :
-         * l'hôte ne sonde que toutes les millisecondes, et un appui suivi
-         * aussitôt de son relâchement serait écrasé dans le tampon d'endpoint
-         * sans jamais être vu. Il passe donc par la machine à états, avec le
-         * même temps de maintien que les frappes normales -- et une pause
-         * d'abord, pour laisser partir le relâchement que `macro_release_all()`
-         * vient d'émettre.
+         * The exit Backspace CANNOT be sent from here in one shot: the host
+         * only polls every millisecond, and a press immediately followed by its
+         * release would be overwritten in the endpoint buffer without ever
+         * being seen. It therefore goes through the state machine with the same
+         * hold time as normal keystrokes -- preceded by a pause so the release
+         * just queued by `macro_release_all()` goes out first.
          */
         macro_step  = 0;
         macro_state = MACRO_FLUSH;
@@ -189,9 +187,9 @@ void aula_macro_arm(void)
         return;
     }
 
-    /* Semence prise sur Timer2 en vol. L'instant d'activation est décidé par un
-     * humain : c'est la seule entropie de ce MCU, et elle suffit largement à un
-     * tirage qui n'a aucune exigence cryptographique. */
+    /* Seed sampled on the fly from Timer2. The activation instant is chosen by
+     * a human: that is the only entropy source on this MCU, and more than
+     * enough for a draw with no cryptographic requirements. */
     macro_rnd = (uint16_t)(((uint16_t)TH2 << 8) | TL2);
     if (macro_rnd == 0) {
         macro_rnd = 0xA5A5u;
@@ -225,13 +223,13 @@ void aula_macro_task(void)
             if (!macro_due) {
                 return;
             }
-            macro_state = MACRO_OFF; /* touche collée : voir MACRO_WAIT_MAX */
+            macro_state = MACRO_OFF; /* stuck key: see MACRO_WAIT_MAX */
             return;
         }
         if (macro_go_after_wait) {
             macro_state = MACRO_RUN;
             macro_step  = STEP_KEY_DOWN;
-            macro_due   = 1; /* première frappe sans attendre */
+            macro_due   = 1; /* fire first keystroke immediately */
         } else {
             macro_state = MACRO_OFF;
         }
@@ -259,8 +257,8 @@ void aula_macro_task(void)
         return;
     }
 
-    /* `Fn` seule ne passe pas par `kb_process_record` : c'est ici qu'elle est
-     * rattrapée, avec toute autre touche que le crochet aurait manquée. */
+    /* `Fn` alone does not pass through `kb_process_record`: it gets caught
+     * here, along with any other key the hook might have missed. */
     if (matrix_busy()) {
         macro_cancel();
         return;
@@ -271,11 +269,11 @@ void aula_macro_task(void)
     }
     macro_due = 0;
 
-    /* Sans ça, le mode s'arrêterait tout seul au bout d'environ 2 min 15 s en
-     * sans-fil : `sleep.c` endort après 21 000 trames et une trame vaut quinze
-     * sous-trames plus un balayage, soit ~6,3 ms -- PAS les quatre-vingt-dix
-     * sous-trames d'une trame d'animation. Contrepartie assumée : tant que le
-     * mode tourne, le clavier ne dort plus et vide sa batterie. */
+    /* Without this, the mode would stop on its own after ~2 min 15 s on
+     * wireless: `sleep.c` enters sleep after 21,000 frames, and a frame is
+     * fifteen subframes plus one matrix scan (~6.3 ms) -- NOT the ninety
+     * subframes of an animation frame. Accepted trade-off: while the mode is
+     * running, the keyboard never sleeps and drains the battery. */
     sleep_note_activity();
 
     switch (macro_step) {

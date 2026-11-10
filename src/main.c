@@ -1,4 +1,6 @@
+#include "reset.h"
 #include "clock.h"
+#include "peripherals.h"
 #include "ldo.h"
 #include "watchdog.h"
 #include "interrupts.h"
@@ -11,7 +13,6 @@
 #include "user_init.h"
 #include "indicators.h"
 #include "kb.h"
-#include "stack.h"
 #include "settings.h"
 #include "tick.h"
 #include "sleep.h"
@@ -24,8 +25,10 @@
 #endif
 void init(void)
 {
+    reset_init();
     ldo_init();
     clock_init();
+    peripherals_init();
 #ifdef DEBUG_SINK_UART
     uart_init();
 #endif
@@ -65,11 +68,6 @@ void main(void)
 {
     init();
 
-#if DEBUG == 1
-    // Must run after init(): anything before clock_init() bricks the keyboard.
-    stack_paint();
-#endif
-
     dprintf("SMK v" TOSTRING(SMK_VERSION) "\r\n");
     dprintf("KB " KEYBOARD_NAME " / " LAYOUT_NAME "\r\n");
     dprintf("DEVICE vId:" TOSTRING(USB_VID) " pId:" TOSTRING(USB_PID) "\n\r");
@@ -99,22 +97,15 @@ void main(void)
 
         kb_update_switches();
         kb_update();
-        const bool kb_active = matrix_task();
+        matrix_task();
 
-        // Priorité aux frappes : tant qu'on vient de traiter des touches ou qu'un
-        // scan frais attend (matrix_updated posé par l'ISR), on saute le repeint des
-        // 70 cases pour revenir au clavier au plus vite. L'ISR continue d'afficher le
-        // dernier framebuffer : l'effet se fige le temps de la rafale, il ne noircit pas.
-        if (!kb_active && !matrix_updated) {
-            indicators_render();
-        }
+        indicators_render();
 
         usb_task();
         settings_task();
         sleep_task();
 
 #if DEBUG == 1
-        stack_task();
         diag_task();
         interrupts_task();
         console_task();

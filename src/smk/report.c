@@ -9,11 +9,10 @@
 static uint8_t real_mods = 0;
 static uint8_t weak_mods = 0;
 
-/* Masque ET sur `real_mods` seul, jamais sur `weak_mods` : il sert a RETIRER du
- * rapport un modificateur que le doigt tient vraiment, pendant qu'une couche de
- * traduction en injecte un autre par `weak_mods`. Sur un hote AZERTY, le `!` du
- * clavier US est Maj+1 alors que le `!` francais est sans Maj : sans masque, la
- * touche sortirait `1`. Neutre a 0xFF tant que personne ne s'en sert. */
+/* AND mask applied to `real_mods` only, never `weak_mods`: used to strip a
+ * physically held modifier from the outgoing report while a translation layer
+ * injects another via `weak_mods` (e.g., US `!` is Shift+1 whereas French
+ * AZERTY `!` is unshifted). Neutral at 0xFF when unused. */
 static uint8_t mods_mask = 0xFF;
 
 report_keyboard_t keyboard_report;
@@ -244,7 +243,6 @@ void set_weak_mods(uint8_t mods)
 {
     weak_mods = mods;
 }
-
 void set_mods_mask(uint8_t mask)
 {
     mods_mask = mask;

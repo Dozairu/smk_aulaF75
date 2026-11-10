@@ -7,43 +7,42 @@
 #include <stdint.h>
 
 /*
- * PERSISTANCE DU MODE.
+ * MODE PERSISTENCE.
  *
- * `user_settings.ul_speed` est libre sur ce clavier : la structure partagée le
- * réserve à la vitesse de l'éclairage d'ambiance, que le F75 n'a pas, et son
- * unique consommateur est le NuPhy Air60. On y range le mode plutôt que
- * d'allonger `user_settings_t` -- ce qui ferait retomber TOUS les réglages
- * enregistrés au premier démarrage, `nvm.c` comparant la longueur du bloc.
+ * `user_settings.ul_speed` is unused on this keyboard: the shared struct
+ * reserves it for underglow speed, which the F75 lacks, and its only consumer
+ * is the NuPhy Air60. We store the layout mode there rather than growing
+ * `user_settings_t` -- which would invalidate ALL saved settings on first boot,
+ * since `nvm.c` checks the block length.
  *
- * Même arbitrage et même raison que `AULA_SETTINGS_BT_SLOT` dans `aula_rf.c`.
- * Le nom de l'alias est là pour que personne ne relise `ul_speed` en croyant y
- * trouver une vitesse.
+ * Same trade-off and reasoning as `AULA_SETTINGS_BT_SLOT` in `aula_rf.c`.
+ * The alias name ensures nobody reads `ul_speed` expecting a speed value.
  */
 #define AULA_SETTINGS_AZ user_settings.ul_speed
 
 /*
- * La plage traduite : de `KC_A` à `KC_SLASH`, les seuls keycodes qui produisent
- * un caractère. Tout le reste passe brut -- flèches, F1-F12, pavé de
- * navigation, modificateurs, et tous les keycodes de la couche `_FN`, qui sont
- * soit au-dessus de `0x38`, soit au-delà de `SAFE_RANGE`.
+ * Translated range: `KC_A` through `KC_SLASH`, the only keycodes that produce
+ * characters. Everything else passes through untouched -- arrows, F1-F12,
+ * navigation cluster, modifiers, and all `_FN` layer keycodes, which are either
+ * above `0x38` or past `SAFE_RANGE`.
  */
 #define AZ_FIRST KC_A
 #define AZ_LAST  KC_SLASH
 #define AZ_N     (AZ_LAST - AZ_FIRST + 1)
 
-#define AZ_SH  0x01u /* injecter Maj */
-#define AZ_AG  0x02u /* injecter AltGr */
-#define AZ_ACU 0x04u /* accent aigu : touche morte tenue par le firmware */
-#define AZ_DIA 0x08u /* tréma       : touche morte tenue par le firmware */
+#define AZ_SH  0x01u /* inject Shift */
+#define AZ_AG  0x02u /* inject AltGr */
+#define AZ_ACU 0x04u /* acute accent: dead key held by firmware */
+#define AZ_DIA 0x08u /* diaeresis   : dead key held by firmware */
 #define AZ_DEAD (AZ_ACU | AZ_DIA)
-#define AZ_RAW 0x80u /* ne rien injecter NI masquer -- voie des raccourcis */
+#define AZ_RAW 0x80u /* neither inject NOR mask -- shortcut path */
 
-/* Les deux Maj. Le masque les retire de `real_mods` : sur un hôte AZERTY le `!`
- * est SANS Maj alors que le clavier le porte en Maj+1, et sans masque la touche
- * sortirait `1`. */
+/* Both Shifts. The mask strips them from `real_mods`: on an AZERTY host, `!`
+ * is unshifted whereas the keycap has it on Shift+1, and without masking the
+ * key would output `1`. */
 #define AZ_SHIFT_MODS ((uint8_t)MODS_SHIFT_MASK)
 
-/* Tout modificateur AUTRE que Maj : Ctrl, Alt, AltGr, GUI, des deux côtés. */
+/* Any modifier OTHER than Shift: Ctrl, Alt, AltGr, GUI, on either side. */
 #define AZ_OTHER_MODS ((uint8_t)~AZ_SHIFT_MODS)
 
 typedef struct {
@@ -52,15 +51,15 @@ typedef struct {
 } az_ent_t;
 
 /*
- * Table de traduction vers l'AZERTY français (France), Windows.
+ * Translation table to French AZERTY (France), Windows.
  *
- * Indexée par `keycode US - KC_A`, puis par l'état de Maj. Le commentaire de
- * chaque ligne donne ce que PORTE la touche du clavier, sans Maj puis avec :
- * c'est le caractère voulu, pas le keycode émis.
+ * Indexed by `US keycode - KC_A`, then by Shift state. Each line's comment
+ * shows what is PRINTED on the keycap, unshifted then shifted: that is the
+ * desired output character, not the emitted keycode.
  *
- * Les lettres sont presque une identité -- seules `a<->q`, `z<->w` et `m`
- * bougent. Ce qui coûte, c'est la rangée des chiffres, où l'AZERTY place les
- * symboles SANS Maj : il faut donc injecter Maj pour obtenir un chiffre.
+ * Letters are nearly an identity map -- only `a<->q`, `z<->w`, and `m` move.
+ * The real work is on the number row, where AZERTY puts symbols UNSHIFTED:
+ * Shift must be injected to produce a digit.
  */
 static const __code az_ent_t az_map[AZ_N][2] = {
     /* a    A    */ {{0x14, 0}, {0x14, AZ_SH}},
@@ -100,10 +99,10 @@ static const __code az_ent_t az_map[AZ_N][2] = {
     /* 9    (    */ {{0x26, AZ_SH}, {0x22, 0}},
     /* 0    )    */ {{0x27, AZ_SH}, {0x2D, 0}},
     /* Entr Entr */ {{0x28, 0}, {0x28, 0}},
-    /* Ech  Ech  */ {{0x29, 0}, {0x29, 0}},
-    /* RArr RArr */ {{0x2A, 0}, {0x2A, 0}},
+    /* Esc  Esc  */ {{0x29, 0}, {0x29, 0}},
+    /* Bspc Bspc */ {{0x2A, 0}, {0x2A, 0}},
     /* Tab  Tab  */ {{0x2B, 0}, {0x2B, 0}},
-    /* Esp  Esp  */ {{0x2C, 0}, {0x2C, 0}},
+    /* Spc  Spc  */ {{0x2C, 0}, {0x2C, 0}},
     /* -    _    */ {{0x23, 0}, {0x25, 0}},
     /* =    +    */ {{0x2E, 0}, {0x2E, AZ_SH}},
     /* [    {    */ {{0x22, AZ_AG}, {0x21, AZ_AG}},
@@ -119,41 +118,41 @@ static const __code az_ent_t az_map[AZ_N][2] = {
 };
 
 /*
- * Base de temps : la sous-trame LED, ~420 µs une fois les balayages de matrice
- * amortis. La même que `aula_encoder.c` et `aula_macro.c`, pour la même raison
- * -- il n'existe aucun compteur de millisecondes libre sur ce firmware.
+ * Timebase: the LED subframe, ~420 us once matrix scans are amortized.
+ * Same as `aula_encoder.c` and `aula_macro.c`, for the same reason -- there is
+ * no free-running millisecond counter in this firmware.
  */
 #define AZ_MS(ms) ((uint16_t)(((uint32_t)(ms) * 1000ul) / 420ul))
 
-/* L'hôte sonde toutes les millisecondes (`bInterval = 1`) : un appui suivi de
- * son relâchement dans le même passage ne serait JAMAIS vu. Huit sous-trames
- * font ~3,4 ms, soit trois sondages au minimum. Même valeur qu'`ENC_HOLD`. */
+/* The host polls every millisecond (`bInterval = 1`): a press followed by its
+ * release in the same pass would NEVER be seen. Eight subframes come out to
+ * ~3.4 ms, or at least three polls. Same value as `ENC_HOLD`. */
 #define AZ_HOLD 8
 #define AZ_GAP  4
 
 /*
- * Garde-fou des touches mortes. US International n'a pas de délai, mais un `'`
- * oublié mangerait la frappe suivante -- des heures plus tard. Au bout de trois
- * secondes, le symbole seul part.
+ * Dead-key timeout safeguard. US International has no timeout, but a forgotten
+ * `'` would swallow the next keystroke -- hours later. After three seconds, the
+ * standalone symbol is emitted.
  */
 #define AZ_DEAD_MAX AZ_MS(3000)
 
-/* File d'émission. Puissance de deux : l'avance se fait au masque. */
+/* Output queue. Power of two: pointer advances via bitmask. */
 #define AZ_Q 4
 
 /*
- * Suivi des touches traduites tenues. Il ne sert pas qu'à compter : le
- * relâchement doit retirer du rapport le keycode RÉELLEMENT émis. Sans lui,
- * lâcher Maj avant la touche (`Maj+1` donne `!` = `KC_SLASH`, puis le
- * relâchement verrait l'état sans Maj et retirerait `KC_1`) laisserait une
- * touche collée.
+ * Tracking of held translated keys. Used for more than just counting: releasing
+ * a key must remove the ACTUALLY emitted keycode from the report. Without this,
+ * releasing Shift before the key (`Shift+1` produces `!` = `KC_SLASH`, then
+ * releasing the key would see the unshifted state and remove `KC_1`) would
+ * leave a stuck key.
  */
 #define AZ_T 8
 
 static __bit az_on;
 
-static __xdata uint8_t az_t_us[AZ_T]; /* keycode US tenu, 0 = libre */
-static __xdata uint8_t az_t_kc[AZ_T]; /* keycode réellement émis */
+static __xdata uint8_t az_t_us[AZ_T]; /* held US keycode, 0 = free */
+static __xdata uint8_t az_t_kc[AZ_T]; /* actually emitted keycode */
 static __xdata uint8_t az_down;
 static __xdata uint8_t az_hold_fl = AZ_RAW;
 
@@ -161,23 +160,23 @@ static __xdata uint8_t az_q_kc[AZ_Q];
 static __xdata uint8_t az_q_fl[AZ_Q];
 static __xdata uint8_t az_q_head;
 static __xdata uint8_t az_q_tail;
-static __xdata uint8_t az_play; /* 0 repos, 1 appui en cours, 2 silence */
+static __xdata uint8_t az_play; /* 0 idle, 1 press active, 2 gap */
 static __xdata uint8_t az_cur;
 
-/* Décrémentés par l'ISR, armés par la boucle principale. En XDATA : cette carte
- * n'a que dix-sept octets de marge en RAM interne, et l'ISR accède déjà à la
- * XRAM en permanence pour le rendu. */
+/* Decremented by the ISR, armed by the main loop. Placed in XDATA: this board
+ * only has seventeen bytes of internal RAM headroom, and the ISR already
+ * accesses XRAM continuously for rendering. */
 static volatile __xdata uint16_t az_wait;
 static volatile __xdata uint16_t az_dead_to;
 
-/* L'ISR lève ces bits plutôt que de laisser la boucle lire les compteurs : un
- * test de bit est atomique sur 8051, une lecture 16 bits ne l'est pas -- et un
- * mot lu à cheval sur une décrémentation peut valoir zéro à tort. */
+/* The ISR raises these bits instead of letting the main loop read the counters:
+ * a bit test is atomic on 8051, whereas a 16-bit read is not -- and a word read
+ * straddling a decrement could falsely read as zero. */
 static volatile __bit az_due;
 static volatile __bit az_dead_due;
 
-/* La touche morte en attente : 0, AZ_ACU ou AZ_DIA -- les valeurs de la table
- * elle-même, il n'y a donc rien à traduire entre les deux. */
+/* Pending dead key: 0, AZ_ACU, or AZ_DIA -- the exact flag values from the
+ * table itself, so no translation is needed between them. */
 static __xdata uint8_t az_dead;
 
 static void az_mods_apply(uint8_t fl)
@@ -198,8 +197,8 @@ static void az_mods_apply(uint8_t fl)
     set_weak_mods(w);
 }
 
-/* L'injection au repos est celle du DERNIER appui, rendue quand la dernière
- * touche traduite est relâchée. */
+/* At-rest modifier injection uses that of the LAST key press, restored to raw
+ * once the last translated key is released. */
 static void az_mods_rest(void)
 {
     az_mods_apply(az_down != 0 ? az_hold_fl : (uint8_t)AZ_RAW);
@@ -217,9 +216,9 @@ static void az_push(uint8_t kc, uint8_t fl)
 {
     const uint8_t next = (uint8_t)((az_q_tail + 1u) & (AZ_Q - 1u));
 
-    /* File pleine : on perd le caractère plutôt que d'écraser celui qui joue.
-     * Il faudrait taper plus de deux cents caractères par seconde pour y
-     * arriver -- la file ne sert qu'aux résolutions de touche morte. */
+    /* Queue full: drop the character rather than overwriting the one currently
+     * playing. Reaching this would require typing over two hundred characters
+     * per second -- the queue is only used for dead-key resolutions. */
     if (next == az_q_head) {
         return;
     }
@@ -274,8 +273,8 @@ static void az_reset(void)
     az_hold_fl = AZ_RAW;
     az_mods_apply(AZ_RAW);
 
-    /* Une touche traduite encore tenue resterait dans le rapport avec le
-     * keycode de l'ancienne disposition : on repart du rapport vide. */
+    /* Any translated key still held would remain in the report with the old
+     * layout's keycode: start fresh with an empty report. */
     clear_keys();
     send_keyboard_report();
 }
@@ -286,7 +285,7 @@ void aula_layout_toggle(void)
     az_reset();
 
     AULA_SETTINGS_AZ = az_on ? 1u : 0u;
-    settings_mark_dirty(); /* `settings_task()` écrit la flash au tour suivant */
+    settings_mark_dirty(); /* `settings_task()` writes flash on the next pass */
 
     aula_status_set_azerty(az_on ? true : false);
     aula_status_event(az_on ? (uint8_t)AULA_STATUS_AZERTY_ON
@@ -297,9 +296,9 @@ void aula_layout_restore(bool on)
 {
     az_on = on ? 1 : 0;
     aula_status_set_azerty(on);
-    /* Pas de motif de basculement au démarrage : la lueur fixe suffit à dire
-     * dans quel mode le clavier repart, et l'annonce du transport passerait
-     * devant de toute façon. */
+    /* No toggle animation at boot: the steady glow suffices to show which mode
+     * the keyboard woke up in, and the transport announcement would override it
+     * anyway. */
 }
 
 void aula_layout_euro(void)
@@ -320,9 +319,9 @@ bool aula_layout_intercept(uint16_t qcode, bool pressed)
     idx = (uint8_t)(qcode - AZ_FIRST);
 
     if (!pressed) {
-        /* Retirer le keycode RÉELLEMENT émis. S'il n'était pas suivi -- joué par
-         * la file, ou appuyé avant l'allumage du mode -- retirer le brut : c'est
-         * sans effet quand il n'est pas dans le rapport. */
+        /* Remove the ACTUALLY emitted keycode. If it wasn't tracked -- played
+         * via the queue, or pressed before the mode was enabled -- remove the
+         * raw keycode: harmless if it isn't in the report. */
         kc = az_track_del((uint8_t)qcode);
         del_key(kc != 0 ? kc : (uint8_t)qcode);
         az_mods_rest();
@@ -333,14 +332,14 @@ bool aula_layout_intercept(uint16_t qcode, bool pressed)
     mods = get_mods();
 
     /*
-     * La décision se prend sur `real_mods`, l'état PHYSIQUE, et avant toute
-     * écriture : le mode injecte lui-même AltGr, que Windows voit comme
-     * Ctrl+Alt, et une garde qui lirait le rapport se déclencherait sur sa
-     * propre injection au coup suivant.
+     * The decision is made on `real_mods`, the PHYSICAL state, and before any
+     * write: this mode itself injects AltGr, which Windows sees as Ctrl+Alt,
+     * so a guard inspecting the outgoing report would trigger on its own
+     * injection on the next keystroke.
      */
     if (mods & AZ_OTHER_MODS) {
-        /* Raccourci : traduire la position, n'injecter ni masquer rien.
-         * `Ctrl+A` devient `Ctrl+KC_Q`, `Ctrl+1` reste `Ctrl+1`. */
+        /* Shortcut: translate the letter position, neither inject nor mask
+         * modifiers. `Ctrl+A` becomes `Ctrl+KC_Q`, `Ctrl+1` stays `Ctrl+1`. */
         az_dead = 0;
         kc      = az_map[idx][0].kc;
         if (!az_track_add((uint8_t)qcode, kc)) {
@@ -369,22 +368,22 @@ bool aula_layout_intercept(uint16_t qcode, bool pressed)
 
             if (d == AZ_DIA) {
                 /*
-                 * Le fr-FR a une VRAIE touche morte tréma -- Maj + `KC_LBRC` --
-                 * et c'est l'hôte qui compose. Mais son tréma suivi d'un espace
-                 * rend `¨`, PAS `"` : c'est la seule des quatre touches mortes de
-                 * l'hôte dont le symbole seul diffère de celui d'US
-                 * International, donc la seule qui ne peut pas être un simple
-                 * passe-plat. Mesuré sur l'appareil.
+                 * French fr-FR has a REAL diaeresis dead key -- Shift + `KC_LBRC`
+                 * -- and the host handles composition. However, its diaeresis
+                 * followed by space outputs `¨`, NOT `"`: it is the only one of
+                 * the host's four dead keys whose standalone character differs
+                 * from US International, and thus the only one that cannot be a
+                 * simple pass-through. Verified on hardware.
                  */
-                /* La borne basse est déjà garantie : la fonction rend la main
-                 * plus haut pour tout `qcode` sous `AZ_FIRST`, qui vaut `KC_A`.
-                 * La retester ferait supprimer le test par l'optimiseur, et
-                 * `--Werror` en fait une erreur (SDCC 110). */
+                /* The lower bound is already guaranteed: the function returns
+                 * early above for any `qcode` below `AZ_FIRST`, which equals
+                 * `KC_A`. Re-testing it would cause the optimizer to elide the
+                 * check, which `--Werror` turns into an error (SDCC 110). */
                 if (qcode <= KC_Z) {
-                    az_push(0x2Fu, AZ_SH); /* tréma mort : l'hôte compose */
+                    az_push(0x2Fu, AZ_SH); /* dead diaeresis: host composes */
                     az_push(kc, fl);
                 } else if (qcode == KC_SPACE) {
-                    az_push(0x20u, 0); /* `"` -- sans Maj sur AZERTY */
+                    az_push(0x20u, 0); /* `"` -- unshifted on AZERTY */
                 } else {
                     az_push(0x20u, 0);
                     az_push(kc, fl);
@@ -392,10 +391,10 @@ bool aula_layout_intercept(uint16_t qcode, bool pressed)
                 return true;
             }
 
-            /* Le fr-FR n'a PAS de touche morte aiguë : `é` et `ç` sont des
-             * touches à part entière, et `á í ó ú ý` ne sont pas produisibles.
-             * Pour tout le reste, le repli d'US International -- l'apostrophe
-             * puis le caractère. */
+            /* French fr-FR has NO acute accent dead key: `é` and `ç` are
+             * dedicated keys, and `á í ó ú ý` cannot be produced. For everything
+             * else, fall back to US International behavior -- apostrophe
+             * followed by the character. */
             if (st == 0 && qcode == KC_E) {
                 az_push(0x1Fu, 0); /* é */
             } else if (st == 0 && qcode == KC_C) {
@@ -415,18 +414,18 @@ bool aula_layout_intercept(uint16_t qcode, bool pressed)
             az_dead_to  = AZ_DEAD_MAX;
             ET2         = 1;
             az_dead_due = 0;
-            return true; /* touche morte : rien n'est émis */
+            return true; /* dead key: nothing emitted yet */
         }
 
-        /* Tant que la file joue, passer par elle : un caractère naturel
-         * passerait sinon devant un caractère synthétique encore en vol. */
+        /* While the queue is playing, route through it: otherwise a natural
+         * keystroke would jump ahead of a synthetic character still in flight. */
         if (az_play != 0 || az_q_head != az_q_tail) {
             az_push(kc, fl);
             return true;
         }
 
-        /* Voie naturelle : l'appui tient le keycode traduit, donc la répétition
-         * automatique de l'hôte fonctionne. */
+        /* Direct path: holding the key holds the translated keycode, so host
+         * key repeat works naturally. */
         if (!az_track_add((uint8_t)qcode, kc)) {
             return false;
         }
@@ -459,7 +458,7 @@ void aula_layout_task(void)
     if (az_dead_due) {
         az_dead_due = 0;
         if (az_dead != 0) {
-            /* Le symbole seul : `'` pour l'aigu, `"` pour le tréma. */
+            /* Standalone symbol: `'` for acute, `"` for diaeresis. */
             az_push(az_dead == AZ_DIA ? 0x20u : 0x21u, 0);
             az_dead = 0;
         }
