@@ -1357,7 +1357,7 @@ enum keycode_aliases {
 #define QK_RALT                0x1400
 #define QK_RGUI                0x1800
 
-#define SAFE_RANGE             QK_USER
+#define SAFE_RANGE             QK_KB
 
 // Generic decoding for the whole QK_MODS range
 #define QK_MODS_GET_MODS(kc) (((kc) >> 8) & 0x1F)

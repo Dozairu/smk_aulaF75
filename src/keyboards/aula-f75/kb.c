@@ -75,6 +75,10 @@ bool kb_process_record(uint16_t keycode, bool key_pressed)
         return false;
     }
 
+    if (keycode >= QK_USER && keycode < QK_USER + (KB_SAFE_RANGE - SAFE_RANGE)) {
+        keycode = (uint16_t)(SAFE_RANGE + (keycode - QK_USER));
+    }
+
     switch (keycode) {
         case FX_NEXT:
             if (key_pressed) indicators_next_effect();
