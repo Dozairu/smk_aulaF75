@@ -31,7 +31,6 @@ keyboards += {
             'aula_encoder.c',
             'aula_macro.c',
             'aula_status.c',
-            'aula_layout.c',
         ),
         'boot_src' : files('user_matrix.c', 'user_init.c'),
         'layouts' : {

@@ -2,6 +2,7 @@
 #include "systick.h"
 #include "matrix.h"
 #include "dynamic_keymap.h"
+#include "via_macro.h"
 #include "indicators.h"
 #include "keyboard.h"
 #include "sleep.h"
@@ -46,6 +47,9 @@ void tick_dispatch(void)
 {
 #ifdef DYNAMIC_KEYMAP_ENABLE
     dynamic_keymap_tick();
+#endif
+#ifdef VIA_MACRO_ENABLE
+    via_macro_tick();
 #endif
     if (scan_due) {
         scan_due             = false;

@@ -29,9 +29,6 @@
 #define AULA_STATUS_SLEEP_IN  6 /* entering sleep            : fade out        */
 #define AULA_STATUS_SLEEP_OUT 7 /* waking from sleep         : fade in         */
 #define AULA_STATUS_LOW_BATT  8 /* low battery               : slow pulse      */
-#define AULA_STATUS_AZERTY_ON  9 /* AZERTY mode enabled      : 4 short flashes */
-#define AULA_STATUS_AZERTY_OFF 10 /* AZERTY mode disabled    : 1 short flash   */
-#define AULA_STATUS_AZERTY    11 /* AZERTY mode active       : steady dim glow */
 #define AULA_STATUS_NONE      0xFF
 
 /* From the main loop: plays a pattern, overriding whichever is currently running. */
@@ -47,18 +44,6 @@ void aula_status_poll(uint8_t link, bool connected, bool low_batt);
 /* True while a ONE-SHOT pattern is playing. Looping patterns -- pairing,
  * low battery -- do not count: they never finish on their own. */
 bool aula_status_busy(void);
-
-/*
- * Permanent indicator for AZERTY mode. This is a resting STATE, like low
- * battery -- and on a single white LED two resting states cannot be told apart.
- * Priority is therefore settled here, once and for all:
- *
- *   low battery  >  AZERTY active  >  off
- *
- * Battery comes first: it is urgent, whereas AZERTY mode has already been
- * announced by its toggle pattern.
- */
-void aula_status_set_azerty(bool on);
 
 /* True whenever the indicator is showing something, whether a one-shot pattern
  * or a resting state. Acts as a rendering gate: without it, patterns would be

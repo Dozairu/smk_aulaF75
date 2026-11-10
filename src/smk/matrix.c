@@ -1,5 +1,6 @@
 #include "matrix.h"
 #include "dynamic_keymap.h"
+#include "via_macro.h"
 #include "report.h"
 #include "debug.h"
 #include "layout.h"
@@ -100,6 +101,15 @@ static void process_key_state(uint8_t row, uint8_t col, bool pressed)
     }
 
     const uint16_t qcode = resolve_keycode(base, row, col);
+
+#ifdef VIA_MACRO_ENABLE
+    if (IS_QK_MACRO(qcode)) {
+        if (pressed && qcode - QK_MACRO < DYNAMIC_MACRO_COUNT) {
+            via_macro_play((uint8_t)(qcode - QK_MACRO));
+        }
+        return;
+    }
+#endif
 
     if (!kb_process_record(qcode, pressed)) {
         return;

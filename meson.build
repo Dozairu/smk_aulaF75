@@ -177,7 +177,7 @@ foreach keyboard, board : keyboards
 
         if get_option('via').enabled()
             dynamic_keymap_layers = options.get('dynamic_keymap_layers', '4').to_int()
-            dynamic_keymap_sectors = options.get('dynamic_keymap_sectors', '2').to_int()
+            dynamic_keymap_sectors = options.get('dynamic_keymap_sectors', '4').to_int()
             dynamic_keymap_addr = settings_addr - dynamic_keymap_sectors * spec['sector_size']
             code_limit = dynamic_keymap_addr
             platform_cc_args += [

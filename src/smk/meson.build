@@ -17,6 +17,7 @@ src_smk += files(
 if get_option('via').enabled()
     src_smk += files(
         'dynamic_keymap.c',
+        'via_macro.c',
         'raw_hid.c',
         'via.c',
     )

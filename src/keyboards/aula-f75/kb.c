@@ -8,7 +8,6 @@
 
 #include "aula_encoder.h"
 #include "aula_macro.h"
-#include "aula_layout.h"
 #ifdef RF_EUART0
 #    include "aula_rf.h"
 #endif
@@ -69,12 +68,6 @@ bool kb_process_record(uint16_t keycode, bool key_pressed)
         return false;
     }
 
-    /* After auto-typing, before the dispatcher: translation only touches
-     * keycodes 0x04-0x38, so custom keycodes pass through. */
-    if (aula_layout_intercept(keycode, key_pressed)) {
-        return false;
-    }
-
     if (keycode >= QK_USER && keycode < QK_USER + (KB_SAFE_RANGE - SAFE_RANGE)) {
         keycode = (uint16_t)(SAFE_RANGE + (keycode - QK_USER));
     }
@@ -115,12 +108,6 @@ bool kb_process_record(uint16_t keycode, bool key_pressed)
             return false;
         case MACRO_TG:
             if (key_pressed) aula_macro_arm();
-            return false;
-        case LAYOUT_AZ:
-            if (key_pressed) aula_layout_toggle();
-            return false;
-        case EURO:
-            if (key_pressed) aula_layout_euro();
             return false;
 #ifdef RF_EUART0
         case RF_DIAG:
@@ -163,7 +150,6 @@ void kb_update(void)
 {
     aula_encoder_task();
     aula_macro_task();
-    aula_layout_task();
 #ifdef RF_EUART0
     rf_task();
 #endif

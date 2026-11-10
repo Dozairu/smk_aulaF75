@@ -11,7 +11,6 @@
 #include "aula_encoder.h"
 #include "aula_macro.h"
 #include "aula_status.h"
-#include "aula_layout.h"
 #ifdef RF_EUART0
 #    include "aula_rf.h"
 #endif
@@ -148,6 +147,10 @@ static const __code uint8_t led_speeds[] = {1, 2, 4, 8, 16};
  * below, just like in the factory firmware.
  */
 #define SPARK_DECAY ((uint8_t)8)
+
+/* Fade step per frame by Effect Speed. The frame gate cannot go faster than one sweep (38 ms) and the reactive periods are all below that, so speed must act on the decay step. Index 2 = previous fixed value. */
+static const __code uint8_t spark_decay_react[5] = { 3, 5, 8, 14, 24 };
+static const __code uint8_t spark_decay_lake[5]  = { 8, 14, 24, 36, 48 };
 static __xdata uint8_t spark_hue[LED_COLS][LED_ROWS];
 static __xdata uint8_t spark_val[LED_COLS][LED_ROWS];
 static __xdata uint8_t spark_prev[LED_COLS];
@@ -274,7 +277,7 @@ static void rain_step(void)
         const uint8_t row = rain_row[col];
 
         if (row < LED_ROWS) {
-            spark_seed(col, row, (uint8_t)(led_phase + col));
+            spark_seed(col, row, (uint8_t)(fx_phase192 + col));
             rain_row[col] = (uint8_t)(row + 1);
         } else {
             rain_row[col] = 0xff;
@@ -295,7 +298,7 @@ static void twinkle_step(void)
     for (n = 0; n < 2; n++) {
         const uint8_t r = aula_fx_rand();
 
-        spark_seed((uint8_t)(r % LED_COLS), (uint8_t)((r >> 4) % LED_ROWS), led_phase);
+        spark_seed((uint8_t)(r % LED_COLS), (uint8_t)((r >> 4) % LED_ROWS), fx_phase192);
     }
 }
 
@@ -312,7 +315,7 @@ static void twinkle_step(void)
  */
 static void snake_step(uint8_t random_hue)
 {
-    spark_seed(snake_col, snake_row, random_hue ? aula_fx_rand() : led_phase);
+    spark_seed(snake_col, snake_row, random_hue ? aula_fx_rand() : fx_phase192);
 
     if (snake_right) {
         if (snake_col + 1u < LED_COLS) {
@@ -368,7 +371,7 @@ static void ripple_step(void)
             continue;
         }
         spark_seed((uint8_t)(id >> 3), (uint8_t)(id & 7u),
-                   (uint8_t)(led_phase + (uint8_t)(ripple_ring * 13u)));
+                   (uint8_t)(fx_phase192 + (uint8_t)(ripple_ring * 13u)));
     }
     if (++ripple_ring >= AULA_FX_RINGS) {
         ripple_ring = 0;
@@ -444,6 +447,7 @@ static void fx_reset(void)
      * the shared counter, instead of starting from the factory phase field.
      */
     led_phase = 0;
+    fx_phase192 = 0;
 }
 
 /*
@@ -792,35 +796,6 @@ static const __code uint8_t macro_heart[MACRO_HEART_STEPS] = {
 static __xdata uint8_t macro_beat;
 static __bit           macro_was_on;
 
-/*
- * The eight hues of the encoder heartbeat, from red to violet.
- *
- * Takes the SHORT path around the wheel: red -> pink -> magenta -> violet,
- * without passing through yellow, green, or cyan. That is the requested range,
- * and it has the advantage of being readable at a glance -- eight neighboring
- * hues are easy to compare, whereas eight full-rainbow hues blend in with the
- * effect engine.
- *
- * Pure hue, full saturation and value: the heartbeat pattern carries the
- * brightness, while this table only carries the color.
- */
-static const __code uint8_t enc_beat_hue[8][3] = {
-    {255,   0,   0}, /* 0 - red                              */
-    {255,   0,  55},
-    {255,   0, 109},
-    {255,   0, 164}, /* 3 - starting step, magenta-pink      */
-    {255,   0, 218},
-    {237,   0, 255},
-    {182,   0, 255},
-    {128,   0, 255}, /* 7 - violet                           */
-};
-
-/* The encoder heartbeat replays the SAME pattern as the macro heart, at a
- * variable rate. The 1/256th-step accumulator avoids a division on wrap. */
-static __xdata uint8_t  enc_beat;
-static __xdata uint16_t enc_acc;
-static __bit            enc_was_beating;
-
 /* ------------------------------------------------------------------ Caps Lock
  *
  * The host's HID LED report arrives via `usb_ep0_out_irq()` and lands in
@@ -937,24 +912,6 @@ static void led_regen_one(void)
         goto advance;
     }
 
-    if (aula_encoder_beating()) {
-        /*
-         * Rotation feedback: same pattern as auto-typing, but HUE indicates
-         * the step -- red at the bottom, violet at the top -- while TEMPO
-         * indicates direction. Two quantities, two channels, nothing to
-         * confuse.
-         *
-         * Bypasses user brightness, like all overlays in this file: feedback
-         * you cannot see is not feedback.
-         */
-        const uint8_t lvl = aula_encoder_beat_level();
-        const uint8_t v   = macro_heart[enc_beat];
-
-        aula_rgb_set(regen_row, regen_col, led_scale(enc_beat_hue[lvl][0], v),
-                     led_scale(enc_beat_hue[lvl][1], v), led_scale(enc_beat_hue[lvl][2], v));
-        goto advance;
-    }
-
     if (user_settings.led_effect >= AULA_FX_OFF) {
         /*
          * Effect off. This case was unreachable before overlays were added:
@@ -1006,7 +963,7 @@ static void led_regen_one(void)
                  * trailing tail. This is a deliberate CHOICE for this effect.
                  */
                 const uint8_t decay =
-                    (user_settings.led_effect == AULA_FX_LAKE) ? (uint8_t)24 : SPARK_DECAY;
+                    (user_settings.led_effect == AULA_FX_LAKE) ? spark_decay_lake[user_settings.led_speed] : spark_decay_react[user_settings.led_speed];
 
                 spark_val[regen_col][regen_row] = (val > decay) ? (uint8_t)(val - decay) : 0;
             }
@@ -1059,7 +1016,7 @@ static void led_regen_one(void)
          * like every other effect; blue remains available as mode 2.
          */
         if (aula_fx_gaming(regen_col) & (uint8_t)(1u << regen_row)) {
-            fx_color(led_phase, rgb);
+            fx_color(fx_phase192, rgb);
             aula_rgb_set(regen_row, regen_col, led_scale(rgb[0], gain), led_scale(rgb[1], gain),
                          led_scale(rgb[2], gain));
         } else {
@@ -1107,7 +1064,7 @@ static void led_regen_one(void)
          * phase in rainbow mode, or the fixed color otherwise. White remains
          * available as mode 6.
          */
-        fx_color(led_phase, rgb);
+        fx_color(fx_phase192, rgb);
         aula_rgb_set(regen_row, regen_col, led_scale(rgb[0], gain), led_scale(rgb[1], gain),
                      led_scale(rgb[2], gain));
     } else {
@@ -1144,17 +1101,6 @@ advance:
              * advance by one step without tearing the frame in half. */
             if (++macro_beat >= MACRO_HEART_STEPS) {
                 macro_beat = 0;
-            }
-            /* The encoder heartbeat rate is fractional: at most three steps
-             * per wrap at maximum speed, so the loop is bounded. */
-            if (aula_encoder_beating()) {
-                enc_acc = (uint16_t)(enc_acc + aula_encoder_beat_rate());
-                while (enc_acc >= 256u) {
-                    enc_acc = (uint16_t)(enc_acc - 256u);
-                    if (++enc_beat >= MACRO_HEART_STEPS) {
-                        enc_beat = 0;
-                    }
-                }
             }
             aula_status_tick();
             /* Phase advances INSIDE the frame gate, as in the factory firmware:
@@ -1193,9 +1139,9 @@ static void led_react_poll(void)
     for (uint8_t row = 0; row < LED_ROWS; row++) {
         if (fresh & (uint8_t)(1u << row)) {
             if (user_settings.led_effect == AULA_FX_LAKE) {
-                lake_drop(led_col, row, led_phase);
+                lake_drop(led_col, row, fx_phase192);
             } else {
-                spark_hue[led_col][row] = led_phase;
+                spark_hue[led_col][row] = fx_phase192;
                 spark_val[led_col][row] = 255;
             }
         }
@@ -1213,7 +1159,6 @@ bool indicators_update_step(keyboard_state_t *keyboard, uint8_t current_step)
      * samples its encoder from its PWM ISR. */
     aula_encoder_sample();
     aula_macro_tick();
-    aula_layout_tick();
 
     if (aula_macro_active()) {
         if (!macro_was_on) {
@@ -1224,26 +1169,16 @@ bool indicators_update_step(keyboard_state_t *keyboard, uint8_t current_step)
         macro_was_on = 0;
     }
 
-    if (aula_encoder_beating()) {
-        if (!enc_was_beating) {
-            enc_was_beating = 1;
-            enc_beat        = 0; /* start on a beat, not mid-rest */
-            enc_acc         = 0;
-        }
-    } else {
-        enc_was_beating = 0;
-    }
-
     if (user_settings.led_effect == AULA_FX_REACTIVE ||
         user_settings.led_effect == AULA_FX_LAKE) {
         led_react_poll();
     }
 
 #ifdef RF_EUART0
-    if (aula_macro_active() || aula_encoder_beating() || caps_on || aula_status_lit() ||
+    if (aula_macro_active() || caps_on || aula_status_lit() ||
         rf_diag_on || user_settings.led_effect < AULA_FX_OFF) {
 #else
-    if (aula_macro_active() || aula_encoder_beating() || caps_on || aula_status_lit() ||
+    if (aula_macro_active() || caps_on || aula_status_lit() ||
         user_settings.led_effect < AULA_FX_OFF) {
 #endif
         led_regen_one();
@@ -1275,7 +1210,7 @@ void indicators_apply_defaults(void)
     user_settings.led_speed      = LED_SPEED_DEFAULT;
     user_settings.ul_effect      = AULA_FX_COLOR_WHEEL; /* rainbow, as in factory firmware */
     user_settings.ul_brightness  = 0;                   /* forward direction, bit 0x23 cleared */
-    user_settings.ul_speed       = 0;                   /* AZERTY compensation off */
+    user_settings.ul_speed       = 0;                   /* unused */
 }
 
 void indicators_validate_settings(void)
@@ -1295,20 +1230,14 @@ void indicators_validate_settings(void)
     if (user_settings.ul_brightness > 1) {
         user_settings.ul_brightness = 0;
     }
-    if (user_settings.ul_speed > 1) {
-        user_settings.ul_speed = 0;
-    }
-
-    /* AZERTY compensation is persisted in `ul_speed` -- see `aula_layout.c`.
-     * It is restored to the module here rather than in `kb_init()`, which runs
-     * BEFORE `restore_settings()`. */
-    aula_layout_restore(user_settings.ul_speed != 0);
+    user_settings.ul_speed = 0; /* legacy byte, no longer used */
 }
 
 void indicators_init(void)
 {
     led_col   = 0;
     led_phase = 0;
+    fx_phase192 = 0;
     regen_row = 0;
     regen_col = 0;
 

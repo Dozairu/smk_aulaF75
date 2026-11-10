@@ -9,6 +9,7 @@
 #include "console.h"
 #include "matrix.h"
 #include "dynamic_keymap.h"
+#include "via_macro.h"
 #include "utils.h"
 #include "keyboard.h"
 #include "user_init.h"
@@ -109,6 +110,9 @@ void main(void)
         usb_task();
 #ifdef DYNAMIC_KEYMAP_ENABLE
         dynamic_keymap_task();
+#endif
+#ifdef VIA_MACRO_ENABLE
+        via_macro_task();
 #endif
         settings_task();
         sleep_task();

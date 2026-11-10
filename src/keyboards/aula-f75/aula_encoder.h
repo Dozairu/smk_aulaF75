@@ -22,19 +22,3 @@ void aula_encoder_sample(void);
 
 /* From the main loop: sends pending consumer reports. */
 void aula_encoder_task(void);
-
-/*
- * Rotation indicator, read from the rendering ISR. The keyboard beats like a
- * heart for ~1.5 s after the last detent, and the pace follows the direction:
- * turning up speeds up, turning down slows down. The level is RELATIVE --
- * nothing in the USB or radio protocol tells the keyboard the host's volume.
- */
-bool aula_encoder_beating(void);
-
-/* Pattern steps per scan wrap, in 1/256ths. 256 = pace of the auto-type
- * heartbeat. */
-uint16_t aula_encoder_beat_rate(void);
-
-/* Current step, 0 (lowest) to 7. The renderer derives the hue from it, so
- * COLOR indicates the level while PACE indicates the direction. */
-uint8_t aula_encoder_beat_level(void);

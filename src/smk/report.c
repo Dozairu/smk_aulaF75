@@ -11,8 +11,8 @@ static uint8_t weak_mods = 0;
 
 /* AND mask applied to `real_mods` only, never `weak_mods`: used to strip a
  * physically held modifier from the outgoing report while a translation layer
- * injects another via `weak_mods` (e.g., US `!` is Shift+1 whereas French
- * AZERTY `!` is unshifted). Neutral at 0xFF when unused. */
+ * injects another via `weak_mods` (e.g., to suppress or add Shift
+ * independently of the physical keys). Neutral at 0xFF when unused. */
 static uint8_t mods_mask = 0xFF;
 
 report_keyboard_t keyboard_report;

@@ -92,20 +92,6 @@
               ]
             }
           ]
-        },
-        {
-          "label": "Keyboard Options",
-          "content": [
-            {
-              "label": "French AZERTY Translation",
-              "type": "toggle",
-              "content": [
-                "id_aula_azerty_mode",
-                3,
-                6
-              ]
-            }
-          ]
         }
       ]
     }
@@ -180,18 +166,7 @@
       "name": "MACRO_TG",
       "title": "Toggle Auto-Typing Keep-Awake Macro",
       "shortName": "AUTO"
-    },
-    {
-      "name": "LAYOUT_AZ",
-      "title": "Toggle US-to-French AZERTY Translation",
-      "shortName": "AZER"
-    },
-    {
-      "name": "EURO",
-      "title": "Euro Symbol (AltGr+E)",
-      "shortName": "EURO"
-    }
-  ],
+    }  ],
   "matrix": {
     "rows": 6,
     "cols": 15

@@ -26,6 +26,8 @@
 #    define VIA_ID_DYNAMIC_KEYMAP_MACRO_SET_BUFFER 0x0Fu
 #    define VIA_ID_DYNAMIC_KEYMAP_MACRO_RESET     0x10u
 #    define VIA_ID_DYNAMIC_KEYMAP_GET_LAYER_COUNT 0x11u
+#    define VIA_ID_DYNAMIC_KEYMAP_GET_ENCODER     0x14u
+#    define VIA_ID_DYNAMIC_KEYMAP_SET_ENCODER     0x15u
 #    define VIA_ID_DYNAMIC_KEYMAP_GET_BUFFER      0x12u
 #    define VIA_ID_DYNAMIC_KEYMAP_SET_BUFFER      0x13u
 #    define VIA_ID_UNHANDLED                      0xFFu
@@ -51,9 +53,20 @@ void via_process_packet(__xdata uint8_t *data)
                 case VIA_KEYBOARD_VALUE_FIRMWARE_VERSION:
                     memset(&data[2], 0, 4);
                     break;
-                case VIA_KEYBOARD_VALUE_SWITCH_MATRIX_STATE:
+                case VIA_KEYBOARD_VALUE_SWITCH_MATRIX_STATE: {
+                    /* One big-endian 16-bit mask per row, starting at data[3] (VIA reads the payload from there). */
                     memset(&data[2], 0, RAW_HID_REPORT_SIZE - 2u);
+                    for (uint8_t col = 0; col < MATRIX_COLS; col++) {
+                        const uint8_t pressed = user_matrix_pressed(col);
+                        for (uint8_t row = 0; row < MATRIX_ROWS; row++) {
+                            if (pressed & (uint8_t)(1u << row)) {
+                                const uint8_t idx = (uint8_t)(3u + row * 2u + (col < 8u ? 1u : 0u));
+                                data[idx] |= (uint8_t)(1u << (col & 7u));
+                            }
+                        }
+                    }
                     break;
+                }
                 case VIA_KEYBOARD_VALUE_KEYCODES_VERSION:
                     // QMK keycodes.h version 0.0.9, encoded as a 32-bit BCD value.
                     data[2] = 0x00;
@@ -85,6 +98,21 @@ void via_process_packet(__xdata uint8_t *data)
         case VIA_ID_DYNAMIC_KEYMAP_SET_KEYCODE: {
             uint16_t keycode = (uint16_t)((uint16_t)data[4] << 8) | data[5];
             if (!dynamic_keymap_set_keycode(data[1], data[2], data[3], keycode)) {
+                data[0] = VIA_ID_UNHANDLED;
+            }
+            break;
+        }
+
+        case VIA_ID_DYNAMIC_KEYMAP_GET_ENCODER: {
+            uint16_t keycode = dynamic_encoder_get_keycode(data[1], data[2], data[3] != 0);
+            data[4]          = (uint8_t)(keycode >> 8);
+            data[5]          = (uint8_t)keycode;
+            break;
+        }
+
+        case VIA_ID_DYNAMIC_KEYMAP_SET_ENCODER: {
+            uint16_t keycode = (uint16_t)((uint16_t)data[4] << 8) | data[5];
+            if (!dynamic_encoder_set_keycode(data[1], data[2], data[3] != 0, keycode)) {
                 data[0] = VIA_ID_UNHANDLED;
             }
             break;
@@ -123,18 +151,38 @@ void via_process_packet(__xdata uint8_t *data)
         }
 
         case VIA_ID_DYNAMIC_KEYMAP_MACRO_GET_COUNT:
-            data[1] = 0;
+            data[1] = DYNAMIC_MACRO_COUNT;
             break;
 
         case VIA_ID_DYNAMIC_KEYMAP_MACRO_GET_BUFFER_SIZE:
-            data[1] = 0;
-            data[2] = 0;
+            data[1] = (uint8_t)(DYNAMIC_MACRO_BYTES >> 8);
+            data[2] = (uint8_t)DYNAMIC_MACRO_BYTES;
             break;
 
-        case VIA_ID_DYNAMIC_KEYMAP_MACRO_GET_BUFFER:
-        case VIA_ID_DYNAMIC_KEYMAP_MACRO_SET_BUFFER:
+        case VIA_ID_DYNAMIC_KEYMAP_MACRO_GET_BUFFER: {
+            uint16_t offset    = (uint16_t)((uint16_t)data[1] << 8) | data[2];
+            uint8_t  requested = data[3];
+            uint8_t  size      = requested;
+            if (size > RAW_HID_REPORT_SIZE - 4u) {
+                size = RAW_HID_REPORT_SIZE - 4u;
+            }
+            memset(&data[4], 0, size);
+            dynamic_macro_get_buffer(offset, size, &data[4]);
+            break;
+        }
+
+        case VIA_ID_DYNAMIC_KEYMAP_MACRO_SET_BUFFER: {
+            uint16_t offset = (uint16_t)((uint16_t)data[1] << 8) | data[2];
+            uint8_t  size   = data[3];
+            if (size > RAW_HID_REPORT_SIZE - 4u) {
+                size = RAW_HID_REPORT_SIZE - 4u;
+            }
+            dynamic_macro_set_buffer(offset, size, &data[4]);
+            break;
+        }
+
         case VIA_ID_DYNAMIC_KEYMAP_MACRO_RESET:
-            data[0] = VIA_ID_UNHANDLED;
+            dynamic_macro_reset();
             break;
 
         case VIA_ID_CUSTOM_GET_VALUE:
@@ -153,9 +201,6 @@ void via_process_packet(__xdata uint8_t *data)
                     break;
                 case 5:
                     data[3] = user_settings.ul_brightness;
-                    break;
-                case 6:
-                    data[3] = user_settings.ul_speed;
                     break;
                 default:
                     data[0] = VIA_ID_UNHANDLED;
@@ -188,11 +233,6 @@ void via_process_packet(__xdata uint8_t *data)
                     break;
                 case 5:
                     user_settings.ul_brightness = data[3];
-                    indicators_validate_settings();
-                    settings_mark_dirty();
-                    break;
-                case 6:
-                    user_settings.ul_speed = data[3];
                     indicators_validate_settings();
                     settings_mark_dirty();
                     break;

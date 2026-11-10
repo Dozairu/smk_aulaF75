@@ -20,15 +20,12 @@
  *   AULA_STATUS_SLEEP_IN     fade out               21 steps  0.80 s
  *   AULA_STATUS_SLEEP_OUT    fade in                11 steps  0.42 s
  *   AULA_STATUS_LOW_BATT     slow pulse             40 steps  1.52 s  (loops)
- *   AULA_STATUS_AZERTY_ON    4 short flashes        24 steps  0.91 s
- *   AULA_STATUS_AZERTY_OFF   1 short flash           5 steps  0.19 s
- *   AULA_STATUS_AZERTY       steady dim glow         1 step           (loops)
  *
  * Everything fits in a single flat array with offset and length tables: an
  * array of `__code` pointers would cost more flash and an extra indirection on
  * every step, for nothing.
  */
-static const __code uint8_t pat_data[227] = {
+static const __code uint8_t pat_data[197] = {
     255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
     255, 255, 255, 255, 255, 255, 255, 255, 255, 255,   0,   0,
       0,   0,   0, 255, 255, 255, 255, 255, 255, 255, 255, 255,
@@ -46,23 +43,14 @@ static const __code uint8_t pat_data[227] = {
      40,  28,  18,  10,   4,   0,   0,   0,   0,   0,   0,   0,
       0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
       0,   0,   0,   0,   0,
-    /* AZERTY_ON: four short flashes, 3 steps on / 3 steps off. */
-    255, 255, 255,   0,   0,   0, 255, 255, 255,   0,   0,   0,
-    255, 255, 255,   0,   0,   0, 255, 255, 255,   0,   0,   0,
-    /* AZERTY_OFF: a single short flash. */
-    255, 255, 255,   0,   0,
-    /* AZERTY: a single looping step, hence a steady glow. Dim enough not to
-     * be mistaken for a flash, bright enough to be visible in the dark. */
-     40,
 };
 
-static const __code uint8_t pat_off[12] = {0,  16, 33,  61,  69,  93,
-                                           125, 146, 157, 197, 221, 226,};
-static const __code uint8_t pat_len[12] = {16, 17, 28, 8, 24, 32, 21, 11, 40, 24, 5, 1,};
+static const __code uint8_t pat_off[9] = {0,  16, 33,  61,  69,  93,
+                                          125, 146, 157};
+static const __code uint8_t pat_len[9] = {16, 17, 28, 8, 24, 32, 21, 11, 40};
 
-/* Bit N set: pattern N loops instead of ending. Twelve patterns, hence
- * twelve bits: the mask does NOT fit in a single byte. */
-#define PAT_LOOPING 0x0908u
+/* Bit N set: pattern N loops instead of ending (pairing, low battery). */
+#define PAT_LOOPING 0x0108u
 
 #define PAT_LOOPS(p) ((PAT_LOOPING & (uint16_t)(1u << (p))) != 0u)
 
@@ -75,7 +63,6 @@ static __xdata uint8_t prev_link = 0xFF;
 static __bit           prev_conn;
 static __bit           prev_low;
 static __bit           low_batt;
-static __bit           az_rest;
 
 void aula_status_event(uint8_t event)
 {
@@ -94,24 +81,10 @@ static void status_rest(void)
 {
     if (low_batt) {
         st_pat = AULA_STATUS_LOW_BATT;
-    } else if (az_rest) {
-        st_pat = AULA_STATUS_AZERTY;
     } else {
         st_pat = AULA_STATUS_NONE;
     }
     st_pos = 0;
-}
-
-void aula_status_set_azerty(bool on)
-{
-    az_rest = on ? 1 : 0;
-    if (!aula_status_busy()) {
-        /* The toggle pattern is posted right after by `aula_layout.c`; this
-         * resting state is what it will fall back to when it finishes. */
-        ET2 = 0;
-        status_rest();
-        ET2 = 1;
-    }
 }
 
 bool aula_status_lit(void)

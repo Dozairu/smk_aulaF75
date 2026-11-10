@@ -217,20 +217,5 @@ enum custom_keycodes {
      */
     MACRO_TG,
 
-    /*
-     * "AZERTY compensation" mode, on `Fn + Left Ctrl`. The keyboard has a
-     * US International physical layout; this mode translates each keystroke
-     * for a host set to French AZERTY. Not persisted: starts off on boot.
-     * See `aula_layout.c`.
-     */
-    LAYOUT_AZ,
-
-    /*
-     * `EUR` on `Fn + E`. Targeted at a FRENCH host, where it is AltGr+E -- thus
-     * independent of LAYOUT_AZ. On a US International host, `EUR` is AltGr+5 and
-     * this shortcut would output an `e`.
-     */
-    EURO,
-
     KB_SAFE_RANGE,
 };

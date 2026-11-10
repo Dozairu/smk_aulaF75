@@ -18,7 +18,7 @@
 #    define DYNAMIC_KEYMAP_COMMIT  0xA5u
 
 #    define DYNAMIC_KEYMAP_PAYLOAD_PER_SECTOR (DYNAMIC_KEYMAP_SECTOR_SIZE - DYNAMIC_KEYMAP_HEADER)
-#    define DYNAMIC_KEYMAP_REQUIRED_SECTORS   ((DYNAMIC_KEYMAP_BYTES + DYNAMIC_KEYMAP_PAYLOAD_PER_SECTOR - 1u) / DYNAMIC_KEYMAP_PAYLOAD_PER_SECTOR)
+#    define DYNAMIC_KEYMAP_REQUIRED_SECTORS   ((DYNAMIC_STORE_BYTES + DYNAMIC_KEYMAP_PAYLOAD_PER_SECTOR - 1u) / DYNAMIC_KEYMAP_PAYLOAD_PER_SECTOR)
 
 _Static_assert(DYNAMIC_KEYMAP_LAYER_COUNT > 0, "dynamic keymap needs at least one layer");
 _Static_assert(DYNAMIC_KEYMAP_LAYER_COUNT <= 16, "dynamic keymap layer count exceeds VIA protocol limits");
@@ -26,7 +26,8 @@ _Static_assert(DYNAMIC_KEYMAP_REQUIRED_SECTORS <= DYNAMIC_KEYMAP_SECTOR_COUNT, "
 _Static_assert((DYNAMIC_KEYMAP_BASE & (DYNAMIC_KEYMAP_SECTOR_SIZE - 1u)) == 0, "dynamic keymap base must be sector aligned");
 _Static_assert(DYNAMIC_KEYMAP_BASE + DYNAMIC_KEYMAP_SECTOR_COUNT * DYNAMIC_KEYMAP_SECTOR_SIZE <= FLASH_CFG_ADDR, "dynamic keymap overlaps settings or boot marker flash");
 
-static __xdata uint8_t dynamic_keymap[DYNAMIC_KEYMAP_BYTES];
+/* Keymap first, macro buffer right behind it: both share the flash image. */
+static __xdata uint8_t dynamic_keymap[DYNAMIC_STORE_BYTES];
 static __xdata uint8_t io_buffer[32];
 static volatile bool     dirty;
 static volatile uint16_t save_delay;
@@ -34,7 +35,7 @@ static volatile uint16_t save_delay;
 static uint16_t checksum(void)
 {
     uint16_t sum = 0x4B4Du;
-    for (uint16_t i = 0; i < DYNAMIC_KEYMAP_BYTES; i++) {
+    for (uint16_t i = 0; i < DYNAMIC_STORE_BYTES; i++) {
         sum = (uint16_t)((sum << 5) | (sum >> 11));
         sum ^= dynamic_keymap[i];
     }
@@ -49,7 +50,7 @@ static uint16_t sector_base(uint8_t sector)
 static uint16_t sector_payload_size(uint8_t sector)
 {
     uint16_t offset = (uint16_t)sector * DYNAMIC_KEYMAP_PAYLOAD_PER_SECTOR;
-    uint16_t left   = DYNAMIC_KEYMAP_BYTES - offset;
+    uint16_t left   = DYNAMIC_STORE_BYTES - offset;
     return left < DYNAMIC_KEYMAP_PAYLOAD_PER_SECTOR ? left : DYNAMIC_KEYMAP_PAYLOAD_PER_SECTOR;
 }
 
@@ -129,8 +130,50 @@ static uint16_t key_offset(uint8_t layer, uint8_t row, uint8_t col)
     return ((uint16_t)layer * MATRIX_ROWS * MATRIX_COLS + (uint16_t)row * MATRIX_COLS + col) * 2u;
 }
 
+static uint16_t encoder_offset(uint8_t layer, uint8_t index, bool clockwise)
+{
+    return (uint16_t)(DYNAMIC_KEYMAP_BYTES + DYNAMIC_MACRO_BYTES + ((uint16_t)layer * DYNAMIC_ENCODER_COUNT + index) * 4u + (clockwise ? 2u : 0u));
+}
+
+uint16_t dynamic_encoder_get_keycode(uint8_t layer, uint8_t index, bool clockwise)
+{
+    if (layer >= DYNAMIC_KEYMAP_LAYER_COUNT || index >= DYNAMIC_ENCODER_COUNT) {
+        return KC_NO;
+    }
+    const uint16_t o = encoder_offset(layer, index, clockwise);
+    return (uint16_t)((uint16_t)dynamic_keymap[o] << 8) | dynamic_keymap[o + 1];
+}
+
+bool dynamic_encoder_set_keycode(uint8_t layer, uint8_t index, bool clockwise, uint16_t keycode)
+{
+    if (layer >= DYNAMIC_KEYMAP_LAYER_COUNT || index >= DYNAMIC_ENCODER_COUNT) {
+        return false;
+    }
+    const uint16_t o = encoder_offset(layer, index, clockwise);
+    dynamic_keymap[o]     = (uint8_t)(keycode >> 8);
+    dynamic_keymap[o + 1] = (uint8_t)keycode;
+    __critical
+    {
+        dirty      = true;
+        save_delay = 1024;
+    }
+    return true;
+}
+
 void dynamic_keymap_reset(void)
 {
+    for (uint8_t layer = 0; layer < DYNAMIC_KEYMAP_LAYER_COUNT; layer++) {
+        for (uint8_t idx = 0; idx < DYNAMIC_ENCODER_COUNT; idx++) {
+            const uint16_t ccw = layer == 0 ? KC_VOLD : KC_TRANSPARENT;
+            const uint16_t cw  = layer == 0 ? KC_VOLU : KC_TRANSPARENT;
+            uint16_t       o   = encoder_offset(layer, idx, false);
+            dynamic_keymap[o]     = (uint8_t)(ccw >> 8);
+            dynamic_keymap[o + 1] = (uint8_t)ccw;
+            o                     = encoder_offset(layer, idx, true);
+            dynamic_keymap[o]     = (uint8_t)(cw >> 8);
+            dynamic_keymap[o + 1] = (uint8_t)cw;
+        }
+    }
     for (uint8_t layer = 0; layer < DYNAMIC_KEYMAP_LAYER_COUNT; layer++) {
         for (uint8_t row = 0; row < MATRIX_ROWS; row++) {
             for (uint8_t col = 0; col < MATRIX_COLS; col++) {
@@ -153,6 +196,7 @@ void dynamic_keymap_init(void)
     dirty      = false;
     save_delay = 0;
     if (!load_flash()) {
+        dynamic_macro_reset();
         dynamic_keymap_reset();
         save_flash();
     }
@@ -237,6 +281,50 @@ uint8_t dynamic_keymap_set_buffer(uint16_t offset, uint8_t size, const __xdata u
         save_delay = 1024;
     }
     return size;
+}
+
+uint8_t dynamic_macro_get_buffer(uint16_t offset, uint8_t size, __xdata uint8_t *data)
+{
+    if (offset >= DYNAMIC_MACRO_BYTES) {
+        return 0;
+    }
+    if ((uint16_t)(offset + size) > DYNAMIC_MACRO_BYTES) {
+        size = (uint8_t)(DYNAMIC_MACRO_BYTES - offset);
+    }
+    memcpy(data, &dynamic_keymap[DYNAMIC_KEYMAP_BYTES + offset], size);
+    return size;
+}
+
+uint8_t dynamic_macro_set_buffer(uint16_t offset, uint8_t size, const __xdata uint8_t *data)
+{
+    if (offset >= DYNAMIC_MACRO_BYTES) {
+        return 0;
+    }
+    if ((uint16_t)(offset + size) > DYNAMIC_MACRO_BYTES) {
+        size = (uint8_t)(DYNAMIC_MACRO_BYTES - offset);
+    }
+    memcpy(&dynamic_keymap[DYNAMIC_KEYMAP_BYTES + offset], data, size);
+    __critical
+    {
+        dirty      = true;
+        save_delay = 1024;
+    }
+    return size;
+}
+
+void dynamic_macro_reset(void)
+{
+    memset(&dynamic_keymap[DYNAMIC_KEYMAP_BYTES], 0, DYNAMIC_MACRO_BYTES);
+    __critical
+    {
+        dirty      = true;
+        save_delay = 1;
+    }
+}
+
+uint8_t dynamic_macro_byte(uint16_t offset)
+{
+    return offset < DYNAMIC_MACRO_BYTES ? dynamic_keymap[DYNAMIC_KEYMAP_BYTES + offset] : 0;
 }
 
 #endif
