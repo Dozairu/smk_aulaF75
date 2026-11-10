@@ -3,9 +3,113 @@
   "vendorId": "0x258A",
   "productId": "0x010C",
   "keycodes": [
-    "qmk_lighting"
+    "qmk_rgblight_keycodes"
   ],
-  "menus": [],
+  "menus": [
+    {
+      "label": "Lighting",
+      "content": [
+        {
+          "label": "RGB Backlight",
+          "content": [
+            {
+              "label": "Effect",
+              "type": "dropdown",
+              "content": [
+                "id_aula_led_effect",
+                3,
+                1
+              ],
+              "options": [
+                ["Radial", 0],
+                ["Horizontal Wave", 1],
+                ["Vertical Wave", 2],
+                ["Solid", 3],
+                ["Reactive", 4],
+                ["Rain", 5],
+                ["Twinkle", 6],
+                ["Snake", 7],
+                ["Snake RGB", 8],
+                ["Ripple", 9],
+                ["Lake", 10],
+                ["Key Wave", 11],
+                ["Vertical Rainbow", 12],
+                ["Gaming (WASD)", 13],
+                ["Shimmer", 14],
+                ["Off", 15]
+              ]
+            },
+            {
+              "showIf": "{id_aula_led_effect} != 15",
+              "label": "Brightness",
+              "type": "range",
+              "options": [0, 9],
+              "content": [
+                "id_aula_led_brightness",
+                3,
+                2
+              ]
+            },
+            {
+              "showIf": "{id_aula_led_effect} != 15",
+              "label": "Effect Speed",
+              "type": "range",
+              "options": [0, 4],
+              "content": [
+                "id_aula_led_speed",
+                3,
+                3
+              ]
+            },
+            {
+              "showIf": "{id_aula_led_effect} != 15",
+              "label": "Color Mode",
+              "type": "dropdown",
+              "content": [
+                "id_aula_led_color",
+                3,
+                4
+              ],
+              "options": [
+                ["Red", 0],
+                ["Green", 1],
+                ["Blue", 2],
+                ["Yellow", 3],
+                ["Purple", 4],
+                ["Cyan", 5],
+                ["White", 6],
+                ["Rainbow", 7]
+              ]
+            },
+            {
+              "showIf": "{id_aula_led_effect} != 15",
+              "label": "Reverse Scroll Direction",
+              "type": "toggle",
+              "content": [
+                "id_aula_led_direction",
+                3,
+                5
+              ]
+            }
+          ]
+        },
+        {
+          "label": "Keyboard Options",
+          "content": [
+            {
+              "label": "French AZERTY Translation",
+              "type": "toggle",
+              "content": [
+                "id_aula_azerty_mode",
+                3,
+                6
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
   "customKeycodes": [
     {
       "name": "FX_NEXT",

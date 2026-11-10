@@ -81,27 +81,36 @@ bool kb_process_record(uint16_t keycode, bool key_pressed)
 
     switch (keycode) {
         case FX_NEXT:
+        case RGB_MODE_FORWARD:
             if (key_pressed) indicators_next_effect();
             return false;
         case FX_PREV:
+        case RGB_MODE_REVERSE:
             if (key_pressed) indicators_prev_effect();
             return false;
         case BRI_UP:
+        case RGB_VAI:
             if (key_pressed) indicators_brightness_up();
             return false;
         case BRI_DN:
+        case RGB_VAD:
             if (key_pressed) indicators_brightness_down();
             return false;
         case SPD_UP:
+        case RGB_SPI:
             if (key_pressed) indicators_speed_up();
             return false;
         case SPD_DN:
+        case RGB_SPD:
             if (key_pressed) indicators_speed_down();
             return false;
         case CLR_NEXT:
+        case RGB_HUI:
+        case RGB_HUD:
             if (key_pressed) indicators_next_color();
             return false;
         case DIR_TOG:
+        case RGB_TOG:
             if (key_pressed) indicators_toggle_direction();
             return false;
         case MACRO_TG:

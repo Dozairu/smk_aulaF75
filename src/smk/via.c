@@ -3,6 +3,7 @@
 #ifdef VIA_ENABLE
 
 #    include "dynamic_keymap.h"
+#    include "indicators.h"
 #    include "kbdef.h"
 #    include "raw_hid.h"
 #    include "settings.h"
@@ -137,8 +138,74 @@ void via_process_packet(__xdata uint8_t *data)
             break;
 
         case VIA_ID_CUSTOM_GET_VALUE:
+            switch (data[2]) {
+                case 1:
+                    data[3] = user_settings.led_effect;
+                    break;
+                case 2:
+                    data[3] = user_settings.led_brightness;
+                    break;
+                case 3:
+                    data[3] = user_settings.led_speed;
+                    break;
+                case 4:
+                    data[3] = user_settings.ul_effect;
+                    break;
+                case 5:
+                    data[3] = user_settings.ul_brightness;
+                    break;
+                case 6:
+                    data[3] = user_settings.ul_speed;
+                    break;
+                default:
+                    data[0] = VIA_ID_UNHANDLED;
+                    break;
+            }
+            break;
+
         case VIA_ID_CUSTOM_SET_VALUE:
+            switch (data[2]) {
+                case 1:
+                    user_settings.led_effect = data[3];
+                    indicators_validate_settings();
+                    indicators_init();
+                    settings_mark_dirty();
+                    break;
+                case 2:
+                    user_settings.led_brightness = data[3];
+                    indicators_validate_settings();
+                    settings_mark_dirty();
+                    break;
+                case 3:
+                    user_settings.led_speed = data[3];
+                    indicators_validate_settings();
+                    settings_mark_dirty();
+                    break;
+                case 4:
+                    user_settings.ul_effect = data[3];
+                    indicators_validate_settings();
+                    settings_mark_dirty();
+                    break;
+                case 5:
+                    user_settings.ul_brightness = data[3];
+                    indicators_validate_settings();
+                    settings_mark_dirty();
+                    break;
+                case 6:
+                    user_settings.ul_speed = data[3];
+                    indicators_validate_settings();
+                    settings_mark_dirty();
+                    break;
+                default:
+                    data[0] = VIA_ID_UNHANDLED;
+                    break;
+            }
+            break;
+
         case VIA_ID_CUSTOM_SAVE:
+            settings_mark_dirty();
+            break;
+
         case VIA_ID_EEPROM_RESET:
         case VIA_ID_BOOTLOADER_JUMP:
         default:
