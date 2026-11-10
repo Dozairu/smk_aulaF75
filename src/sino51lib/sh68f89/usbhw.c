@@ -68,7 +68,7 @@ void usb_hw_init(void)
     EP1CON  = 0;
     EP2CON  = 0;
     USBIE1  = (_SETUPIE | _SOFIE | _RESMIE | _SUSPIE | _PBRSTIE);
-    USBIE2  = (_OEP0IE | _IEP0IE | _IEP1IE | _IEP2IE);
+    USBIE2  = (_OEP0IE | _IEP0IE | _IEP1IE | _IEP2IE | _OEP2IE);
     USBCON  = (_ENUSB | _SW1CON);
 
     INSCON = saved_page;
@@ -125,12 +125,14 @@ void usb_hw_ep2_in_complete(void)
     ep2_in_busy = 0;
 }
 
-#if DEBUG == 1
+#if DEBUG == 1 || defined(VIA_ENABLE)
 bool usb_hw_ep2_in_free(void)
 {
     return !ep2_in_busy;
 }
+#endif
 
+#if DEBUG == 1
 void usb_hw_console_send(const __xdata uint8_t *data, uint8_t len)
 {
     // console_task gates on usb_hw_ep2_in_free(), so leaving this clear lets the next line

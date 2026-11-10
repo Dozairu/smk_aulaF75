@@ -10,6 +10,10 @@
 #define NKRO_REPORT_BITS 20 // limited by wireless dongle hid descriptor
 #define NKRO_REPORT_SIZE 2 + NKRO_REPORT_BITS
 
+// When sharing EP1 IN (16-byte buffer), NKRO report fits 14 bitmap bytes (112 keys) + 2 header bytes = 16 bytes
+#define USB_NKRO_REPORT_BITS 14
+#define USB_NKRO_REPORT_SIZE (2 + USB_NKRO_REPORT_BITS)
+
 #define EXTRA_REPORT_SIZE 3
 
 #define CONSOLE_REPORT_SIZE 32
@@ -17,6 +21,7 @@
 enum report_id {
     REPORT_ID_SYSTEM   = 1,
     REPORT_ID_CONSUMER = 2,
+    REPORT_ID_KEYBOARD = 3,
     REPORT_ID_ISP      = 5,
     REPORT_ID_NKRO     = 6,
     REPORT_ID_CONSOLE  = 7,

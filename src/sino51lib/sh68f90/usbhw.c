@@ -51,7 +51,7 @@ void usb_hw_init(void)
 {
     USBADDR = 0;
     USBIE1  = (_SETUPIE | _SOFIA | _RESMIE | _SUSPIE | _PBRSTIE);
-    USBIE2  = (_OEP0IE | _IEP0IE);
+    USBIE2  = (_OEP0IE | _IEP0IE | _IEP2IE | _OEP2IE);
     USBCON  = (_ENUSB | _SW1CON);
     IEN1 |= _EUSB;
 }
@@ -84,12 +84,14 @@ void usb_hw_ep1_in_complete(void) {}
 
 void usb_hw_ep2_in_complete(void) {}
 
-#if DEBUG == 1
+#if DEBUG == 1 || defined(VIA_ENABLE)
 bool usb_hw_ep2_in_free(void)
 {
     return !(EP2CON & _IEP2RDY);
 }
+#endif
 
+#if DEBUG == 1
 void usb_hw_console_send(const __xdata uint8_t *data, uint8_t len)
 {
     EP2_IN_BUF[0] = REPORT_ID_CONSOLE;

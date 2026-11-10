@@ -13,8 +13,10 @@ void usb_hw_ep2_in_send(uint8_t *src, uint8_t len);
 void usb_hw_ep1_in_complete(void);
 void usb_hw_ep2_in_complete(void);
 
-#if DEBUG == 1
+#if DEBUG == 1 || defined(VIA_ENABLE)
 bool usb_hw_ep2_in_free(void);
+#endif
+#if DEBUG == 1
 void usb_hw_console_send(const __xdata uint8_t *data, uint8_t len);
 #endif
 
