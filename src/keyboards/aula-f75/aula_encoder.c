@@ -3,8 +3,12 @@
 #include "host.h"
 #include "report.h"
 #include "keycodes.h"
+#include "kb.h"
 #include "layout.h"
 #include "dynamic_keymap.h"
+#ifdef VIA_MACRO_ENABLE
+#    include "via_macro.h"
+#endif
 #include <stdint.h>
 #include <stdbool.h>
 
@@ -44,7 +48,7 @@ static volatile __data int8_t  enc_pending;
 static volatile __bit          enc_release_due;
 
 /* Keycode currently held on the host side, so it can be released. */
-static __xdata uint8_t enc_sent;
+static __xdata uint16_t enc_sent;
 
 /* In XDATA: only touched by the ISR, which already accesses XRAM for rendering. */
 static __xdata uint8_t enc_state;
@@ -77,32 +81,62 @@ void aula_encoder_sample(void)
     }
 }
 
-static void enc_send(uint8_t kc, bool down)
+static void enc_send(uint16_t kc, bool down)
 {
+    uint8_t basic;
+    uint8_t hi;
+
     if (kc == 0) {
         return;
     }
-    if (IS_MODIFIER_KEYCODE(kc)) {
-        if (down) add_mods(MOD_BIT(kc)); else del_mods(MOD_BIT(kc));
-        send_keyboard_report();
-    } else if (IS_BASIC_KEYCODE(kc)) {
-        if (down) add_key(kc); else del_key(kc);
-        send_keyboard_report();
-    } else if (IS_SYSTEM_KEYCODE(kc)) {
-        host_system_send(down ? keycode_to_system(kc) : 0);
-    } else if (IS_CONSUMER_KEYCODE(kc)) {
-        host_consumer_send(down ? keycode_to_consumer(kc) : 0);
+#ifdef VIA_MACRO_ENABLE
+    if (IS_QK_MACRO(kc)) {
+        if (down && (kc - QK_MACRO) < DYNAMIC_MACRO_COUNT) {
+            via_macro_play((uint8_t)(kc - QK_MACRO));
+        }
+        return;
     }
+#endif
+    if (!kb_process_record(kc, down)) {
+        return;
+    }
+
+    basic = (uint8_t)(kc & 0xFFu);
+    hi    = (uint8_t)(kc >> 8);
+    if (hi >= 0x01u && hi <= 0x1Fu) {
+        uint8_t mods = (uint8_t)(hi & 0x0Fu);
+        if (hi & 0x10u) {
+            mods = (uint8_t)(mods << 4);
+        }
+        if (down) add_mods(mods); else del_mods(mods);
+    } else if (hi != 0) {
+        return;
+    }
+
+    if (basic != 0) {
+        if (IS_MODIFIER_KEYCODE(basic)) {
+            if (down) add_mods(MOD_BIT(basic)); else del_mods(MOD_BIT(basic));
+        } else if (IS_BASIC_KEYCODE(basic)) {
+            if (down) add_key(basic); else del_key(basic);
+        } else if (IS_SYSTEM_KEYCODE(basic)) {
+            host_system_send(down ? keycode_to_system(basic) : 0);
+            return;
+        } else if (IS_CONSUMER_KEYCODE(basic)) {
+            host_consumer_send(down ? keycode_to_consumer(basic) : 0);
+            return;
+        }
+    }
+    send_keyboard_report();
 }
 
-static uint8_t enc_lookup(bool clockwise)
+static uint16_t enc_lookup(bool clockwise)
 {
     uint16_t kc = dynamic_encoder_get_keycode(action_layer, 0, clockwise);
 
     if (kc == KC_TRANSPARENT) {
         kc = dynamic_encoder_get_keycode(0, 0, clockwise);
     }
-    return kc <= 0xFFu ? (uint8_t)kc : 0;
+    return kc;
 }
 
 void aula_encoder_task(void)
