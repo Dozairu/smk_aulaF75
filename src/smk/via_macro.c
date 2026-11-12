@@ -45,6 +45,7 @@
 #    define SHIFT_FLAG 0x0200u /* QK_LSFT */
 
 static volatile __xdata uint16_t macro_wait;
+static volatile bool             macro_due;
 static __xdata uint16_t          macro_pos;
 static __xdata uint16_t          macro_pending;     /* 16-bit keycode to release after a tap */
 static bool                      macro_running;
@@ -64,6 +65,9 @@ void via_macro_tick(void)
 {
     if (macro_wait != 0) {
         macro_wait--;
+        if (macro_wait == 0) {
+            macro_due = true;
+        }
     }
 }
 
@@ -71,7 +75,13 @@ static void macro_arm(uint16_t ticks)
 {
     __critical
     {
-        macro_wait = ticks;
+        if (ticks == 0) {
+            macro_wait = 0;
+            macro_due  = true;
+        } else {
+            macro_wait = ticks;
+            macro_due  = false;
+        }
     }
 }
 
@@ -166,7 +176,7 @@ void via_macro_task(void)
     uint8_t c;
     uint8_t action;
 
-    if (!macro_running || macro_wait != 0) {
+    if (!macro_running || !macro_due) {
         return;
     }
 

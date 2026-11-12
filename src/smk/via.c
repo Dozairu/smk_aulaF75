@@ -5,8 +5,10 @@
 #    include "dynamic_keymap.h"
 #    include "indicators.h"
 #    include "kbdef.h"
+#    include "matrix.h"
 #    include "raw_hid.h"
 #    include "settings.h"
+#    include "tick.h"
 #    include <string.h>
 
 #    define VIA_ID_GET_PROTOCOL_VERSION           0x01u
@@ -57,7 +59,7 @@ void via_process_packet(__xdata uint8_t *data)
                     /* One big-endian 16-bit mask per row, starting at data[3] (VIA reads the payload from there). */
                     memset(&data[2], 0, RAW_HID_REPORT_SIZE - 2u);
                     for (uint8_t col = 0; col < MATRIX_COLS; col++) {
-                        const uint8_t pressed = user_matrix_pressed(col);
+                        const uint8_t pressed = matrix_get_col(col);
                         for (uint8_t row = 0; row < MATRIX_ROWS; row++) {
                             if (pressed & (uint8_t)(1u << row)) {
                                 const uint8_t idx = (uint8_t)(3u + row * 2u + (col < 8u ? 1u : 0u));
@@ -202,6 +204,15 @@ void via_process_packet(__xdata uint8_t *data)
                 case 5:
                     data[3] = user_settings.ul_brightness;
                     break;
+                case 6:
+                    data[3] = user_settings.battery_indicator_on;
+                    break;
+                case 7:
+                    data[3] = user_settings.led_color;
+                    break;
+                case 8:
+                    data[3] = user_settings.ul_speed;
+                    break;
                 default:
                     data[0] = VIA_ID_UNHANDLED;
                     break;
@@ -213,7 +224,9 @@ void via_process_packet(__xdata uint8_t *data)
                 case 1:
                     user_settings.led_effect = data[3];
                     indicators_validate_settings();
+                    tick_pause();
                     indicators_init();
+                    tick_resume();
                     settings_mark_dirty();
                     break;
                 case 2:
@@ -233,6 +246,21 @@ void via_process_packet(__xdata uint8_t *data)
                     break;
                 case 5:
                     user_settings.ul_brightness = data[3];
+                    indicators_validate_settings();
+                    settings_mark_dirty();
+                    break;
+                case 6:
+                    user_settings.battery_indicator_on = data[3] ? 1 : 0;
+                    indicators_validate_settings();
+                    settings_mark_dirty();
+                    break;
+                case 7:
+                    user_settings.led_color = data[3] ? 1 : 0;
+                    indicators_validate_settings();
+                    settings_mark_dirty();
+                    break;
+                case 8:
+                    user_settings.ul_speed = data[3] ? 1 : 0;
                     indicators_validate_settings();
                     settings_mark_dirty();
                     break;

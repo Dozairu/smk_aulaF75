@@ -221,7 +221,7 @@ const uint8_t hid_report_desc_extra[] = {
     HID_RI_END_COLLECTION(0),
 #endif
 
-#if DEBUG == 1
+#if DEBUG == 1 && !defined(VIA_ENABLE)
     HID_RI_USAGE_PAGE(16, 0xff31),        // Vendor (console page)
     HID_RI_USAGE(8, 0x74),                // Console
     HID_RI_COLLECTION(8, 0x01),           // Application
@@ -613,12 +613,22 @@ void usb_task(void)
 #if DEBUG == 1
 bool usb_console_ready(void)
 {
+#    ifdef VIA_ENABLE
+    /* EP2 IN carries 32-byte VIA Raw HID reports (no report ID); HID console cannot share it. */
+    return false;
+#    else
     return usb_is_configured() && usb_hw_ep2_in_free();
+#    endif
 }
 
 void usb_console_send(const __xdata uint8_t *data, uint8_t len)
 {
+#    ifdef VIA_ENABLE
+    (void)data;
+    (void)len;
+#    else
     usb_hw_console_send(data, len);
+#    endif
 }
 #endif
 
@@ -1336,7 +1346,7 @@ static void usb_hid_set_report_handler(struct usb_req_setup *req)
             return;
         }
 #endif
-#if DEBUG == 1
+#if DEBUG == 1 && !defined(VIA_ENABLE)
         if (report_id == REPORT_ID_CONSOLE) {
             ep0_receive(EP0_OUT_CONSOLE, req->wLength);
             return;

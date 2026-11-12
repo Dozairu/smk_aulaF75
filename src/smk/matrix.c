@@ -53,7 +53,7 @@ static uint16_t resolve_keycode(uint16_t base, uint8_t row, uint8_t col)
     return (overlay == KC_TRANSPARENT) ? base : overlay;
 }
 
-static void send_keycode(uint16_t qcode, bool pressed)
+void send_keycode(uint16_t qcode, bool pressed)
 {
     if (IS_MODIFIER_KEYCODE(qcode)) {
         if (pressed) {
@@ -95,6 +95,9 @@ static void process_key_state(uint8_t row, uint8_t col, bool pressed)
             action_layer = QK_MOMENTARY_GET_LAYER(base);
         } else {
             clear_keys();
+            send_keyboard_report();
+            host_consumer_send(0);
+            host_system_send(0);
             action_layer = 0;
         }
         return;
@@ -120,6 +123,11 @@ static void process_key_state(uint8_t row, uint8_t col, bool pressed)
     }
 
     send_keycode(qcode, pressed);
+}
+
+uint8_t matrix_get_col(uint8_t col)
+{
+    return (col < MATRIX_COLS) ? matrix[col] : 0;
 }
 
 void matrix_scan_full(void)
