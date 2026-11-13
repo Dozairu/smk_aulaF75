@@ -759,6 +759,52 @@ static bool rf_diag_paint(void)
     return true;
 }
 
+/* --------------------------------------------------- battery level overlay
+ *
+ * `Fn + B` (`BAT_SHOW`) paints the damped battery percentage (`rf_batt_pct`)
+ * across keys `1` to `0` (row 1, columns 1 to 10) for ~3 seconds (80 sweeps
+ * of ~37.9 ms), bypassing user brightness so it remains readable when RGB is
+ * off or dimmed.
+ */
+#define BAT_SHOW_SWEEPS 80u
+
+static volatile __xdata uint8_t bat_show_sweeps;
+
+void indicators_show_battery(void)
+{
+    ET2             = 0;
+    bat_show_sweeps = (bat_show_sweeps != 0) ? 0 : (uint8_t)BAT_SHOW_SWEEPS;
+    ET2             = 1;
+}
+
+static bool bat_show_paint(void)
+{
+    uint8_t pct;
+    uint8_t lit;
+    uint8_t r = 0;
+    uint8_t g = 0;
+
+    if (regen_row != 1 || regen_col < 1 || regen_col > 10) {
+        return false;
+    }
+
+    pct = rf_batt_pct;
+    lit = (pct == 0) ? 1u : (uint8_t)((pct + 9u) / 10u);
+
+    if (regen_col <= lit) {
+        if (pct <= 20) {
+            r = 255;
+        } else if (pct <= 50) {
+            r = 255;
+            g = 180;
+        } else {
+            g = 255;
+        }
+    }
+    aula_rgb_set(regen_row, regen_col, r, g, 0);
+    return true;
+}
+
 #endif /* RF_EUART0 */
 
 /*
@@ -856,6 +902,11 @@ static __bit           macro_was_on;
 #define CAPS_LEVEL 255
 
 static __bit caps_on;
+#ifdef RF_EUART0
+static __xdata uint8_t pair_blink_cnt;
+static __xdata uint8_t prev_link_fx = 0xFF;
+static __xdata uint8_t flourish_step; /* 0 = idle, 1..30 = mode-switch wipe */
+#endif
 
 static void led_regen_one(void)
 {
@@ -897,6 +948,26 @@ static void led_regen_one(void)
 #ifdef RF_EUART0
     if (rf_diag_on && rf_diag_paint()) {
         goto advance; /* cell claimed by the diagnostic overlay */
+    }
+    if (bat_show_sweeps && bat_show_paint()) {
+        goto advance; /* cell claimed by the battery overlay */
+    }
+    if (rf_bt_pair_slot != 0 && user_settings.battery_indicator_on != 0 &&
+        regen_row == 1 && regen_col == rf_bt_pair_slot) {
+        const bool on = rf_bt_pair_fast ? ((pair_blink_cnt & 0x04u) == 0)
+                                        : ((pair_blink_cnt & 0x08u) == 0);
+        aula_rgb_set(regen_row, regen_col, on ? 255u : 0u, on ? 255u : 0u, on ? 255u : 0u);
+        goto advance;
+    }
+    if (flourish_step != 0) {
+        const uint8_t head = (uint8_t)((flourish_step - 1u) >> 1);
+        if (regen_col == head || (head > 0 && regen_col == (uint8_t)(head - 1u))) {
+            aula_fx_color((uint8_t)(regen_col * 16u + regen_row * 8u), rgb);
+            aula_rgb_set(regen_row, regen_col, rgb[0], rgb[1], rgb[2]);
+        } else {
+            aula_rgb_set(regen_row, regen_col, 0, 0, 0);
+        }
+        goto advance;
     }
 #endif
 
@@ -1103,6 +1174,17 @@ advance:
                 macro_beat = 0;
             }
             aula_status_tick();
+#ifdef RF_EUART0
+            if (bat_show_sweeps != 0) {
+                bat_show_sweeps--;
+            }
+            pair_blink_cnt++;
+            if (flourish_step != 0) {
+                if (++flourish_step > (uint8_t)(LED_COLS * 2u)) {
+                    flourish_step = 0;
+                }
+            }
+#endif
             /* Phase advances INSIDE the frame gate, as in the factory firmware:
              * factory rendering is gated on `tick >= period`. */
             spark_decay_due = fx_frame_advance();
@@ -1152,7 +1234,7 @@ bool indicators_update_step(keyboard_state_t *keyboard, uint8_t current_step)
 {
     (void)current_step;  /* `tick.c` always passes 0 */
 
-    caps_on = (keyboard->led_state & HID_LED_CAPS_LOCK) ? 1 : 0;
+    caps_on = (user_settings.led_color && (keyboard->led_state & HID_LED_CAPS_LOCK)) ? 1 : 0;
 
     /* The LED subframe is the only regular timebase in the firmware --
      * ~400 us -- and that is the same rate at which the factory firmware
@@ -1175,8 +1257,16 @@ bool indicators_update_step(keyboard_state_t *keyboard, uint8_t current_step)
     }
 
 #ifdef RF_EUART0
+    if (keyboard->rf_link != prev_link_fx) {
+        if (prev_link_fx != 0xFF) {
+            flourish_step = 1;
+        }
+        prev_link_fx = keyboard->rf_link;
+    }
     if (aula_macro_active() || caps_on || aula_status_lit() ||
-        rf_diag_on || user_settings.led_effect < AULA_FX_OFF) {
+        rf_diag_on || bat_show_sweeps || flourish_step != 0 ||
+        (rf_bt_pair_slot != 0 && user_settings.battery_indicator_on != 0) ||
+        user_settings.led_effect < AULA_FX_OFF) {
 #else
     if (aula_macro_active() || caps_on || aula_status_lit() ||
         user_settings.led_effect < AULA_FX_OFF) {
@@ -1208,9 +1298,11 @@ void indicators_apply_defaults(void)
     user_settings.led_effect     = AULA_FX_LAKE; /* requested as default */
     user_settings.led_brightness = LED_BRIGHTNESS_DEFAULT;
     user_settings.led_speed      = LED_SPEED_DEFAULT;
-    user_settings.ul_effect      = AULA_FX_COLOR_WHEEL; /* rainbow, as in factory firmware */
-    user_settings.ul_brightness  = 0;                   /* forward direction, bit 0x23 cleared */
-    user_settings.ul_speed       = 0;                   /* unused */
+    user_settings.ul_effect            = AULA_FX_COLOR_WHEEL; /* rainbow, as in factory firmware */
+    user_settings.ul_brightness        = 0;                   /* forward direction, bit 0x23 cleared */
+    user_settings.battery_indicator_on = 1;                   /* VIA: Status Indicator (Esc/F1) */
+    user_settings.led_color            = 1;                   /* VIA: Caps Lock Indicator */
+    user_settings.ul_speed             = 1;                   /* VIA: Charging & Low Battery Indicator */
 }
 
 void indicators_validate_settings(void)
@@ -1230,7 +1322,15 @@ void indicators_validate_settings(void)
     if (user_settings.ul_brightness > 1) {
         user_settings.ul_brightness = 0;
     }
-    user_settings.ul_speed = 0; /* legacy byte, no longer used */
+    if (user_settings.battery_indicator_on > 1) {
+        user_settings.battery_indicator_on = 1;
+    }
+    if (user_settings.led_color > 1) {
+        user_settings.led_color = 1;
+    }
+    if (user_settings.ul_speed > 1) {
+        user_settings.ul_speed = 1;
+    }
 }
 
 void indicators_init(void)
