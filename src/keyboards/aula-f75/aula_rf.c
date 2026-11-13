@@ -186,6 +186,8 @@ static __xdata uint8_t   vbus_on_cnt;
 static __xdata uint8_t   vbus_off_cnt;
 static __xdata uint8_t   chg_on_cnt;
 static __xdata uint8_t   chg_off_cnt;
+static __xdata uint8_t   chg_poll_div;
+static __xdata uint8_t   prev_batt_pct = 0xFFu;
 static __xdata uint8_t   rx_flag_last;
 
 __xdata uint8_t rf_bt_pair_slot;
@@ -1509,7 +1511,9 @@ void rf_task(void)
      * `battery_level` uses the 0-7 scale required by `keyboard.h`, not a
      * percentage: that is the contract expected by SMK's indicator readers.
      */
-    rf_charge_poll();
+    if ((++chg_poll_div & 0x3Fu) == 0u) {
+        rf_charge_poll();
+    }
     rf_charging_active = rf_charging ? 1 : 0;
     rf_vbus_active     = vbus_present ? 1 : 0;
     if (link_state == RF_LINK_BT && !link_connected) {
@@ -1530,7 +1534,10 @@ void rf_task(void)
     }
     keyboard_state.rf_link       = (uint8_t)rf_link();
     keyboard_state.connected     = rf_connected() ? 1 : 0;
-    keyboard_state.battery_level = (uint8_t)(((uint16_t)rf_batt_pct * 7u + 50u) / 100u);
+    if (rf_batt_pct != prev_batt_pct) {
+        prev_batt_pct = rf_batt_pct;
+        keyboard_state.battery_level = (uint8_t)(((uint16_t)rf_batt_pct * 7u + 50u) / 100u);
+    }
     keyboard_state.low_power     = batt_low ? 1 : 0;
 
     /* The status LED tracks these four. All edge detection lives in
