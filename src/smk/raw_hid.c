@@ -40,7 +40,11 @@ void raw_hid_task(void)
         return;
     }
 
-    via_process_packet(request);
+    if (!via_process_packet(request)) {
+        request_pending = false;
+        SET_EP2_OUT_RDY;
+        return;
+    }
     /* Publish ownership BEFORE arming EP2. A completion can run as soon as
      * the hardware sees IN_RDY. Never overwrite its state after submission.
      * OUT stays unarmed until that completion, protecting request[] while

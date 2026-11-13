@@ -41,7 +41,7 @@
 #    define VIA_KEYBOARD_VALUE_DEVICE_INDICATION  0x05u
 #    define VIA_KEYBOARD_VALUE_KEYCODES_VERSION   0x06u
 
-void via_process_packet(__xdata uint8_t *data)
+bool via_process_packet(__xdata uint8_t *data)
 {
     switch (data[0]) {
         case VIA_ID_GET_PROTOCOL_VERSION:
@@ -276,18 +276,14 @@ void via_process_packet(__xdata uint8_t *data)
 
 #    ifdef SIGNALRGB_ENABLE
         case 0xF0u: /* SRGB_CMD_SET_LEDS: [0xF0, start_idx, count(<=9), R,G,B...] */
-            if (data[2] > 9u) {
-                data[0] = VIA_ID_UNHANDLED;
-            } else {
+            if (data[2] <= 9u) {
                 indicators_direct_set(data[1], data[2], &data[3]);
-                data[1] = 0x00u;
             }
-            break;
+            return false; /* fire-and-forget: don't pollute VIA's HID IN queue */
 
         case 0xF1u: /* SRGB_CMD_EXIT: return to onboard lighting */
             indicators_direct_clear();
-            data[1] = 0x00u;
-            break;
+            return false;
 #    endif
 
         case VIA_ID_EEPROM_RESET:
@@ -296,6 +292,7 @@ void via_process_packet(__xdata uint8_t *data)
             data[0] = VIA_ID_UNHANDLED;
             break;
     }
+    return true;
 }
 
 #endif
