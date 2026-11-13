@@ -1445,14 +1445,21 @@ void indicators_direct_set(uint8_t start_idx, uint8_t count, const __xdata uint8
         direct_rgb[row][col][2] = rgb[2];
         rgb += 3;
     }
-    direct_timeout = DIRECT_RGB_TIMEOUT_FRAMES;
-    direct_active  = true;
+    __critical
+    {
+        direct_timeout = DIRECT_RGB_TIMEOUT_FRAMES;
+        direct_active  = true;
+    }
 }
 
 void indicators_direct_clear(void)
 {
-    direct_active  = false;
-    direct_timeout = 0u;
+    __critical
+    {
+        direct_active  = false;
+        direct_timeout = 0u;
+    }
+    aula_rgb_clear();
 }
 #endif
 
