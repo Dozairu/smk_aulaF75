@@ -28,8 +28,11 @@ void settings_dump(void)
 
 void settings_save(void)
 {
-    settings_dirty    = false; // clear first: a mark during the write is not lost
-    settings_save_due = false;
+    __critical
+    {
+        settings_dirty    = false; // clear first: a mark during the write is not lost
+        settings_save_due = false;
+    }
 
 #if DEBUG == 1
     settings_dump();
@@ -42,9 +45,12 @@ void settings_save(void)
 
 void settings_mark_dirty(void)
 {
-    settings_dirty       = true;
-    settings_save_due    = false;
-    settings_delay_ticks = SETTINGS_SAVE_DELAY_TICKS;
+    __critical
+    {
+        settings_dirty       = true;
+        settings_save_due    = false;
+        settings_delay_ticks = SETTINGS_SAVE_DELAY_TICKS;
+    }
 }
 
 void settings_tick(void)
@@ -57,6 +63,13 @@ void settings_tick(void)
     }
     if (settings_delay_ticks == 0) {
         settings_save_due = true;
+    }
+}
+
+void settings_flush(void)
+{
+    if (settings_dirty) {
+        settings_save();
     }
 }
 

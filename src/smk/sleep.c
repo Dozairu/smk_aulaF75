@@ -5,6 +5,7 @@ typedef int sleep_disabled_placeholder_t;
 #else
 
 #    include "indicators.h"
+#    include "settings.h"
 #    include "tick.h"
 #    include "power.h"
 #    include "usb.h"
@@ -117,6 +118,7 @@ void sleep_task(void)
     }
 #    endif
 
+    settings_flush();
     tick_pause();
     indicators_pwm_disable();
 
