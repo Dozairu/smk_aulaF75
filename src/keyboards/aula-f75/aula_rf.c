@@ -180,6 +180,18 @@ static volatile __bit          rx_pending;
 static __xdata rf_link_t link_state;
 static __xdata uint8_t   bt_slot;
 static __bit             link_connected;
+static __bit             vbus_present;
+static __bit             rf_charging;
+static __xdata uint8_t   vbus_on_cnt;
+static __xdata uint8_t   vbus_off_cnt;
+static __xdata uint8_t   chg_on_cnt;
+static __xdata uint8_t   chg_off_cnt;
+static __xdata uint8_t   rx_flag_last;
+
+__xdata uint8_t rf_bt_pair_slot;
+__xdata uint8_t rf_bt_pair_fast;
+__xdata uint8_t rf_charging_active;
+__xdata uint8_t rf_vbus_active;
 
 /*
  * Pending 0x01 command. The factory firmware sends it only once, when the
@@ -243,10 +255,11 @@ static __bit            probe_answered;
  * frame, and the factory firmware converts it in `fcn.0000801F`, once every six
  * status frames.
  */
-#define RF_BATT_FRAMES  6   /* factory cadence: one status frame out of six */
-#define RF_BATT_EMPTY   715 /* XRAM 0x02CB: below this, percentage is zero */
-#define RF_BATT_FULL    912 /* upper threshold of the hysteresis in fcn.00001DC3 */
-#define RF_BATT_LOW     737 /* lower threshold of the same hysteresis */
+#define RF_BATT_FRAMES    6   /* factory cadence: one status frame out of six */
+#define RF_BATT_EMPTY     715 /* XRAM 0x02CB: below this, percentage is zero */
+#define RF_BATT_FULL      912 /* upper threshold of the hysteresis in fcn.00001DC3 */
+#define RF_BATT_LOW       737 /* lower threshold of the same hysteresis */
+#define RF_BATT_LOW_CLEAR 752 /* hysteresis release threshold (~19%) */
 
 /*
  * Damping, transcribed from CODE 0xAF8D: the DISPLAYED percentage converges
@@ -269,6 +282,9 @@ static __xdata uint8_t  batt_target;  /* target percentage */
 static __xdata uint8_t  batt_shown;   /* displayed percentage, the converging value */
 static __xdata uint8_t  batt_ticks;   /* damping counter */
 static __bit            batt_low;
+static __bit            batt_initialized;
+
+__xdata uint8_t rf_batt_pct;
 
 /*
  * Key report transmit queue, transcribed from `0x0C57`.
@@ -724,7 +740,7 @@ static void rf_rx_drop(void)
  */
 static void rf_battery_sample(void)
 {
-    if (++batt_frames < RF_BATT_FRAMES) {
+    if (batt_initialized && ++batt_frames < RF_BATT_FRAMES) {
         return;
     }
     batt_frames = 0;
@@ -742,7 +758,18 @@ static void rf_battery_sample(void)
                                 (uint16_t)(RF_BATT_FULL - RF_BATT_EMPTY));
     }
 
-    batt_low = (raw < RF_BATT_LOW) ? 1 : 0;
+    if (raw < RF_BATT_LOW) {
+        batt_low = 1;
+    } else if (raw >= RF_BATT_LOW_CLEAR) {
+        batt_low = 0;
+    }
+
+    if (!batt_initialized) {
+        batt_initialized = 1;
+        batt_shown       = batt_target;
+        batt_ticks       = 0;
+        return;
+    }
 
     /* Damped convergence: one point at a time, stepping more slowly the closer
      * we get to the target. */
@@ -787,24 +814,37 @@ static void rf_status_apply(void)
     const uint8_t code = rx_buf[4];
     const uint8_t flag = rx_buf[5];
 
+    rx_flag_last = flag;
+
     if (link_state == RF_LINK_BT) {
         if (bt_slot < RF_SLOT_BT1 || bt_slot > RF_SLOT_BT3) {
             bt_slot = RF_SLOT_BT1;
         }
-        if (code == bt_slot && flag != 0) {
+        /* Stock `0x26E9`: `frame[5] == 3` means connected; `1` = pairing,
+         * `2` = reconnecting, `0` = disconnected. Only re-request link select
+         * if the module is on the wrong slot or idle (`flag == 0`). */
+        if (code == bt_slot && flag == 3) {
             link_connected = 1;
         } else {
             link_connected = 0;
-            rf_queue_link(RF_LINK_SELECT);
+            if (code != bt_slot || flag == 0) {
+                rf_queue_link(RF_LINK_SELECT);
+            }
         }
     } else if (link_state == RF_LINK_24G) {
-        if (code == 0 && flag != 0) {
+        if (code == 0 && flag >= 2) {
             link_connected = 1;
         } else {
             link_connected = 0;
-            rf_queue_link(RF_LINK_SELECT);
+            if (code != 0 || flag == 0) {
+                rf_queue_link(RF_LINK_SELECT);
+            }
         }
     }
+
+    /* Stock firmware (`0x06B7`, `0x0716`, `0x248C`): `frame[3]` carries the host
+     * HID LED bitmask (Num/Caps/Scroll Lock) in wireless status frames. */
+    keyboard_state.led_state = link_connected ? (uint8_t)(rx_buf[3] & 0x07u) : 0;
 
     rf_battery_sample();
 }
@@ -1202,11 +1242,13 @@ void rf_init(void)
     probe_ticks     = 0;
     probe_misses    = 0;
     probe_answered  = 0;
-    batt_frames     = 0;
-    batt_target     = 0;
-    batt_shown      = 0;
-    batt_ticks      = 0;
-    batt_low        = 0;
+    batt_frames      = 0;
+    batt_target      = 0;
+    batt_shown       = 0;
+    batt_ticks       = 0;
+    batt_low         = 0;
+    batt_initialized = 0;
+    rf_batt_pct      = 0;
     q_head          = 0;
     q_tail          = 0;
     q_count         = 0;
@@ -1361,6 +1403,63 @@ static void rf_diag_trace(void)
 #    define rf_diag_trace() ((void)0)
 #endif
 
+/*
+ * Charger control and status, transcribed from stock `0x970E-0x97AA`:
+ *   - `P3_4` (VBUS) debounced 3 samples -> `vbus_present`
+ *   - `P7_6` (charger enable, active LOW): 0 when VBUS present, 1 on battery
+ *   - `P7_7` (charger status, active LOW): 20 samples low = charging,
+ *     200 samples high (or VBUS absent) = charge complete / not charging.
+ */
+static void rf_charge_poll(void)
+{
+    const bool vbus_raw = (link_state == RF_LINK_WIRED) || (P3_4 != 0);
+
+    if (vbus_raw) {
+        vbus_off_cnt = 0;
+        if (vbus_on_cnt < 3) {
+            vbus_on_cnt++;
+        }
+        if (vbus_on_cnt >= 3) {
+            vbus_present = 1;
+        }
+    } else {
+        vbus_on_cnt = 0;
+        if (vbus_off_cnt < 3) {
+            vbus_off_cnt++;
+        }
+        if (vbus_off_cnt >= 3) {
+            vbus_present = 0;
+        }
+    }
+
+    P7_6 = vbus_present ? 0 : 1;
+
+    if (!vbus_present) {
+        chg_on_cnt  = 0;
+        chg_off_cnt = 0;
+        rf_charging = 0;
+        return;
+    }
+
+    if (!P7_7) {
+        chg_off_cnt = 0;
+        if (chg_on_cnt < 20) {
+            chg_on_cnt++;
+        }
+        if (chg_on_cnt >= 20) {
+            rf_charging = 1;
+        }
+    } else {
+        chg_on_cnt = 0;
+        if (chg_off_cnt < 200) {
+            chg_off_cnt++;
+        }
+        if (chg_off_cnt >= 200) {
+            rf_charging = 0;
+        }
+    }
+}
+
 void rf_task(void)
 {
     if (!settings_restored) {
@@ -1410,14 +1509,33 @@ void rf_task(void)
      * `battery_level` uses the 0-7 scale required by `keyboard.h`, not a
      * percentage: that is the contract expected by SMK's indicator readers.
      */
+    rf_charge_poll();
+    rf_charging_active = rf_charging ? 1 : 0;
+    rf_vbus_active     = vbus_present ? 1 : 0;
+    if (link_state == RF_LINK_BT && !link_connected) {
+        rf_bt_pair_slot = bt_slot;
+        rf_bt_pair_fast = (rx_flag_last != 2) ? 1 : 0;
+    } else {
+        rf_bt_pair_slot = 0;
+    }
+
+    {
+        uint8_t pct = batt_shown;
+        if (rf_charging && pct >= 100u) {
+            pct = 99u;
+        } else if (vbus_present && !rf_charging && pct >= 95u) {
+            pct = 100u;
+        }
+        rf_batt_pct = pct;
+    }
     keyboard_state.rf_link       = (uint8_t)rf_link();
     keyboard_state.connected     = rf_connected() ? 1 : 0;
-    keyboard_state.battery_level = (uint8_t)(((uint16_t)batt_shown * 7u) / 100u);
+    keyboard_state.battery_level = (uint8_t)(((uint16_t)rf_batt_pct * 7u + 50u) / 100u);
     keyboard_state.low_power     = batt_low ? 1 : 0;
 
-    /* The status LED tracks these three. All edge detection lives in
+    /* The status LED tracks these four. All edge detection lives in
      * `aula_status.c`: here we only publish the state. */
-    aula_status_poll(keyboard_state.rf_link, link_connected, batt_low);
+    aula_status_poll(keyboard_state.rf_link, link_connected, batt_low, rf_charging);
 
     rf_diag_state[RF_DIAG_P74]    = P7_4 ? 1 : 0;
     rf_diag_state[RF_DIAG_P45]    = P4_5 ? 1 : 0;

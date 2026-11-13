@@ -118,6 +118,15 @@ void rf_sleep_wake(void);
 
 extern __xdata uint8_t rf_diag_state[RF_DIAG_FIELDS];
 
+/* Damped battery percentage (0-100), updated in `rf_task()` and safe to read from ISRs. */
+extern __xdata uint8_t rf_batt_pct;
+
+/* BT pairing/reconnect slot indicator (0 = off, 1..3 = BT1..3) and speed (1 = fast, 0 = slow). */
+extern __xdata uint8_t rf_bt_pair_slot;
+extern __xdata uint8_t rf_bt_pair_fast;
+extern __xdata uint8_t rf_charging_active;
+extern __xdata uint8_t rf_vbus_active;
+
 void rf_send_report(__xdata report_keyboard_t *report);
 void rf_send_nkro(__xdata report_nkro_t *report);
 void rf_send_extra(__xdata report_extra_t *report);

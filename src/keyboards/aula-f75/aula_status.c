@@ -1,5 +1,6 @@
 #include "aula_status.h"
 #include "sh68f90.h"
+#include "settings.h"
 #include <stdint.h>
 
 /*
@@ -62,7 +63,20 @@ static __xdata uint8_t st_pos;
 static __xdata uint8_t prev_link = 0xFF;
 static __bit           prev_conn;
 static __bit           prev_low;
+static __bit           prev_chg;
 static __bit           low_batt;
+static __bit           chg_active;
+
+static bool status_pattern_allowed(uint8_t p)
+{
+    if (p == AULA_STATUS_NONE) {
+        return false;
+    }
+    if (p == AULA_STATUS_LOW_BATT || (p == AULA_STATUS_LINKED && chg_active && !low_batt)) {
+        return user_settings.ul_speed != 0;
+    }
+    return user_settings.battery_indicator_on != 0;
+}
 
 void aula_status_event(uint8_t event)
 {
@@ -81,6 +95,8 @@ static void status_rest(void)
 {
     if (low_batt) {
         st_pat = AULA_STATUS_LOW_BATT;
+    } else if (chg_active) {
+        st_pat = AULA_STATUS_LINKED;
     } else {
         st_pat = AULA_STATUS_NONE;
     }
@@ -89,7 +105,7 @@ static void status_rest(void)
 
 bool aula_status_lit(void)
 {
-    return st_pat != AULA_STATUS_NONE;
+    return status_pattern_allowed(st_pat);
 }
 
 bool aula_status_busy(void)
@@ -122,22 +138,26 @@ uint8_t aula_status_level(void)
 {
     const uint8_t p = st_pat;
 
-    if (p == AULA_STATUS_NONE) {
+    if (!status_pattern_allowed(p)) {
         return 0;
     }
     return pat_data[(uint8_t)(pat_off[p] + st_pos)];
 }
 
-void aula_status_poll(uint8_t link, bool connected, bool low)
+void aula_status_poll(uint8_t link, bool connected, bool low, bool charging)
 {
-    /* Low battery does not trigger a one-shot pattern: it is a STATE that
-     * holds the indicator at rest and yields to any event. */
-    if (low != prev_low) {
-        prev_low = low;
-        low_batt = low;
-        if (!aula_status_busy()) {
+    /* Low battery and charging do not trigger one-shot patterns: they are
+     * STATES that hold the indicator at rest and yield to any event. */
+    if (low != prev_low || charging != prev_chg) {
+        prev_low   = low;
+        low_batt   = low;
+        prev_chg   = charging;
+        chg_active = charging;
+        ET2        = 0;
+        if (st_pat == AULA_STATUS_NONE || st_pat == AULA_STATUS_LOW_BATT) {
             status_rest();
         }
+        ET2 = 1;
     }
 
     if (link != prev_link) {

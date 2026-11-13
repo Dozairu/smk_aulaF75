@@ -39,7 +39,7 @@ void aula_status_event(uint8_t event);
  * posts the corresponding event. All edge-detection logic lives here so that
  * `aula_rf.c` only has a single line to call.
  */
-void aula_status_poll(uint8_t link, bool connected, bool low_batt);
+void aula_status_poll(uint8_t link, bool connected, bool low_batt, bool charging);
 
 /* True while a ONE-SHOT pattern is playing. Looping patterns -- pairing,
  * low battery -- do not count: they never finish on their own. */
