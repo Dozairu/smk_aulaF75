@@ -51,8 +51,7 @@ The length depends on **byte 1**, which echoes the acknowledged command, not sol
 | `02 02 00 00 00 51` | **6** | key report acknowledgment |
 | `03 00 00 00 00 52` | **6** | announcement |
 
-Factory checksum `0x55 − Σ` verified on each one. On the status response, `[4] = 0` and `[5] = 2` — which
-exactly satisfies the 2.4 GHz condition in `rf_status_apply()` — and `[6:7] = dd 03` gives a
+Factory checksum `0x55 − Σ` verified on each one. On the 2.4 GHz status response, `[4] = 0` and `[5] = 2` (in Bluetooth mode, stock `0x265D–0x26E9` uses `[5] = 3` for connected and `1`/`2`/`0` for pairing/reconnecting/disconnected) — and `[6:7] = dd 03` gives a
 battery reading of **989**, above the "full" threshold of 912.
 
 The port was expecting **ten** bytes for every type `0x02` frame: on a six-byte acknowledgment, it
@@ -175,22 +174,19 @@ The sleep interface gains two hooks, implemented across all six keyboards:
 mid-fade would leave the board's state machine armed, and **the next sleep entry
 would proceed without a pattern**. The other five keyboards return `true` and do nothing.
 
-### What is not indicated, and why
+### Charging and wireless host LEDs (decoded & implemented)
 
-**Charging**. The factory firmware reads it on `P7.6`/`P7.7` with a two-threshold debounce
-(`0x9723`–`0x97AA`) about which this page only says "*inferred*: charging and charge complete". Until
-that is decoded, displaying it would mean displaying guesswork — a decision made with
-the user.
+**Charging (`P3.4`, `P7.6`, `P7.7` — `0x970E–0x97AA`)**. Disassembly of the stock firmware establishes the exact roles:
+- `P3.4` (or wired mode) is **VBUS** (active HIGH, debounced 3 samples).
+- `P7.6` is an **output** (charger enable, active LOW: `0` when VBUS is present, `1` on battery).
+- `P7.7` is an **input** (charger status, active LOW: `20` samples low = charging, `200` samples high or VBUS absent = charge complete / not charging).
+- `rf_charge_poll()` in `aula_rf.c` implements this, caps `rf_batt_pct` at `99%` while charging (snapping to `100%` at `>= 95%` when charge-complete), and plays a smooth breath (`AULA_STATUS_LINKED`) on the `Esc`/`F1` LED while charging.
 
-⚠️ **Wired only, and this is structural.** In 2.4 GHz and Bluetooth modes, `rf_radio_on()` calls
-`usb_hw_deinit()`: `usb_ep0_out_irq()` no longer runs, and **nothing in the EUART0 protocol decoded to
-date reports the host LED state back**. The known incoming frames are status (10 B), ack
-(6 B), and block (22 B); which one would carry this information, and at what offset, is not established.
+**Wireless host LEDs (`frame[3]` — `0x06B7`, `0x0716`, `0x248C`)**. In 10-byte EUART0 status frames, **`frame[3]`** carries the host HID LED bitmask (`0x01` Num Lock, `0x02` Caps Lock, `0x04` Scroll Lock). `rf_status_apply()` copies `rx_buf[3] & 0x07` into `keyboard_state.led_state` when `link_connected` is set (and zeroes it when disconnected).
 
-`rf_radio_on()` therefore zeroes `led_state` before tearing down USB. Without that, the indicator would stay
-lit indefinitely in whatever state the host had when unplugged — stale information
-displayed with the confidence of truth, which is worse than displaying nothing. Upon returning to
-wired mode, the host resends its state during enumeration.
+**BT/2.4G link state (`frame[5]` — `0x265D–0x26E9`)**. Stock treats `frame[5] == 3` as connected (`0x0E3B = 1`), `1` as pairing, `2` as reconnecting, and `0` as disconnected. `aula_rf.c` now checks `flag == 3` in BT mode and drives per-key `1`/`2`/`3` pairing/reconnect flashing in `indicators.c`.
+
+All three indicators (**Status (`Esc/F1`)**, **Caps Lock**, and **Charging & Low Battery**) are toggleable in VIA (`via.json`, channel `3`, IDs `6–8`).
 
 **Order in the rendering chain** (`led_regen_one()`): keyless positions, **status indicators**,
 radio diagnostics, auto-type heartbeat, lighting effects. Indicators come first because they are not
@@ -473,8 +469,8 @@ Effect `0x2D` does not react to some obscure flag: it reacts to the user holding
 | `F10` | consumer — mute |
 | `F11` `F12` | consumer — volume − and + |
 | `Tab` | class 2 |
-| `Q` `W` `E` | shortcuts `0x19` `0x18` `0x1A` |
-| `G` `B` | shortcuts `0x0A` `0x11` |
+| `Q` `W` `E` | shortcuts `0x19` `0x18` `0x1A` — OS modes (Android, Windows, Mac) |
+| `G` `B` | shortcuts `0x0A` `0x11` — `0x11` = battery bar / charging animation (`0x42B1`) |
 | **`U`** | **Print Screen** |
 | **`I`** | **Scroll Lock** |
 | **`O`** | **Pause** |
@@ -489,10 +485,10 @@ Effect `0x2D` does not react to some obscure flag: it reacts to the user holding
 **Three keys added and flashed**: `Fn + U` → Print Screen, `Fn + I` → Scroll Lock,
 `Fn + O` → Pause. They were missing, and they match the factory layout.
 
-**What is still missing**, which is a matter of features rather than transcription:
-factory reset on `Fn + Esc`, re-pairing on ``Fn + ` ``, color restoration
-on `Fn + F4`, and the shortcuts on `Q`, `W`, `E`, `G`, `B`, `Tab`, `\` whose
-semantics would require dissecting the corresponding dispatcher arms. The data is there; the product decision is not.
+**Additional stock shortcuts decoded & added (VIA-configurable)**:
+`FACTORY_RST` (`Fn + Esc`, hold ~2s), `RF_PAIR` (`Fn + ~`), `BAT_SHOW` (`Fn + B`), `WIN_LOCK` (`Fn + LGui`), `WASD_SWAP` (`Fn + T`), `OS_WIN` (`Fn + W`), `OS_ANDROID` (`Fn + Q`), `OS_MAC` (`Fn + E`), and `OS_IOS` (assignable in VIA).
+
+**What remains unimplemented**: per-key custom RGB / OpenRGB (`Fn + F4` color restoration `0x91D3`), which requires a non-standard host protocol outside VIA.
 
 > **Layout note.** The port puts brightness on `Fn + [` / `]` and speed on
 > `Fn + ←` / `→`. The factory puts brightness on `Fn + Up` / `Down` and speed on
@@ -591,9 +587,9 @@ only populates 15. There really are **15** physical columns.
 | Channel ↔ (row, color) mapping | ✅ **established via the OpenRGB driver** |
 | Wiring rendering into the SMK loop | ✅ **resolved** — LED subframes in `tick.c`, see below |
 | Encoder rotation | ✅ **implemented** — quadrature on `P0.5`/`P0.6`, volume ± (`src/keyboards/aula-f75/aula_encoder.c`) |
-| Pins with unknown roles | ❓ `P0.0` `P0.1` `P4.1` `P4.4` `P5.5` `P5.6` `P7.7` — `P7.4`/`P4.5` are the connection mode switch, `P4.7` the "module ready" line |
+| Pins with unknown roles | ❓ `P0.0` `P0.1` `P4.1` `P4.4` `P5.5` `P5.6` — `P7.4`/`P4.5` are the connection mode switch, `P4.7` the "module ready" line, `P3.4` VBUS detect, `P7.6` charger enable (active LOW), `P7.7` charger status (active LOW) |
 | Sleep | ✅ **implemented**, USB **and radio** — transcribed from factory firmware, untested on hardware |
-| 2.4 GHz / Bluetooth wireless | ⚠️ **written and compiled** (`aula_rf.c`, EUART0), **never executed** — see below |
+| 2.4 GHz / Bluetooth wireless | ✅ **verified on hardware** (`aula_rf.c`, EUART0) — see top banner |
 
 ## Matrix: 81 keys, not 80 — the encoder
 
@@ -4606,10 +4602,7 @@ What the two bytes carry:
 | 1 | `[0x0C36]` — **battery percentage**. Established: `0x8162` copies `IDATA[0x17]` there right after `0x815D` sends it to the module via **command `0x0D`**, whose role this page has already identified |
 | 2 | two flags — bit 0 when `0x2D.3` is low, bit 4 when `0x26.0` is high |
 
-Both bits are set and cleared in the same place, `0x9723`–`0x97AA`, a dual-threshold debounce routine
-(20 and 200 passes) on `P7.6` and `P7.7`, and `0x30` directly drives `P7.6`. *Inferred:* that these
-represent "charging" and "charging complete". What is established is their origin and their
-position in the frame.
+Both bits are set and cleared in `0x970E–0x97AA`: `0x26.0` (`bit 0x30`) is **VBUS present** (`P3.4`, debounced 3 samples) and drives charger enable `P7.6` (active LOW), while `0x2D.3` (`bit 0x6B`) is **charging in progress** from `P7.7` (active LOW, debounced 20 samples low / 200 samples high).
 
 And the caveat noted earlier falls away on its own: the end-of-transfer handler does exist, but
 it is **handler 10**, not opcode `0x4A`.
@@ -5501,9 +5494,8 @@ Delta of 0–9 → 20 ticks per step; 10–19 → 10; 20–29 → 5; above that 
 > then 2**. The prose was right, the correction was wrong, and the dump settled it. Lesson learned:
 > on this page, check the radix before correcting a gloss.
 
-The convergence direction is selected by `0x26.0`, using two separate counters (`0x08C5` when
-rising, `0x08DC` when falling) and special handling at 100% controlled by `0x2D.3`.
-*Inferred:* `0x26.0` = charging in progress.
+The convergence direction is selected by `0x26.0` (`bit 0x30`, VBUS/USB power present), using two separate counters (`0x08C5` when
+rising, `0x08DC` when falling) and special handling at 100% controlled by `0x2D.3` (`bit 0x6B`, charging in progress — caps at 99% while charging and snaps to 100% at `>= 95%` when charge completes).
 
 ### The radio transmit queue — correction
 
