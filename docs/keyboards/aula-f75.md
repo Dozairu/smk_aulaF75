@@ -488,12 +488,29 @@ Effect `0x2D` does not react to some obscure flag: it reacts to the user holding
 **Additional stock shortcuts decoded & added (VIA-configurable)**:
 `FACTORY_RST` (`Fn + Esc`, hold ~2s), `RF_PAIR` (`Fn + ~`), `BAT_SHOW` (`Fn + B`), `WIN_LOCK` (`Fn + LGui`), `WASD_SWAP` (`Fn + T`), `OS_WIN` (`Fn + W`), `OS_ANDROID` (`Fn + Q`), `OS_MAC` (`Fn + E`), and `OS_IOS` (assignable in VIA).
 
-**What remains unimplemented**: per-key custom RGB / OpenRGB (`Fn + F4` color restoration `0x91D3`), which requires a non-standard host protocol outside VIA.
+**What remains unimplemented**: stock per-key flash color recording/restoration (`Fn + F4`, `0x91D3`) and a native OpenRGB controller (host-driven per-key RGB is now handled via SignalRGB over Raw HID below).
 
 > **Layout note.** The port puts brightness on `Fn + [` / `]` and speed on
 > `Fn + ←` / `→`. The factory puts brightness on `Fn + Up` / `Down` and speed on
 > `Fn + Left` / `Right`. These are two design choices, not a bug — but if the original
 > ergonomics are desired, they are now documented.
+
+## SignalRGB per-key RGB & responsiveness optimizations
+
+### Per-key direct RGB for SignalRGB (`SIGNALRGB_ENABLE`)
+
+Because upstream VIA has no graphical per-key RGB editor, the firmware exposes a fire-and-forget Raw HID direct-RGB protocol over the shared `0xFF60:0x0061` endpoint (`src/smk/via.c`, `src/smk/raw_hid.c`), paired with a drop-in SignalRGB plugin (`tools/signalrgb/Aula_F75_SMK.js`):
+
+- **Protocol (`0xF0` / `0xF1`):** `0xF0` (`[0xF0, start_idx, count <= 9, R, G, B...]`) streams 9 LEDs per 32-byte packet (10 packets for the 6×15 grid, column-major `col * 6 + row`); `0xF1` exits direct mode immediately. Both return `false` from `via_process_packet()` so `raw_hid_task()` re-arms `EP2_OUT_RDY` **without** sending an EP2 IN reply — preventing unread `0xF0` replies from shifting `usevia.app` WebHID responses out of sync when both apps are open.
+- **XRAM frame buffer & zero-math ISR path (`indicators.c`):** Colors live solely in `direct_rgb[6][15][3]` (`270 B` XRAM, zero flash wear). `led_regen_one()` outputs `direct_rgb` directly when `direct_active` is set, keeping Caps Lock, `Esc`/`F1` status, battery bar, BT pairing, and macro overlays active on top.
+- **Safe fallback:** `direct_timeout` (`480` frames ≈ 3 s, updated under `__critical`) restores `user_settings.led_effect` if SignalRGB closes unexpectedly; `0xF1` clears `direct_active` and calls `aula_rgb_clear()`, and `Fn` effect switching overrides direct mode immediately. SignalRGB streaming is verified on hardware (`0xF0`/`0xF1` fire-and-forget handling avoids shifting VIA's HID IN queue).
+
+### Responsiveness & memory tuning
+
+- **Debounced settings writes (`src/smk/settings.c`, `tick.c`, `sleep.c`):** `settings_mark_dirty()` defers `settings_save()` by `1500` ticks (~600 ms) instead of erasing a 512 B flash sector on every VIA slider step; `__critical` guards prevent torn 16-bit/flag updates against Timer 2, and `sleep_task()` calls `settings_flush()` before `tick_pause()` so pending edits persist prior to sleep.
+- **Lower scan ISR dwell (`src/smk/matrix.c`):** Trimmed per-column settling/resample delays in `matrix_scan_full()` from `10 + 10 µs` to `8 + 4 µs` (saving `120 µs` per 15-column scan while keeping the `sample1 == sample2` glitch check).
+- **Main-loop RF / battery throttling (`src/keyboards/aula-f75/aula_rf.c`):** `rf_charge_poll()` now runs every 64th `rf_task()` pass (giving real millisecond-scale contact debounce for the 20/200-sample thresholds), and `keyboard_state.battery_level` caches `prev_batt_pct` to skip 16-bit division when percentage is unchanged.
+- **Reclaimed EP0 XRAM (`src/smk/usb.c`):** Shrunk `scratch[512]` to `scratch[128]` (384 B reclaimed), keeping total footprint at **`3529 / 4096` B XRAM** (567 B free) and **`42316 / 58368` B Flash** with `check_interrupts` clean (`48` ISR / `251` main functions).
 
 > ## ✅ 2026-09-11 — first successful flash, bootloader preserved
 >
