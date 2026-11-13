@@ -92,6 +92,38 @@
               ]
             }
           ]
+        },
+        {
+          "label": "Indicators",
+          "content": [
+            {
+              "label": "Status Indicator (Esc/F1)",
+              "type": "toggle",
+              "content": [
+                "id_aula_ind_status",
+                3,
+                6
+              ]
+            },
+            {
+              "label": "Caps Lock Indicator",
+              "type": "toggle",
+              "content": [
+                "id_aula_ind_caps",
+                3,
+                7
+              ]
+            },
+            {
+              "label": "Charging & Low Battery Indicator",
+              "type": "toggle",
+              "content": [
+                "id_aula_ind_charge",
+                3,
+                8
+              ]
+            }
+          ]
         }
       ]
     }
@@ -166,6 +198,46 @@
       "name": "MACRO_TG",
       "title": "Toggle Auto-Typing Keep-Awake Macro",
       "shortName": "AUTO"
+    },
+    {
+      "name": "BAT_SHOW",
+      "title": "Show Battery Level Overlay (Keys 1-0)",
+      "shortName": "BAT"
+    },
+    {
+      "name": "WIN_LOCK",
+      "title": "Toggle Windows Key Lock",
+      "shortName": "WIN LK"
+    },
+    {
+      "name": "WASD_SWAP",
+      "title": "Toggle WASD / Arrow Keys Swap",
+      "shortName": "WASD"
+    },
+    {
+      "name": "OS_WIN",
+      "title": "Switch to Windows Mode",
+      "shortName": "WIN"
+    },
+    {
+      "name": "OS_ANDROID",
+      "title": "Switch to Android Mode",
+      "shortName": "AND"
+    },
+    {
+      "name": "OS_MAC",
+      "title": "Switch to Mac Mode (Swap Alt/Gui)",
+      "shortName": "MAC"
+    },
+    {
+      "name": "OS_IOS",
+      "title": "Switch to iOS Mode (Swap Alt/Gui)",
+      "shortName": "IOS"
+    },
+    {
+      "name": "FACTORY_RST",
+      "title": "Factory Reset (Hold 2s)",
+      "shortName": "RESET"
     }  ],
   "matrix": {
     "rows": 6,

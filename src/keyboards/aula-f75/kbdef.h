@@ -217,5 +217,29 @@ enum custom_keycodes {
      */
     MACRO_TG,
 
+    /*
+     * Battery level overlay on keys `1` to `0` (row 1, cols 1 to 10).
+     * Shows 1-10 keys in green/yellow/red for ~3 seconds on demand.
+     */
+    BAT_SHOW,
+
+    /*
+     * Stock firmware shortcuts recovered from dispatcher 0x412C:
+     *   WIN_LOCK    0x01  Win key lock toggle
+     *   WASD_SWAP   0x1C  WASD <-> Arrow keys swap toggle
+     *   OS_WIN      0x18  Windows OS mode (standard Alt/Gui)
+     *   OS_ANDROID  0x19  Android OS mode (standard Alt/Gui)
+     *   OS_MAC      0x1A  Mac OS mode (swaps LAlt <-> LGui)
+     *   OS_IOS      0x1B  iOS OS mode (swaps LAlt <-> LGui)
+     *   FACTORY_RST 0x04  Reset settings, VIA keymap & macros (hold ~2s)
+     */
+    WIN_LOCK,
+    WASD_SWAP,
+    OS_WIN,
+    OS_ANDROID,
+    OS_MAC,
+    OS_IOS,
+    FACTORY_RST,
+
     KB_SAFE_RANGE,
 };

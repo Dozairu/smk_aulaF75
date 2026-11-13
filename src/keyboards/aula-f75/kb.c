@@ -1,15 +1,22 @@
 #include "kbdef.h"
 #include "kb.h"
 #include "keyboard.h"
+#include "matrix.h"
 #include "report.h"
+#include "settings.h"
+#include "tick.h"
 #include "usb.h"
 #include <stdint.h>
 #include <stdbool.h>
 
 #include "aula_encoder.h"
 #include "aula_macro.h"
+#include "aula_status.h"
 #ifdef RF_EUART0
 #    include "aula_rf.h"
+#endif
+#ifdef VIA_ENABLE
+#    include "dynamic_keymap.h"
 #endif
 
 /*
@@ -35,6 +42,8 @@ void kb_update_switches(void)
 {
 }
 
+extern void indicators_init(void);
+extern void indicators_apply_defaults(void);
 extern void indicators_next_effect(void);
 extern void indicators_next_color(void);
 extern void indicators_toggle_direction(void);
@@ -45,7 +54,14 @@ extern void indicators_speed_up(void);
 extern void indicators_speed_down(void);
 #ifdef RF_EUART0
 extern void indicators_toggle_rf_diag(void);
+extern void indicators_show_battery(void);
 #endif
+
+static __bit           win_lock;
+static __bit           wasd_swap;
+static __xdata uint8_t os_mode; /* 0=Win, 1=Android, 2=Mac, 3=iOS */
+static __bit           factory_rst_held;
+static __xdata uint16_t factory_rst_cnt;
 
 /*
  * The LNK_BT1..3 keycodes only select the Bluetooth slot: the transport itself
@@ -116,7 +132,62 @@ bool kb_process_record(uint16_t keycode, bool key_pressed)
         case RF_PAIR:
             if (key_pressed) rf_request_pairing();
             return false;
+        case BAT_SHOW:
+            if (key_pressed) indicators_show_battery();
+            return false;
+#else
+        case BAT_SHOW:
+            return false;
 #endif
+        case WIN_LOCK:
+            if (key_pressed) {
+                win_lock = !win_lock;
+                if (win_lock) {
+                    send_keycode(KC_LGUI, false);
+                    send_keycode(KC_RGUI, false);
+                }
+            }
+            return false;
+        case WASD_SWAP:
+            if (key_pressed) {
+                wasd_swap = !wasd_swap;
+            }
+            return false;
+        case OS_WIN:
+            if (key_pressed) {
+                os_mode = 0;
+                aula_status_event(AULA_STATUS_LINKED);
+            }
+            return false;
+        case OS_ANDROID:
+            if (key_pressed) {
+                os_mode = 1;
+                aula_status_event(AULA_STATUS_LINKED);
+            }
+            return false;
+        case OS_MAC:
+            if (key_pressed) {
+                os_mode = 2;
+                aula_status_event(AULA_STATUS_LINKED);
+            }
+            return false;
+        case OS_IOS:
+            if (key_pressed) {
+                os_mode = 3;
+                aula_status_event(AULA_STATUS_LINKED);
+            }
+            return false;
+        case FACTORY_RST:
+            if (key_pressed) {
+                if (!factory_rst_held) {
+                    factory_rst_held = 1;
+                    factory_rst_cnt  = 0;
+                }
+            } else {
+                factory_rst_held = 0;
+                factory_rst_cnt  = 0;
+            }
+            return false;
 
         case LNK_BT1:
             slot = 1;
@@ -128,6 +199,41 @@ bool kb_process_record(uint16_t keycode, bool key_pressed)
             slot = 3;
             break;
         default:
+            if (win_lock && (keycode == KC_LGUI || keycode == KC_RGUI)) {
+                return false;
+            }
+            if (wasd_swap) {
+                uint16_t mapped = 0;
+                switch (keycode) {
+                    case KC_W:    mapped = KC_UP;   break;
+                    case KC_A:    mapped = KC_LEFT; break;
+                    case KC_S:    mapped = KC_DOWN; break;
+                    case KC_D:    mapped = KC_RGHT; break;
+                    case KC_UP:   mapped = KC_W;    break;
+                    case KC_LEFT: mapped = KC_A;    break;
+                    case KC_DOWN: mapped = KC_S;    break;
+                    case KC_RGHT: mapped = KC_D;    break;
+                    default: break;
+                }
+                if (mapped != 0) {
+                    send_keycode(mapped, key_pressed);
+                    return false;
+                }
+            }
+            if (os_mode >= 2) {
+                uint16_t mapped = 0;
+                switch (keycode) {
+                    case KC_LALT: mapped = KC_LGUI; break;
+                    case KC_LGUI: mapped = KC_LALT; break;
+                    case KC_RALT: mapped = KC_RGUI; break;
+                    case KC_RGUI: mapped = KC_RALT; break;
+                    default: break;
+                }
+                if (mapped != 0) {
+                    send_keycode(mapped, key_pressed);
+                    return false;
+                }
+            }
             return true;
     }
 
@@ -148,6 +254,25 @@ bool kb_process_record(uint16_t keycode, bool key_pressed)
 
 void kb_update(void)
 {
+    if (factory_rst_held && ++factory_rst_cnt >= 3000u) {
+        factory_rst_held = 0;
+        factory_rst_cnt  = 0;
+        win_lock         = 0;
+        wasd_swap        = 0;
+        os_mode          = 0;
+        indicators_apply_defaults();
+#ifdef VIA_ENABLE
+        dynamic_keymap_reset();
+#endif
+#ifdef VIA_MACRO_ENABLE
+        dynamic_macro_reset();
+#endif
+        tick_pause();
+        indicators_init();
+        tick_resume();
+        settings_mark_dirty();
+        aula_status_event(AULA_STATUS_LOST);
+    }
     aula_encoder_task();
     aula_macro_task();
 #ifdef RF_EUART0
