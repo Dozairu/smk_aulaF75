@@ -36,6 +36,7 @@
  * ------------------------------------------------------------------------- */
 #define MATRIX_ROWS 6
 #define MATRIX_COLS 15
+#define SIGNALRGB_ENABLE 1
 
 /* -------------------------------------------------------------------------
  * Pinout -- ESTABLISHED BY DISASSEMBLY, TRIPLE-CHECKED

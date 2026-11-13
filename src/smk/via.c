@@ -274,6 +274,22 @@ void via_process_packet(__xdata uint8_t *data)
             settings_mark_dirty();
             break;
 
+#    ifdef SIGNALRGB_ENABLE
+        case 0xF0u: /* SRGB_CMD_SET_LEDS: [0xF0, start_idx, count(<=9), R,G,B...] */
+            if (data[2] > 9u) {
+                data[0] = VIA_ID_UNHANDLED;
+            } else {
+                indicators_direct_set(data[1], data[2], &data[3]);
+                data[1] = 0x00u;
+            }
+            break;
+
+        case 0xF1u: /* SRGB_CMD_EXIT: return to onboard lighting */
+            indicators_direct_clear();
+            data[1] = 0x00u;
+            break;
+#    endif
+
         case VIA_ID_EEPROM_RESET:
         case VIA_ID_BOOTLOADER_JUMP:
         default:

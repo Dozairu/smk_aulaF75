@@ -16,3 +16,8 @@ void indicators_pwm_enable();
 void indicators_pwm_disable();
 void indicators_apply_defaults();
 void indicators_validate_settings();
+
+#ifdef SIGNALRGB_ENABLE
+void indicators_direct_set(uint8_t start_idx, uint8_t count, const __xdata uint8_t *rgb);
+void indicators_direct_clear(void);
+#endif

@@ -902,6 +902,12 @@ static __bit           macro_was_on;
 #define CAPS_LEVEL 255
 
 static __bit caps_on;
+#ifdef SIGNALRGB_ENABLE
+#    define DIRECT_RGB_TIMEOUT_FRAMES 480u /* ~3 s at ~6.2 ms/frame */
+static __xdata uint8_t direct_rgb[LED_ROWS][LED_COLS][3];
+static volatile bool   direct_active;
+static volatile uint16_t direct_timeout;
+#endif
 #ifdef RF_EUART0
 static __xdata uint8_t pair_blink_cnt;
 static __xdata uint8_t prev_link_fx = 0xFF;
@@ -982,6 +988,16 @@ static void led_regen_one(void)
         aula_rgb_set(regen_row, regen_col, macro_heart[macro_beat], 0, 0);
         goto advance;
     }
+
+#ifdef SIGNALRGB_ENABLE
+    if (direct_active) {
+        aula_rgb_set(regen_row, regen_col,
+                     direct_rgb[regen_row][regen_col][0],
+                     direct_rgb[regen_row][regen_col][1],
+                     direct_rgb[regen_row][regen_col][2]);
+        goto advance;
+    }
+#endif
 
     if (user_settings.led_effect >= AULA_FX_OFF) {
         /*
@@ -1266,10 +1282,18 @@ bool indicators_update_step(keyboard_state_t *keyboard, uint8_t current_step)
     if (aula_macro_active() || caps_on || aula_status_lit() ||
         rf_diag_on || bat_show_sweeps || flourish_step != 0 ||
         (rf_bt_pair_slot != 0 && user_settings.battery_indicator_on != 0) ||
-        user_settings.led_effect < AULA_FX_OFF) {
+        user_settings.led_effect < AULA_FX_OFF
+#    ifdef SIGNALRGB_ENABLE
+        || direct_active
+#    endif
+    ) {
 #else
     if (aula_macro_active() || caps_on || aula_status_lit() ||
-        user_settings.led_effect < AULA_FX_OFF) {
+        user_settings.led_effect < AULA_FX_OFF
+#    ifdef SIGNALRGB_ENABLE
+        || direct_active
+#    endif
+    ) {
 #endif
         led_regen_one();
 
@@ -1282,6 +1306,16 @@ bool indicators_update_step(keyboard_state_t *keyboard, uint8_t current_step)
 
     if (++led_col >= LED_COLS) {
         led_col = 0;
+#ifdef SIGNALRGB_ENABLE
+        if (direct_active) {
+            if (direct_timeout != 0u) {
+                direct_timeout--;
+            }
+            if (direct_timeout == 0u) {
+                direct_active = false;
+            }
+        }
+#endif
         return true; /* frame complete -- this is what `sleep.c` counts */
     }
     return false;
@@ -1368,6 +1402,9 @@ void indicators_next_color(void)
 
 void indicators_next_effect(void)
 {
+#ifdef SIGNALRGB_ENABLE
+    direct_active = false;
+#endif
     if (++user_settings.led_effect > AULA_FX_OFF) {
         user_settings.led_effect = 0;
     }
@@ -1378,6 +1415,9 @@ void indicators_next_effect(void)
 
 void indicators_prev_effect(void)
 {
+#ifdef SIGNALRGB_ENABLE
+    direct_active = false;
+#endif
     if (user_settings.led_effect == 0) {
         user_settings.led_effect = AULA_FX_OFF;
     } else {
@@ -1387,6 +1427,34 @@ void indicators_prev_effect(void)
     fx_reset();
     settings_mark_dirty();
 }
+
+#ifdef SIGNALRGB_ENABLE
+void indicators_direct_set(uint8_t start_idx, uint8_t count, const __xdata uint8_t *rgb)
+{
+    uint8_t i;
+
+    for (i = 0u; i < count; i++) {
+        const uint8_t idx = (uint8_t)(start_idx + i);
+        if (idx >= (uint8_t)(LED_ROWS * LED_COLS)) {
+            break;
+        }
+        const uint8_t col = (uint8_t)(idx / LED_ROWS);
+        const uint8_t row = (uint8_t)(idx % LED_ROWS);
+        direct_rgb[row][col][0] = rgb[0];
+        direct_rgb[row][col][1] = rgb[1];
+        direct_rgb[row][col][2] = rgb[2];
+        rgb += 3;
+    }
+    direct_timeout = DIRECT_RGB_TIMEOUT_FRAMES;
+    direct_active  = true;
+}
+
+void indicators_direct_clear(void)
+{
+    direct_active  = false;
+    direct_timeout = 0u;
+}
+#endif
 
 void indicators_brightness_up(void)
 {
