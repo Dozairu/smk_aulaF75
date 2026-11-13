@@ -461,9 +461,9 @@ static void usb_get_descriptor_handler(struct usb_req_setup *req);
 static void usb_hid_set_report_handler(struct usb_req_setup *req);
 
 /**
- * 0.5KB of general purpose scratch RAM.
+ * 128B of general purpose scratch RAM (largest EP0 descriptor is ~91B).
  */
-uint8_t scratch[512];
+uint8_t scratch[128];
 
 // usb state
 usb_device_state_t usb_device_state;

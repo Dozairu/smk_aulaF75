@@ -8,7 +8,11 @@ _Static_assert(sizeof(user_settings_t) <= NVM_CAPACITY, "user_settings_t too lar
 
 user_settings_t user_settings;
 
-static bool settings_dirty;
+#define SETTINGS_SAVE_DELAY_TICKS 1500u /* ~600 ms at ~400 us tick */
+
+static volatile bool     settings_dirty;
+static volatile bool     settings_save_due;
+static volatile uint16_t settings_delay_ticks;
 
 bool settings_load(void)
 {
@@ -24,7 +28,8 @@ void settings_dump(void)
 
 void settings_save(void)
 {
-    settings_dirty = false; // clear first: a mark during the write is not lost
+    settings_dirty    = false; // clear first: a mark during the write is not lost
+    settings_save_due = false;
 
 #if DEBUG == 1
     settings_dump();
@@ -37,12 +42,27 @@ void settings_save(void)
 
 void settings_mark_dirty(void)
 {
-    settings_dirty = true;
+    settings_dirty       = true;
+    settings_save_due    = false;
+    settings_delay_ticks = SETTINGS_SAVE_DELAY_TICKS;
+}
+
+void settings_tick(void)
+{
+    if (!settings_dirty || settings_save_due) {
+        return;
+    }
+    if (settings_delay_ticks != 0) {
+        settings_delay_ticks--;
+    }
+    if (settings_delay_ticks == 0) {
+        settings_save_due = true;
+    }
 }
 
 void settings_task(void)
 {
-    if (settings_dirty) {
+    if (settings_dirty && settings_save_due) {
         settings_save();
     }
 }

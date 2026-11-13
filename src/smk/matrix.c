@@ -142,9 +142,9 @@ void matrix_scan_full(void)
     for (uint8_t col = 0; col < MATRIX_COLS; col++) {
         user_matrix_col_select(col);
 
-        delay_us(10); // let the row lines settle before sampling
+        delay_us(8); // let the row lines settle before sampling
         const uint8_t sample1 = user_matrix_read_rows();
-        delay_us(10);
+        delay_us(4);
         const uint8_t sample2 = user_matrix_read_rows();
 
         if (sample1 == sample2) {

@@ -23,6 +23,8 @@ void settings_save(void);
 
 void settings_mark_dirty(void);
 
+void settings_tick(void);
+
 void settings_task(void);
 
 void settings_save_pre(void);

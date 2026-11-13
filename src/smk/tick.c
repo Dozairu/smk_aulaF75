@@ -5,6 +5,7 @@
 #include "via_macro.h"
 #include "indicators.h"
 #include "keyboard.h"
+#include "settings.h"
 #include "sleep.h"
 #include "kbdef.h"
 #include <stdbool.h>
@@ -45,6 +46,7 @@ static void run_led_subframe(void)
 
 void tick_dispatch(void)
 {
+    settings_tick();
 #ifdef DYNAMIC_KEYMAP_ENABLE
     dynamic_keymap_tick();
 #endif
