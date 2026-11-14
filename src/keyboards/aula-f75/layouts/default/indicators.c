@@ -89,17 +89,16 @@ static const __code uint8_t led_speeds[] = {1, 2, 4, 8, 16};
 #define AULA_FX_RAIN      ((uint8_t)(FX_COUNT + 1)) /*  5  0x9B2B */
 #define AULA_FX_TWINKLE   ((uint8_t)(FX_COUNT + 2)) /*  6  0xAC1C -> 0x4EA9 */
 #define AULA_FX_SNAKE     ((uint8_t)(FX_COUNT + 3)) /*  7  0x8DDF */
-#define AULA_FX_SNAKE_RGB ((uint8_t)(FX_COUNT + 4)) /*  8  0x1D05, effect 0x26 -- adapted */
-#define AULA_FX_RIPPLE    ((uint8_t)(FX_COUNT + 5)) /*  9  0x746A / 0x1D8D */
-#define AULA_FX_LAKE      ((uint8_t)(FX_COUNT + 6)) /* 10  ORIGINAL, no factory equivalent */
-#define AULA_FX_KEYWAVE   ((uint8_t)(FX_COUNT + 7)) /* 11  0x82A5 */
-#define AULA_FX_VRAINBOW  ((uint8_t)(FX_COUNT + 8)) /* 12  0x9659 */
-#define AULA_FX_GAMING    ((uint8_t)(FX_COUNT + 9)) /* 13  0x1DAB -> 0x95A4 */
-#define AULA_FX_SHIMMER   ((uint8_t)(FX_COUNT + 10))/* 14  0x60C9, factory effect 6 */
-#define AULA_FX_OFF       ((uint8_t)(FX_COUNT + 11))/* 15 */
+#define AULA_FX_RIPPLE    ((uint8_t)(FX_COUNT + 4)) /*  8  0x746A / 0x1D8D */
+#define AULA_FX_LAKE      ((uint8_t)(FX_COUNT + 5)) /*  9  ORIGINAL, no factory equivalent */
+#define AULA_FX_KEYWAVE   ((uint8_t)(FX_COUNT + 6)) /* 10  0x82A5 */
+#define AULA_FX_VRAINBOW  ((uint8_t)(FX_COUNT + 7)) /* 11  0x9659 */
+#define AULA_FX_GAMING    ((uint8_t)(FX_COUNT + 8)) /* 12  0x1DAB -> 0x95A4 */
+#define AULA_FX_SHIMMER   ((uint8_t)(FX_COUNT + 9)) /* 13  0x60C9, factory effect 6 */
+#define AULA_FX_OFF       ((uint8_t)(FX_COUNT + 10))/* 14 */
 
 /*
- * The first six in this list (REACTIVE through RIPPLE) share the SAME
+ * The first five in this list (REACTIVE through RIPPLE) share the SAME
  * mechanism, which is that of the factory firmware: a per-key intensity plane
  * that decays from frame to frame, and a seeder that resets keys to full
  * brightness. The factory firmware stores the base color at XRAM 0x0428, the
@@ -111,21 +110,9 @@ static const __code uint8_t led_speeds[] = {1, 2, 4, 8, 16};
  *   RAIN       one droplet per column, columns restarted at random
  *   TWINKLE    randomly picked keys
  *   SNAKE      a dot snaking across the grid and bouncing back
- *   SNAKE_RGB  same, with randomly picked hue (factory color mode 7)
  *   RIPPLE     one ring per frame expanding from (col 7, row 2)
  *
  * The last three are stateless: pure functions of position and phase.
- *
- * ONE DELIBERATE ADAPTATION: SNAKE_RGB. In the factory firmware, effect 0x26
- * is not a permanent effect but a TRANSITION: 0x9184 saves the current effect
- * in XRAM 0x0E24 before setting 0x26, and handler 0x1D37 restores that saved
- * effect as soon as the snake's vertical direction returns to zero, i.e. when
- * the sweep has finished traversing the grid. The factory uses it as a mode
- * change flourish.
- *
- * SMK has no concept of transient effects and our list is cycled via key
- * presses, so we keep it permanent. The rendering is transcribed; its DURATION
- * is our choice.
  */
 
 /*
@@ -318,13 +305,10 @@ static void twinkle_step(void)
  * AND steps down (or up) one row; upon reaching the top or bottom it also
  * reverses its vertical direction. The factory firmware keeps the four
  * variables at XRAM 0x0ECA-0x0ECD.
- *
- * `random` distinguishes SNAKE from SNAKE_RGB: effect 0x26 forces color mode
- * 7, which picks a random hue on every key (0x1D2B).
  */
-static void snake_step(uint8_t random_hue)
+static void snake_step(void)
 {
-    spark_seed(snake_col, snake_row, random_hue ? aula_fx_rand() : fx_phase192);
+    spark_seed(snake_col, snake_row, fx_phase192);
 
     if (snake_right) {
         if (snake_col + 1u < LED_COLS) {
@@ -486,7 +470,6 @@ static void fx_reset(void)
  *   AULA_FX_RAIN              5         0x9B2B    `0x2FE9`
  *   AULA_FX_TWINKLE           8         0xAC1C    NONE -- choice: uses the other shimmer table (effect 6)
  *   AULA_FX_SNAKE            10         0x8DDF    `0x3011`
- *   AULA_FX_SNAKE_RGB      0x26         0x1D05    NONE -- choice: uses the snake table, same engine
  *   AULA_FX_RIPPLE           17         0x746A    `0x302F`
  *   AULA_FX_LAKE              -             -     NONE -- original: uses the ripple table
  *   AULA_FX_KEYWAVE          15         0x82A5    `0x3025`
@@ -494,7 +477,7 @@ static void fx_reset(void)
  *   AULA_FX_GAMING         0x20         0x95A4    NONE -- static image: choice, uses the solid table
  *   AULA_FX_SHIMMER           6         0x60C9    `0x3002`
  *
- * Three entries are therefore a CHOICE rather than a transcription; they are
+ * Two entries are therefore a CHOICE rather than a transcription; they are
  * marked as such. The remaining ten are exact bytes from the dump.
  */
 static const __code uint8_t fx_period_ms[AULA_FX_OFF][LED_SPEED_LEVELS] = {
@@ -506,7 +489,6 @@ static const __code uint8_t fx_period_ms[AULA_FX_OFF][LED_SPEED_LEVELS] = {
     {120, 100,  80,  50,  20}, /* RAIN          -- CODE 0x2FE9                 */
     { 20,  15,  10,   5,   1}, /* TWINKLE       -- CODE 0x3002, choice         */
     {120,  90,  70,  45,   1}, /* SNAKE         -- CODE 0x3011                 */
-    {120,  90,  70,  45,   1}, /* SNAKE_RGB     -- snake table, choice         */
     { 50,  40,  30,  20,   8}, /* RIPPLE        -- CODE 0x302F                 */
     { 50,  40,  30,  20,   8}, /* LAKE          -- original: ripple table      */
     { 32,  24,  16,   8,   1}, /* KEYWAVE       -- CODE 0x3025                 */
@@ -583,8 +565,7 @@ static bool fx_frame_advance(void)
     switch (user_settings.led_effect) {
         case AULA_FX_RAIN:      rain_step();     break;
         case AULA_FX_TWINKLE:   twinkle_step();  break;
-        case AULA_FX_SNAKE:     snake_step(0);   break;
-        case AULA_FX_SNAKE_RGB: snake_step(1);   break;
+        case AULA_FX_SNAKE:     snake_step();    break;
         case AULA_FX_RIPPLE:    ripple_step();   break;
         case AULA_FX_LAKE: {
             uint8_t i;
