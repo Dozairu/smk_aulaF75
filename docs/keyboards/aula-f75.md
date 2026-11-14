@@ -184,6 +184,11 @@ would proceed without a pattern**. The other five keyboards return `true` and do
 
 **Wireless host LEDs (`frame[3]` — `0x06B7`, `0x0716`, `0x248C`)**. In 10-byte EUART0 status frames, **`frame[3]`** carries the host HID LED bitmask (`0x01` Num Lock, `0x02` Caps Lock, `0x04` Scroll Lock). `rf_status_apply()` copies `rx_buf[3] & 0x07` into `keyboard_state.led_state` when `link_connected` is set (and zeroes it when disconnected).
 
+**Caps Lock indicator reliability & latency fixes (wired + wireless):**
+- **Wired USB `EP0` `SET_REPORT` (`src/sino51lib/sh68f90/usbhw.c`, `src/smk/usb.c`):** `_INT_USB` (`_EUSB`) is raised to **Priority 1** (above `Timer2` at 0, matching stock `0xECC5`) so `Timer2` ticks cannot delay `SETUP` + `DATA OUT` stages, and `usb_ep0_out_irq()` defers `SET_EP0_OUT_RDY` until after `GET_EP0_OUT_CNT()` and `EP0_OUT_BUF` have been read.
+- **Wireless `EUART0` status polling (`src/keyboards/aula-f75/aula_rf.c`):** Because the BK3632 reports `rx_buf[3]` only in response to `0x06` status probes (not unsolicited), `rf_rx_frame_len()` waits for `rx_idx >= 2` before inspecting `rx_buf[1]`, `rf_probe_task()` retries immediately on `tx_busy`, `rf_tick()` (called from the `400 µs` sub-tick in `indicators_post_update()`) paces steady-state `0x06` polling at **`100 ms`** (`RF_PROBE_TICKS = 250`) with a **`1.0 s`** (`RF_PROBE_MISSES = 10`) disconnect tolerance, and Lock-key report transitions (`KC_CAPS_LOCK`, `KC_SCROLL_LOCK`, `KC_NUM_LOCK`) arm a non-strike **`+15..75 ms`** (`5 × ~15 ms`) fast follow-up poll so Caps Lock toggles appear immediately without adding polling traffic during regular typing.
+- **Immediate LED rendering (`indicators.c`):** `indicators_render()` updates `(CAPS_ROW, CAPS_COL)` directly on every pass so `duty_cache[14]` reflects Caps Lock changes immediately even when RGB effects are `Off`.
+
 **BT/2.4G link state (`frame[5]` — `0x265D–0x26E9`)**. Stock treats `frame[5] == 3` as connected (`0x0E3B = 1`), `1` as pairing, `2` as reconnecting, and `0` as disconnected. `aula_rf.c` now checks `flag == 3` in BT mode and drives per-key `1`/`2`/`3` pairing/reconnect flashing in `indicators.c`.
 
 All three indicators (**Status (`Esc/F1`)**, **Caps Lock**, and **Charging & Low Battery**) are toggleable in VIA (`via.json`, channel `3`, IDs `6–8`).
@@ -544,6 +549,8 @@ Enabling `MATRIX_INTERLEAVED_SCAN` in `src/keyboards/aula-f75/kbdef.h` decouples
 | **`Timer2` ISR Period & Worst-Case Duration** | `400 µs` period / `~320 µs` max (`80%` of slot) | **`200 µs` period / `~42–58 µs` max (`21–29%` of slot)** | **5.5× shorter peak ISR blocking** |
 | **Per-Column PWM Illumination Window** | Software-timed (`~350–400 µs`, variable with ISR jitter) | **Hardware-timed `100.0 µs` (`1200` ticks, zero jitter)** | **Zero PWM truncation or column brightness wave** |
 | **RGB Frame Refresh Rate** | `158.2 Hz` (interrupted by `320 µs` scan blackout) | **`333.3 Hz` (`3.00 ms` uniform cycle)** | **2.11× higher refresh, zero scan blackout** |
+
+- **Lighting cleanup (`indicators.c`, `via.json`):** Removed the redundant `AULA_FX_SNAKE_RGB` effect (identical to `AULA_FX_SNAKE` in all 7 fixed-color modes and differing only in random vs. stepping hue in rainbow mode; stock `0x26` is an internal one-shot transition), compacting VIA `Effect` IDs to `0..14` (`Off = 14`).
 
 > ## ✅ 2026-09-11 — first successful flash, bootloader preserved
 >
@@ -1292,7 +1299,7 @@ the port transcribes.
 | `AULA_FX_RAIN` | 5 | `0x9B2B` | `0x2FE9` |
 | `AULA_FX_TWINKLE` | 8 | `0xAC1C` | **none** — *choice*: reuse the other twinkle's table |
 | `AULA_FX_SNAKE` | 10 | `0x8DDF` | `0x3011` |
-| `AULA_FX_SNAKE_RGB` | `0x26` | `0x1D05` | **none** — *choice*: reuse snake's table, same engine |
+| ~~`AULA_FX_SNAKE_RGB`~~ *(removed)* | `0x26` | `0x1D05` | **none** — *choice*: reuse snake's table, same engine (later removed as redundant) |
 | `AULA_FX_RIPPLE` | 17 | `0x746A` | `0x302F` |
 | `AULA_FX_KEYWAVE` | 15 | `0x82A5` | `0x3025` |
 | `AULA_FX_VRAINBOW` | 16 | `0x9659` | `0x302A` |
@@ -3892,9 +3899,7 @@ The factory firmware uses it as visual flair when switching modes, not as a user
 moreover completely black. It is a state where the animation engine deliberately goes silent, entered
 from gaming mode and restored by `0xAFB8`.
 
-**Consequence for the port**: `AULA_FX_SNAKE_RGB` remains a permanent effect in our implementation. Its rendering
-is transcribed, but its **duration** is our design choice — SMK has no notion of a transient effect, and our
-list is cycled by key press. That is implemented in `indicators.c`. As for `0x2D`, it has no
+**Consequence for the port**: `AULA_FX_SNAKE_RGB` was initially exposed as a permanent effect in `indicators.c`, and later removed as redundant with `AULA_FX_SNAKE` (identical in all fixed-color modes). As for `0x2D`, it has no
 counterpart and needs none: displaying nothing is `AULA_FX_OFF`.
 
 ##### What this changes for the port: nothing, and that in itself is a result
