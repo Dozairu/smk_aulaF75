@@ -618,11 +618,16 @@ void indicators_pwm_enable(void)
      * Start all three bank counters back-to-back with the identical byte (0x89)
      * in exact 5-cycle lockstep -- matching the 5-cycle stop spacing in
      * `pwm_interrupt_handler()` -- and then arm _INT_PWM0 on bank 0 (0xC9).
+     * Brief critical section (< 1 us) prevents higher-priority USB/EUART0 ISRs
+     * from splitting the three banks out of phase.
      */
-    PWM00CON = LED_PWM_MASTER;
-    PWM10CON = LED_PWM_MASTER;
-    PWM20CON = LED_PWM_MASTER;
-    PWM00CON = (uint8_t)(LED_PWM_MASTER | PWM_INT_ENABLE);
+    __critical
+    {
+        PWM00CON = LED_PWM_MASTER;
+        PWM10CON = LED_PWM_MASTER;
+        PWM20CON = LED_PWM_MASTER;
+        PWM00CON = (uint8_t)(LED_PWM_MASTER | PWM_INT_ENABLE);
+    }
     IEN1 |= _EPWM0;
 #else
     PWM00CON = LED_PWM_MASTER;
@@ -1630,20 +1635,14 @@ void indicators_direct_set(uint8_t start_idx, uint8_t count, const __xdata uint8
         direct_rgb[row][col][2] = rgb[2];
         rgb += 3;
     }
-    __critical
-    {
-        direct_timeout = DIRECT_RGB_TIMEOUT_FRAMES;
-        direct_active  = true;
-    }
+    direct_timeout = DIRECT_RGB_TIMEOUT_FRAMES;
+    direct_active  = true;
 }
 
 void indicators_direct_clear(void)
 {
-    __critical
-    {
-        direct_active  = false;
-        direct_timeout = 0u;
-    }
+    direct_active  = false;
+    direct_timeout = 0u;
     aula_rgb_clear();
 }
 #endif

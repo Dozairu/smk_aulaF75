@@ -28,9 +28,9 @@ void raw_hid_receive_irq(void)
         SET_EP2_OUT_RDY;
         return;
     }
-    for (uint8_t i = 0; i < RAW_HID_REPORT_SIZE; i++) {
-        request[i] = EP2_OUT_BUF[i];
-    }
+    /* Keep the packet in EP2_OUT_BUF until raw_hid_task() runs in the main loop:
+     * OUT stays NAKed (no SET_EP2_OUT_RDY) until processed, so copying in main
+     * keeps _INT_USB short and prevents EP2 OUT bursts from delaying Timer2. */
     request_pending = true;
 }
 
@@ -38,6 +38,10 @@ void raw_hid_task(void)
 {
     if (!request_pending || !usb_is_configured() || !usb_hw_ep2_in_free()) {
         return;
+    }
+
+    for (uint8_t i = 0; i < RAW_HID_REPORT_SIZE; i++) {
+        request[i] = EP2_OUT_BUF[i];
     }
 
     if (!via_process_packet(request)) {

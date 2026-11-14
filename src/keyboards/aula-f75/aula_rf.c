@@ -6,6 +6,7 @@
 #include "usb.h"
 #include "usbhw.h"
 #include "keyboard.h"
+#include "indicators.h"
 #include "aula_status.h"
 #include "settings.h"
 #include "debug.h"
@@ -1148,6 +1149,10 @@ static void rf_radio_on(void)
      * On return to wired mode, the host resends its state during enumeration.
      */
     keyboard_set_led_state(0);
+#ifdef SIGNALRGB_ENABLE
+    /* Direct RGB is USB-only: exit direct mode immediately when switching to wireless. */
+    indicators_direct_clear();
+#endif
 
     IEN1 |= _ES0;
 #ifndef RF_DEBUG_KEEP_USB
