@@ -1344,14 +1344,17 @@ void indicators_post_update(void)
 
 void indicators_render(void)
 {
+    const uint8_t st = aula_status_level();
+
+    caps_on = (user_settings.led_color && (keyboard_state.led_state & HID_LED_CAPS_LOCK)) ? 1 : 0;
+    aula_rgb_set(CAPS_ROW, CAPS_COL, caps_on ? (uint8_t)CAPS_LEVEL : (uint8_t)0, st, st);
+
     if (regen_steps_pending == 0u) {
         return;
     }
     ET2 = 0;
     regen_steps_pending--;
     ET2 = 1;
-
-    caps_on = (user_settings.led_color && (keyboard_state.led_state & HID_LED_CAPS_LOCK)) ? 1 : 0;
 
     if (aula_macro_active()) {
         if (!macro_was_on) {

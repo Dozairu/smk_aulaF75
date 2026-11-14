@@ -945,7 +945,11 @@ static void rf_cap_replay(void)
 static uint8_t rf_rx_frame_len(void)
 {
     switch (rx_buf[0]) {
-        case RF_RX_TYPE_STATUS:   return (rx_buf[1] == RF_CMD_STATUS) ? RF_RX_LEN_STATUS : RF_RX_LEN_ACK;
+        case RF_RX_TYPE_STATUS:
+            if (rx_idx < 2) {
+                return RF_RX_LEN_ACK; /* wait for byte 1 before inspecting rx_buf[1] */
+            }
+            return (rx_buf[1] == RF_CMD_STATUS) ? RF_RX_LEN_STATUS : RF_RX_LEN_ACK;
         case RF_RX_TYPE_ANNOUNCE: return RF_RX_LEN_ACK;
         case RF_RX_TYPE_BULK:     return RF_RX_LEN_BULK;
         default:                  return 0; /* unknown type: stray byte */
@@ -1297,6 +1301,10 @@ static void rf_probe_task(void)
     if (++probe_ticks < RF_PROBE_PERIOD) {
         return;
     }
+    if (!rf_send_status_probe()) {
+        probe_ticks = RF_PROBE_PERIOD; /* retry on next pass once tx_busy clears */
+        return;
+    }
     probe_ticks = 0;
 
     if (probe_answered) {
@@ -1322,7 +1330,6 @@ static void rf_probe_task(void)
     }
 
     probe_answered = 0;
-    (void)rf_send_status_probe();
 }
 
 /*
