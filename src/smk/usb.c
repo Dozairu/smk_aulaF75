@@ -756,8 +756,6 @@ static void usb_setup_irq(void)
 
 static void usb_ep0_out_irq(void)
 {
-    SET_EP0_OUT_RDY;
-
     if (ep0_stage == EP0_STAGE_DATA_OUT) {
         if (GET_EP0_OUT_CNT() != ep0_out_len) {
             ep0_stall();
@@ -787,8 +785,11 @@ static void usb_ep0_out_irq(void)
                 break;
         }
         ep0_ack();
-    } else if (ep0_stage == EP0_STAGE_DATA_IN || ep0_stage == EP0_STAGE_STATUS_OUT) {
-        ep0_stage = EP0_STAGE_IDLE;
+    } else {
+        if (ep0_stage == EP0_STAGE_DATA_IN || ep0_stage == EP0_STAGE_STATUS_OUT) {
+            ep0_stage = EP0_STAGE_IDLE;
+        }
+        SET_EP0_OUT_RDY;
     }
 }
 

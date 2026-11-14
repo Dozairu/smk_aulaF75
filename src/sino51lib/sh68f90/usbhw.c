@@ -53,6 +53,12 @@ void usb_hw_init(void)
     USBIE1  = (_SETUPIE | _SOFIA | _RESMIE | _SUSPIE | _PBRSTIE);
     USBIE2  = (_OEP0IE | _IEP0IE | _IEP2IE | _OEP2IE);
     USBCON  = (_ENUSB | _SW1CON);
+    /* Priority 1 (above Timer2 at 0, below PWM0 at 2 and EUART0 at 3),
+     * matching factory firmware 0xECC5 (IPH1=0x42, IPL1=0x41) so EP0
+     * SETUP + DATA OUT control transfers (e.g. SET_REPORT LED updates)
+     * are never delayed by Timer2 matrix/RGB ticks. */
+    IPH1 &= (uint8_t)~_EUSB;
+    IPL1 |= _EUSB;
     IEN1 |= _EUSB;
 }
 
