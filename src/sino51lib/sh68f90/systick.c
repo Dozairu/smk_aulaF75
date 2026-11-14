@@ -5,6 +5,7 @@
 
 #define RELOAD_LED_SUBFRAME 0xFCDF // 65536 - 801, 400 us
 #define RELOAD_MATRIX_SCAN  0xFF37 // 65536 - 201, ~100 us against a ~320 us sweep
+#define RELOAD_INTERLEAVED  0xFE70 // 65536 - 400, 200 us per interleaved column slot
 
 static void timer2_reload(uint16_t reload)
 {
@@ -29,7 +30,14 @@ void systick_init(void)
 
 void systick_arm(systick_slot_t slot)
 {
-    timer2_reload(slot == SYSTICK_SLOT_MATRIX_SCAN ? RELOAD_MATRIX_SCAN : RELOAD_LED_SUBFRAME);
+    uint16_t reload = RELOAD_LED_SUBFRAME;
+
+    if (slot == SYSTICK_SLOT_MATRIX_SCAN) {
+        reload = RELOAD_MATRIX_SCAN;
+    } else if (slot == SYSTICK_SLOT_INTERLEAVED) {
+        reload = RELOAD_INTERLEAVED;
+    }
+    timer2_reload(reload);
 }
 
 void systick_pause(void)

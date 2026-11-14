@@ -20,7 +20,16 @@ typedef uint8_t matrix_col_t;
 matrix_col_t matrix[MATRIX_COLS];
 matrix_col_t matrix_previous[MATRIX_COLS];
 
+#ifdef MATRIX_INTERLEAVED_SCAN
+/* Two-bit per-key vertical counter for 4-scan (~12 ms) release debounce. */
+static matrix_col_t debounce_cnt0[MATRIX_COLS];
+static matrix_col_t debounce_cnt1[MATRIX_COLS];
+#endif
+
 volatile bool matrix_updated;
+
+static bool report_batching;
+static bool report_dirty;
 
 uint8_t action_layer;
 
@@ -28,13 +37,28 @@ uint8_t default_layer;
 
 void matrix_init()
 {
-    action_layer   = 0;
-    default_layer  = 0;
-    matrix_updated = false;
+    action_layer    = 0;
+    default_layer   = 0;
+    matrix_updated  = false;
+    report_batching = false;
+    report_dirty    = false;
 
     for (int i = 0; i < MATRIX_COLS; i++) {
         matrix[i]          = 0;
         matrix_previous[i] = 0;
+#ifdef MATRIX_INTERLEAVED_SCAN
+        debounce_cnt0[i]   = 0;
+        debounce_cnt1[i]   = 0;
+#endif
+    }
+}
+
+static void emit_keyboard_report(void)
+{
+    if (report_batching) {
+        report_dirty = true;
+    } else {
+        send_keyboard_report();
     }
 }
 
@@ -61,7 +85,7 @@ void send_keycode(uint16_t qcode, bool pressed)
         } else {
             del_mods(MOD_BIT((uint8_t)(qcode & 0xFF)));
         }
-        send_keyboard_report();
+        emit_keyboard_report();
         return;
     }
 
@@ -71,7 +95,7 @@ void send_keycode(uint16_t qcode, bool pressed)
         } else {
             del_key((uint8_t)(qcode & 0xFF));
         }
-        send_keyboard_report();
+        emit_keyboard_report();
         return;
     }
 
@@ -95,7 +119,7 @@ static void process_key_state(uint8_t row, uint8_t col, bool pressed)
             action_layer = QK_MOMENTARY_GET_LAYER(base);
         } else {
             clear_keys();
-            send_keyboard_report();
+            emit_keyboard_report();
             host_consumer_send(0);
             host_system_send(0);
             action_layer = 0;
@@ -130,6 +154,56 @@ uint8_t matrix_get_col(uint8_t col)
     return (col < MATRIX_COLS) ? matrix[col] : 0;
 }
 
+#ifdef MATRIX_INTERLEAVED_SCAN
+void matrix_scan_col(uint8_t col)
+{
+    if (col >= MATRIX_COLS) {
+        return;
+    }
+
+    user_matrix_col_select(col);
+
+    delay_us(6); // let the row lines settle before sampling
+    const uint8_t sample1 = user_matrix_read_rows();
+    delay_us(2);
+    const uint8_t sample2 = user_matrix_read_rows();
+
+    user_matrix_col_deselect(col);
+
+    if (sample1 != sample2) {
+        return;
+    }
+
+    const matrix_col_t raw = (matrix_col_t)~sample1;
+    const matrix_col_t cur = matrix[col];
+    if (raw == cur && debounce_cnt0[col] == 0 && debounce_cnt1[col] == 0) {
+        return;
+    }
+
+    const matrix_col_t press    = (matrix_col_t)(raw & (matrix_col_t)~cur);
+    const matrix_col_t rel_cand = (matrix_col_t)((matrix_col_t)~raw & cur);
+
+    debounce_cnt0[col] &= rel_cand;
+    debounce_cnt1[col] &= rel_cand;
+
+    /* Asymmetric debounce: 0 ms eager press, 4-scan (~12 ms) deferred release. */
+    matrix_col_t next = (matrix_col_t)(cur | press);
+
+    const matrix_col_t done = (matrix_col_t)(rel_cand & debounce_cnt0[col] & debounce_cnt1[col]);
+    next &= (matrix_col_t)~done;
+
+    const matrix_col_t inc = (matrix_col_t)(rel_cand & (matrix_col_t)~done);
+    debounce_cnt1[col] ^= (matrix_col_t)(debounce_cnt0[col] & inc);
+    debounce_cnt0[col] ^= inc;
+    debounce_cnt0[col] &= (matrix_col_t)~done;
+    debounce_cnt1[col] &= (matrix_col_t)~done;
+
+    if (next != cur) {
+        matrix[col]    = next;
+        matrix_updated = true;
+    }
+}
+#else
 void matrix_scan_full(void)
 {
     indicators_pwm_disable();
@@ -160,6 +234,7 @@ void matrix_scan_full(void)
 
     matrix_updated = true;
 }
+#endif
 
 uint8_t matrix_task()
 {
@@ -178,6 +253,8 @@ uint8_t matrix_task()
     }
 
     bool matrix_changed = false;
+    report_batching     = true;
+    report_dirty        = false;
 
     for (uint8_t col = 0; col < MATRIX_COLS; col++) {
         const matrix_col_t current_col = snapshot[col];
@@ -197,6 +274,12 @@ uint8_t matrix_task()
         }
 
         matrix_previous[col] = current_col;
+    }
+
+    report_batching = false;
+    if (report_dirty) {
+        report_dirty = false;
+        send_keyboard_report();
     }
 
     return matrix_changed;

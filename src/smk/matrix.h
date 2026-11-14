@@ -9,3 +9,4 @@ uint8_t matrix_get_col(uint8_t col);
 void    send_keycode(uint16_t qcode, bool pressed);
 
 void matrix_scan_full();
+void matrix_scan_col(uint8_t col);

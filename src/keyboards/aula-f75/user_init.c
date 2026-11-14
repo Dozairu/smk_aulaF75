@@ -94,6 +94,17 @@ void user_pwm_init(void)
     SET_PWM_DUTY(PWM23, AULA_RGB_PHASE(3), AULA_RGB_PHASE(3));
     SET_PWM_DUTY(PWM24, AULA_RGB_PHASE(4), AULA_RGB_PHASE(4));
     SET_PWM_DUTY(PWM25, AULA_RGB_PHASE(5), AULA_RGB_PHASE(5));
+#ifdef MATRIX_INTERLEAVED_SCAN
+    /*
+     * Priority 2 for _INT_PWM0 (below _INT_EUART0 at priority 3, above Timer2
+     * at priority 0), matching factory 0xEDE0 (IPH1 = 0x42). _INT_PWM0 fires at
+     * the end of each 100 us PWM period to park all 3 banks inside the 15 us
+     * 0..DUTY1 dead-time window so every column gets an exact 1-period pulse.
+     */
+    IPH1 |= _EPWM0;
+    IPL1 &= (uint8_t)~_EPWM0;
+    IEN1 |= _EPWM0;
+#endif
 }
 #endif
 

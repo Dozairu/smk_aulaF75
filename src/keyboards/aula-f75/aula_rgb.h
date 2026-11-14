@@ -1,5 +1,6 @@
 #pragma once
 
+#include "kbdef.h"
 #include <stdint.h>
 
 #ifdef __SDCC
@@ -21,7 +22,7 @@
 #define AULA_RGB_COLS     15
 #define AULA_RGB_CHANNELS (AULA_RGB_ROWS * AULA_RGB_COLORS) /* 18 */
 
-/* Stock firmware PWM period: PWM0PERDH=0x04 @ 0x6707, PWM0PERDL=0xB0 @ 0x670D */
+/* Stock firmware PWM period: 0x04B0 (100 us at 12 MHz). */
 #define AULA_RGB_PERIOD 0x04B0u
 
 /*

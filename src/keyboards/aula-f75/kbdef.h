@@ -128,8 +128,18 @@
  *
  * One full LED sweep -- all fifteen columns -- between two matrix scans,
  * like the genesis-thor-300, the only other keyboard in SMK that shares its
- * columns between scanning and LED multiplexing. */
-#define LED_SUBFRAMES_PER_SCAN MATRIX_COLS
+ * columns between scanning and LED multiplexing.
+ *
+ * Interleaved column scan (`MATRIX_INTERLEAVED_SCAN`): instead of blanking the
+ * whole panel for a ~320 us full-matrix sweep every 6.4 ms, each 200 us Timer2
+ * slot scans one key column (~20 us) and immediately enables hardware PWM on
+ * that same column for one hardware-timed 100 us period (_INT_PWM0 parks all
+ * three banks inside the 0..DUTY1 dead-time window). Effect math runs in
+ * main()'s indicators_render() so the ISR stays short and never starves USB or
+ * EUART0.
+ */
+#define LED_SUBFRAMES_PER_SCAN  MATRIX_COLS
+#define MATRIX_INTERLEAVED_SCAN 1
 
 /*
  * Per-column key state snapshot, bit N = row N pressed.

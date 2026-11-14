@@ -3,6 +3,7 @@
 typedef enum {
     SYSTICK_SLOT_MATRIX_SCAN,
     SYSTICK_SLOT_LED_SUBFRAME,
+    SYSTICK_SLOT_INTERLEAVED,
 } systick_slot_t;
 
 void systick_init(void);

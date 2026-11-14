@@ -1,6 +1,7 @@
 #include "aula_rgb.h"
 #include "sh68f90.h"
 #include "pwm.h"
+#include <stdbool.h>
 
 /*
  * Channel load order -- extracted from fcn @ 0x6E61 in the stock firmware and
@@ -178,7 +179,11 @@ void aula_rgb_clear(void)
     for (col = 0; col < AULA_RGB_COLS; col++) {
         for (ch = 0; ch < AULA_RGB_CHANNELS; ch++) {
             /* off = zero-width pulse = DUTY2 set equal to the channel phase */
-            duty_cache[col][ch] = AULA_RGB_PHASE(ch);
+            const uint16_t off = AULA_RGB_PHASE(ch);
+            const bool     et2 = ET2;
+            ET2                = 0;
+            duty_cache[col][ch] = off;
+            ET2                 = et2;
         }
     }
 }
@@ -188,11 +193,24 @@ void aula_rgb_set(uint8_t row, uint8_t col, uint8_t red, uint8_t green, uint8_t 
     if (row >= AULA_RGB_ROWS || col >= AULA_RGB_COLS) {
         return;
     }
-    const uint8_t base = (uint8_t)(row * AULA_RGB_COLORS);
+    const uint8_t  base = (uint8_t)(row * AULA_RGB_COLORS);
+    const uint16_t d0   = aula_rgb_duty((uint8_t)(base + 0), red);
+    const uint16_t d1   = aula_rgb_duty((uint8_t)(base + 1), green);
+    const uint16_t d2   = aula_rgb_duty((uint8_t)(base + 2), blue);
+#ifdef MATRIX_INTERLEAVED_SCAN
+    if (duty_cache[col][base + 0] == d0 &&
+        duty_cache[col][base + 1] == d1 &&
+        duty_cache[col][base + 2] == d2) {
+        return;
+    }
+#endif
+    const bool     et2  = ET2;
 
-    duty_cache[col][base + 0] = aula_rgb_duty((uint8_t)(base + 0), red);
-    duty_cache[col][base + 1] = aula_rgb_duty((uint8_t)(base + 1), green);
-    duty_cache[col][base + 2] = aula_rgb_duty((uint8_t)(base + 2), blue);
+    ET2                       = 0;
+    duty_cache[col][base + 0] = d0;
+    duty_cache[col][base + 1] = d1;
+    duty_cache[col][base + 2] = d2;
+    ET2                       = et2;
 }
 
 /*
@@ -210,23 +228,24 @@ void aula_rgb_load_column(uint8_t col)
     }
 
     const AULA_RGB_XDATA uint16_t *const d = duty_cache[col];
+    uint16_t v;
 
-    SET_PWM_DUTY_2(PWM20, d[0]);  /* row 0 R */
-    SET_PWM_DUTY_2(PWM21, d[1]);  /* row 0 G */
-    SET_PWM_DUTY_2(PWM22, d[2]);  /* row 0 B */
-    SET_PWM_DUTY_2(PWM23, d[3]);  /* row 1 R */
-    SET_PWM_DUTY_2(PWM24, d[4]);
-    SET_PWM_DUTY_2(PWM25, d[5]);
-    SET_PWM_DUTY_2(PWM10, d[6]);  /* row 2 R */
-    SET_PWM_DUTY_2(PWM11, d[7]);
-    SET_PWM_DUTY_2(PWM12, d[8]);
-    SET_PWM_DUTY_2(PWM13, d[9]);  /* row 3 R */
-    SET_PWM_DUTY_2(PWM14, d[10]);
-    SET_PWM_DUTY_2(PWM15, d[11]);
-    SET_PWM_DUTY_2(PWM03, d[12]); /* row 4 R -- P3 group is loaded in the */
-    SET_PWM_DUTY_2(PWM04, d[13]); /* order 03,04,05 THEN 00,01,02, the only */
-    SET_PWM_DUTY_2(PWM05, d[14]); /* irregularity in the stock table */
-    SET_PWM_DUTY_2(PWM00, d[15]); /* row 5 R */
-    SET_PWM_DUTY_2(PWM01, d[16]);
-    SET_PWM_DUTY_2(PWM02, d[17]);
+    v = d[0];  SET_PWM_DUTY_2(PWM20, v); /* row 0 R */
+    v = d[1];  SET_PWM_DUTY_2(PWM21, v); /* row 0 G */
+    v = d[2];  SET_PWM_DUTY_2(PWM22, v); /* row 0 B */
+    v = d[3];  SET_PWM_DUTY_2(PWM23, v); /* row 1 R */
+    v = d[4];  SET_PWM_DUTY_2(PWM24, v);
+    v = d[5];  SET_PWM_DUTY_2(PWM25, v);
+    v = d[6];  SET_PWM_DUTY_2(PWM10, v); /* row 2 R */
+    v = d[7];  SET_PWM_DUTY_2(PWM11, v);
+    v = d[8];  SET_PWM_DUTY_2(PWM12, v);
+    v = d[9];  SET_PWM_DUTY_2(PWM13, v); /* row 3 R */
+    v = d[10]; SET_PWM_DUTY_2(PWM14, v);
+    v = d[11]; SET_PWM_DUTY_2(PWM15, v);
+    v = d[12]; SET_PWM_DUTY_2(PWM03, v); /* row 4 R -- P3 group is loaded in the */
+    v = d[13]; SET_PWM_DUTY_2(PWM04, v); /* order 03,04,05 THEN 00,01,02, the only */
+    v = d[14]; SET_PWM_DUTY_2(PWM05, v); /* irregularity in the stock table */
+    v = d[15]; SET_PWM_DUTY_2(PWM00, v); /* row 5 R */
+    v = d[16]; SET_PWM_DUTY_2(PWM01, v);
+    v = d[17]; SET_PWM_DUTY_2(PWM02, v);
 }

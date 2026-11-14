@@ -2,6 +2,7 @@
 #include "sh68f90.h"
 #include "pwm.h"
 #include "kbdef.h"
+#include "matrix.h"
 #include "settings.h"
 #include "tick.h"
 #include "led_effect.h"
@@ -53,8 +54,10 @@ _Static_assert(LED_GEOMETRY_ROWS == LED_ROWS && LED_GEOMETRY_COLS == LED_COLS,
  * PWM clock divider: the low three bits of `PWM00CON`, which the factory
  * firmware sets to 0x89 at 0x68D3 -- i.e. PWM_MODE_ENABLE | PWM_SS | 0b001.
  */
-#define LED_PWM_CLK_DIV 0b001
-#define LED_PWM_MASTER  (uint8_t)(PWM_MODE_ENABLE | PWM_SS | LED_PWM_CLK_DIV)
+#ifndef LED_PWM_MASTER
+#    define LED_PWM_CLK_DIV 0b001
+#    define LED_PWM_MASTER  (uint8_t)(PWM_MODE_ENABLE | PWM_SS | LED_PWM_CLK_DIV)
+#endif
 
 /*
  * Brightness. The factory firmware keeps a ten-step gain table at CODE 0x2937
@@ -176,6 +179,12 @@ static void spark_reset(void)
 
 static uint8_t led_col;   /* column displayed by the current subframe */
 static uint8_t led_phase; /* animation phase, natural wrap at 256 */
+
+#ifdef MATRIX_INTERLEAVED_SCAN
+static volatile __bit   display_enabled;
+static volatile uint8_t regen_steps_pending;
+static uint8_t          react_col;
+#endif
 
 /*
  * Second phase counter, wrapping at 192 -- and this is a BUG FIX.
@@ -448,6 +457,11 @@ static void fx_reset(void)
      */
     led_phase = 0;
     fx_phase192 = 0;
+#ifdef MATRIX_INTERLEAVED_SCAN
+    ET2                 = 0;
+    regen_steps_pending = (uint8_t)(LED_ROWS * LED_COLS);
+    ET2                 = 1;
+#endif
 }
 
 /*
@@ -600,6 +614,36 @@ void indicators_pwm_enable(void)
      * other five only carry PWM_SS. Same split as on the three other keyboards
      * in SMK.
      */
+#ifdef MATRIX_INTERLEAVED_SCAN
+    PWM01CON = PWM_SS;
+    PWM02CON = PWM_SS;
+    PWM03CON = PWM_SS;
+    PWM04CON = PWM_SS;
+    PWM05CON = PWM_SS;
+
+    PWM11CON = PWM_SS;
+    PWM12CON = PWM_SS;
+    PWM13CON = PWM_SS;
+    PWM14CON = PWM_SS;
+    PWM15CON = PWM_SS;
+
+    PWM21CON = PWM_SS;
+    PWM22CON = PWM_SS;
+    PWM23CON = PWM_SS;
+    PWM24CON = PWM_SS;
+    PWM25CON = PWM_SS;
+
+    /*
+     * Start all three bank counters back-to-back with the identical byte (0x89)
+     * in exact 5-cycle lockstep -- matching the 5-cycle stop spacing in
+     * `pwm_interrupt_handler()` -- and then arm _INT_PWM0 on bank 0 (0xC9).
+     */
+    PWM00CON = LED_PWM_MASTER;
+    PWM10CON = LED_PWM_MASTER;
+    PWM20CON = LED_PWM_MASTER;
+    PWM00CON = (uint8_t)(LED_PWM_MASTER | PWM_INT_ENABLE);
+    IEN1 |= _EPWM0;
+#else
     PWM00CON = LED_PWM_MASTER;
     PWM01CON = PWM_SS;
     PWM02CON = PWM_SS;
@@ -620,6 +664,7 @@ void indicators_pwm_enable(void)
     PWM23CON = PWM_SS;
     PWM24CON = PWM_SS;
     PWM25CON = PWM_SS;
+#endif
 }
 
 /*
@@ -657,11 +702,37 @@ void settings_save_post(void)
 
 void indicators_pwm_disable(void)
 {
+#ifdef MATRIX_INTERLEAVED_SCAN
+    user_matrix_cols_deselect_all();
+
+    PWM00CON = PWM_CON_PARKED;
+    PWM10CON = PWM_CON_PARKED;
+    PWM20CON = PWM_CON_PARKED;
+
+    PWM01CON = PWM_CON_OFF;
+    PWM02CON = PWM_CON_OFF;
+    PWM03CON = PWM_CON_OFF;
+    PWM04CON = PWM_CON_OFF;
+    PWM05CON = PWM_CON_OFF;
+
+    PWM11CON = PWM_CON_OFF;
+    PWM12CON = PWM_CON_OFF;
+    PWM13CON = PWM_CON_OFF;
+    PWM14CON = PWM_CON_OFF;
+    PWM15CON = PWM_CON_OFF;
+
+    PWM21CON = PWM_CON_OFF;
+    PWM22CON = PWM_CON_OFF;
+    PWM23CON = PWM_CON_OFF;
+    PWM24CON = PWM_CON_OFF;
+    PWM25CON = PWM_CON_OFF;
+#else
     PWM00CON = PWM_CON_PARKED;
     PWM10CON = PWM_CON_PARKED;
     PWM20CON = PWM_CON_PARKED;
 
     user_matrix_cols_deselect_all();
+#endif
 }
 
 /* ---------------------------------------------------------------- animation */
@@ -1210,6 +1281,14 @@ advance:
 
 void indicators_pre_update(void)
 {
+#ifdef MATRIX_INTERLEAVED_SCAN
+    /*
+     * Park PWM banks and release the previous LED column BEFORE selecting the
+     * next column for matrix sensing (`indicators_pwm_disable` already calls
+     * `user_matrix_cols_deselect_all`, and columns stay outputs while awake).
+     */
+    indicators_pwm_disable();
+#else
     /*
      * `matrix.c` leaves the columns configured as INPUTS when it finishes
      * (`user_matrix_scan_post`). We must switch them back to outputs before
@@ -1217,19 +1296,25 @@ void indicators_pre_update(void)
      */
     user_matrix_scan_pre();
     indicators_pwm_disable();
+#endif
 }
 
 /*
- * Keypress detection for the reactive engine: one column per subframe, so each
- * column is checked once per LED sweep -- the exact rate at which `matrix.c`
- * refreshes it. Only rising edges count; holding a key down does not retrigger.
+ * Keypress detection for the reactive engine: one column per poll. Only rising
+ * edges count; holding a key down does not retrigger.
  */
 static void led_react_poll(void)
 {
-    const uint8_t now   = user_matrix_pressed(led_col);
-    const uint8_t fresh = (uint8_t)(now & (uint8_t)~spark_prev[led_col]);
+#ifdef MATRIX_INTERLEAVED_SCAN
+    const uint8_t col   = react_col;
+    const uint8_t now   = matrix_get_col(col);
+#else
+    const uint8_t col   = led_col;
+    const uint8_t now   = user_matrix_pressed(col);
+#endif
+    const uint8_t fresh = (uint8_t)(now & (uint8_t)~spark_prev[col]);
 
-    spark_prev[led_col] = now;
+    spark_prev[col] = now;
 
     if (fresh == 0) {
         return;
@@ -1237,15 +1322,113 @@ static void led_react_poll(void)
     for (uint8_t row = 0; row < LED_ROWS; row++) {
         if (fresh & (uint8_t)(1u << row)) {
             if (user_settings.led_effect == AULA_FX_LAKE) {
-                lake_drop(led_col, row, fx_phase192);
+                lake_drop(col, row, fx_phase192);
             } else {
-                spark_hue[led_col][row] = fx_phase192;
-                spark_val[led_col][row] = 255;
+                spark_hue[col][row] = fx_phase192;
+                spark_val[col][row] = 255;
             }
         }
     }
 }
 
+#ifdef MATRIX_INTERLEAVED_SCAN
+bool indicators_update_step(keyboard_state_t *keyboard, uint8_t current_step)
+{
+    (void)keyboard;
+
+    /*
+     * `matrix_scan_col(current_step)` has already sampled and deselected
+     * `current_step`, so all columns are released and all PWM channels are
+     * parked. Load all eighteen duty cycles first, select `current_step`, and
+     * only then enable PWM for its hardware-timed 100 us period.
+     */
+    if (display_enabled) {
+        aula_rgb_load_column(current_step);
+        user_matrix_col_select(current_step);
+        indicators_pwm_enable();
+    }
+
+    return (current_step == (uint8_t)(LED_COLS - 1u));
+}
+
+void indicators_post_update(void)
+{
+    /* Called at the 400 us Bresenham sub-tick from tick_dispatch(). */
+    aula_encoder_sample();
+    aula_macro_tick();
+    if (regen_steps_pending < (uint8_t)(LED_ROWS * LED_COLS)) {
+        regen_steps_pending++;
+    }
+}
+
+void indicators_render(void)
+{
+    if (regen_steps_pending == 0u) {
+        return;
+    }
+    ET2 = 0;
+    regen_steps_pending--;
+    ET2 = 1;
+
+    caps_on = (user_settings.led_color && (keyboard_state.led_state & HID_LED_CAPS_LOCK)) ? 1 : 0;
+
+    if (aula_macro_active()) {
+        if (!macro_was_on) {
+            macro_was_on = 1;
+            macro_beat   = 0; /* start on a beat, not mid-rest */
+        }
+    } else {
+        macro_was_on = 0;
+    }
+
+    if (user_settings.led_effect == AULA_FX_REACTIVE ||
+        user_settings.led_effect == AULA_FX_LAKE) {
+        led_react_poll();
+    }
+    if (++react_col >= LED_COLS) {
+        react_col = 0;
+#    ifdef SIGNALRGB_ENABLE
+        if (direct_active) {
+            if (direct_timeout != 0u) {
+                direct_timeout--;
+            }
+            if (direct_timeout == 0u) {
+                direct_active = false;
+            }
+        }
+#    endif
+    }
+
+#    ifdef RF_EUART0
+    if (keyboard_state.rf_link != prev_link_fx) {
+        if (prev_link_fx != 0xFF) {
+            flourish_step = 1;
+        }
+        prev_link_fx = keyboard_state.rf_link;
+    }
+    const bool active = aula_macro_active() || caps_on || aula_status_lit() ||
+                        rf_diag_on || bat_show_sweeps || flourish_step != 0 ||
+                        (rf_bt_pair_slot != 0 && user_settings.battery_indicator_on != 0) ||
+                        user_settings.led_effect < AULA_FX_OFF
+#        ifdef SIGNALRGB_ENABLE
+                        || direct_active
+#        endif
+        ;
+#    else
+    const bool active = aula_macro_active() || caps_on || aula_status_lit() ||
+                        user_settings.led_effect < AULA_FX_OFF
+#        ifdef SIGNALRGB_ENABLE
+                        || direct_active
+#        endif
+        ;
+#    endif
+
+    display_enabled = active ? 1 : 0;
+    if (active) {
+        led_regen_one();
+    }
+}
+#else
 bool indicators_update_step(keyboard_state_t *keyboard, uint8_t current_step)
 {
     (void)current_step;  /* `tick.c` always passes 0 */
@@ -1324,6 +1507,7 @@ bool indicators_update_step(keyboard_state_t *keyboard, uint8_t current_step)
 void indicators_post_update(void)
 {
 }
+#endif
 
 /* ----------------------------------------------------------------- settings */
 
@@ -1374,6 +1558,11 @@ void indicators_init(void)
     fx_phase192 = 0;
     regen_row = 0;
     regen_col = 0;
+#ifdef MATRIX_INTERLEAVED_SCAN
+    display_enabled     = 0;
+    regen_steps_pending = (uint8_t)(LED_ROWS * LED_COLS);
+    react_col           = 0;
+#endif
 
     fx_reset();
     aula_rgb_clear();
@@ -1382,6 +1571,12 @@ void indicators_init(void)
 void indicators_start(void)
 {
     indicators_validate_settings();
+#ifdef MATRIX_INTERLEAVED_SCAN
+    user_matrix_sinks_off();
+    user_matrix_cols_deselect_all();
+    user_matrix_scan_pre();
+    indicators_render();
+#endif
 }
 
 /* --------------------------------------------------------- keyboard actions */
