@@ -44,6 +44,13 @@ typedef enum {
 void rf_init(void);
 
 /*
+ * Call from the ~400 us Timer2 sub-tick (`indicators_post_update()`): drives
+ * calibrated status-probe and post-report follow-up timing without sharing
+ * main-loop overlay state.
+ */
+void rf_tick(void);
+
+/*
  * Call from the main loop, not from an ISR: samples the slide switch, applies
  * transport changes, and consumes received frames.
  */

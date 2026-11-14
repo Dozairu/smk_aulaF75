@@ -1337,6 +1337,9 @@ void indicators_post_update(void)
     /* Called at the 400 us Bresenham sub-tick from tick_dispatch(). */
     aula_encoder_sample();
     aula_macro_tick();
+#ifdef RF_EUART0
+    rf_tick();
+#endif
     if (regen_steps_pending < (uint8_t)(LED_ROWS * LED_COLS)) {
         regen_steps_pending++;
     }
@@ -1490,6 +1493,9 @@ bool indicators_update_step(keyboard_state_t *keyboard, uint8_t current_step)
 
 void indicators_post_update(void)
 {
+#ifdef RF_EUART0
+    rf_tick();
+#endif
 }
 #endif
 

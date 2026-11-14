@@ -236,20 +236,28 @@ static __bit settings_restored;
 
 /*
  * Presence probe, transcribed from `fcn.00003901`: command 0x06 goes out every
- * hundred passes and, after THREE unanswered probes, the factory firmware
- * releases the transmit line (`P0CR &= 0xFB ; P0.2 = 1`) and clears bit 0x2C.1
- * -- its "link alive" flag.
+ * 100 ms (250 x 400 us sub-ticks) and, after ten unanswered probes (~1.0 s),
+ * the link is declared lost and the receive buffer is flushed.
  *
- * Its counter runs at the cadence of `euart0_parse`, hence on received traffic;
- * here it runs on `rf_task()` passes, whose cadence is uncalibrated. The
- * threshold is therefore chosen generously, for the same reason as the selector
- * debounce.
+ * Because the BK3632 only reports host HID LED state (`rx_buf[3]`: Num/Caps/
+ * Scroll Lock) in response to `0x06`, Lock-key state changes also arm fast
+ * follow-up probes (every ~15 ms for 75 ms, without counting against
+ * `probe_misses`) so Caps Lock LED toggles update immediately without adding
+ * extra UART/radio traffic during normal typing.
  */
-#define RF_PROBE_PERIOD 2000
-#define RF_PROBE_MISSES 3
-static __xdata uint16_t probe_ticks;
-static __xdata uint8_t  probe_misses;
-static __bit            probe_answered;
+#define RF_PROBE_TICKS    250u /* 250 * 400 us = 100 ms */
+#define RF_PROBE_MISSES   10   /* 10 * 100 ms = 1.0 s disconnect tolerance */
+#define RF_FOLLOWUP_TICKS 38u  /* 38 * 400 us ~= 15 ms */
+#define RF_FOLLOWUP_COUNT 5u   /* +15..75 ms window after a Lock-key change */
+static volatile __xdata uint8_t probe_ticks;
+static volatile __bit           probe_due;
+static volatile __xdata uint8_t followup_ticks;
+static volatile __bit           followup_due;
+static __xdata uint8_t          followup_left;
+static __bit                    followup_arm_pending;
+static __bit                    lock_key_down;
+static __xdata uint8_t          probe_misses;
+static __bit                    probe_answered;
 
 /*
  * Battery gauge. The SH68F90A has no ADC -- verified, no `ADC*` register in
@@ -610,18 +618,55 @@ static void rf_queue_flush(void)
         if (!rf_send_frame(len, RF_GATE_REPORT)) {
             return; /* keep the slot for the next pass */
         }
+        if (slot[0] == RF_CMD_REPORT_L && followup_arm_pending) {
+            const bool et2       = ET2;
+            followup_arm_pending = 0;
+            ET2                  = 0;
+            followup_ticks       = RF_FOLLOWUP_TICKS;
+            followup_due         = 0;
+            followup_left        = RF_FOLLOWUP_COUNT;
+            ET2                  = et2;
+        }
         q_tail = (uint8_t)((q_tail + 1u) % RF_Q_SLOTS);
         q_count--;
     }
 }
 
+static bool rf_report_has_lock(const __xdata report_keyboard_t *report)
+{
+    for (uint8_t i = 0; i < KEYBOARD_REPORT_KEYS; i++) {
+        const uint8_t k = report->keys[i];
+        if (k == KC_CAPS_LOCK || k == KC_SCROLL_LOCK || k == KC_NUM_LOCK) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool rf_nkro_has_lock(const __xdata report_nkro_t *report)
+{
+    return ((report->bits[KC_CAPS_LOCK >> 3] & (uint8_t)(1u << (KC_CAPS_LOCK & 7u))) != 0u) ||
+           ((report->bits[KC_SCROLL_LOCK >> 3] & (uint8_t)(1u << (KC_SCROLL_LOCK & 7u))) != 0u) ||
+           ((report->bits[KC_NUM_LOCK >> 3] & (uint8_t)(1u << (KC_NUM_LOCK & 7u))) != 0u);
+}
+
+static void rf_note_lock_key(bool lock_now)
+{
+    if (lock_now != lock_key_down) {
+        lock_key_down        = lock_now;
+        followup_arm_pending = 1;
+    }
+}
+
 void rf_send_report(__xdata report_keyboard_t *report)
 {
+    rf_note_lock_key(rf_report_has_lock(report));
     rf_queue_report(RF_CMD_REPORT_L, report->raw, KEYBOARD_REPORT_SIZE);
 }
 
 void rf_send_nkro(__xdata report_nkro_t *report)
 {
+    rf_note_lock_key(rf_nkro_has_lock(report));
     rf_queue_report(RF_CMD_REPORT_L, report->raw, NKRO_REPORT_SIZE);
 }
 
@@ -1123,6 +1168,23 @@ static void rf_radio_off(void)
  * nothing writes it directly; this branch of the selector does, and it notifies
  * the module via command 0x01 with slot 0.
  */
+static void rf_probe_reset(void)
+{
+    const bool et2 = ET2;
+
+    ET2                  = 0;
+    probe_ticks          = 0;
+    probe_due            = 0;
+    followup_ticks       = 0;
+    followup_due         = 0;
+    ET2                  = et2;
+    followup_left        = 0;
+    followup_arm_pending = 0;
+    lock_key_down        = 0;
+    probe_misses         = 0;
+    probe_answered       = 0;
+}
+
 static void rf_enter_24g(void)
 {
     if (link_state == RF_LINK_WIRED) {
@@ -1131,6 +1193,7 @@ static void rf_enter_24g(void)
     dprintf("rf enter 24g\r\n");
     link_state     = RF_LINK_24G;
     link_connected = 0;
+    rf_probe_reset();
     rf_radio_on();
     rf_queue_link(RF_LINK_SELECT);
 }
@@ -1146,6 +1209,7 @@ static void rf_enter_bt(void)
         bt_slot = RF_SLOT_BT1; /* factory clamp: 1..3 */
     }
     link_connected = 0;
+    rf_probe_reset();
     rf_radio_on();
     rf_queue_link(RF_LINK_SELECT);
 }
@@ -1166,6 +1230,7 @@ static void rf_enter_wired(void)
     link_state      = RF_LINK_WIRED;
     link_connected  = 0;
     link_tx_pending = 0;
+    rf_probe_reset();
     rf_radio_off();
 #ifndef RF_DEBUG_KEEP_USB
     usb_init(); /* under KEEP_USB, USB was never shut down: restarting it would
@@ -1245,9 +1310,7 @@ void rf_init(void)
     settings_restored = 0;
     link_connected  = 0;
     link_tx_pending = 0;
-    probe_ticks     = 0;
-    probe_misses    = 0;
-    probe_answered  = 0;
+    rf_probe_reset();
     batt_frames      = 0;
     batt_target      = 0;
     batt_shown       = 0;
@@ -1292,44 +1355,74 @@ void rf_init(void)
     }
 }
 
+void rf_tick(void)
+{
+    if (++probe_ticks >= RF_PROBE_TICKS) {
+        probe_ticks = 0;
+        probe_due   = 1;
+    }
+    if (followup_ticks != 0u) {
+        if (--followup_ticks == 0u) {
+            followup_due = 1;
+        }
+    }
+}
+
 /*
- * Presence probe: periodic command 0x06, three failures and the link is
- * declared dead. Transcribed from `fcn.00003901`; see RF_PROBE_PERIOD.
+ * Presence probe: periodic command 0x06 every 100 ms, three failures and the
+ * link is declared dead. Fast follow-up probes after key reports reuse the
+ * same command without contributing to `probe_misses`.
  */
 static void rf_probe_task(void)
 {
-    if (++probe_ticks < RF_PROBE_PERIOD) {
+    if (probe_due) {
+        if (!rf_send_status_probe()) {
+            return; /* retry on next pass once tx_busy clears */
+        }
+        probe_due    = 0;
+        followup_due = 0;
+
+        if (probe_answered) {
+            probe_misses = 0;
+        } else if (probe_misses < RF_PROBE_MISSES) {
+            probe_misses++;
+        }
+
+        if (probe_misses >= RF_PROBE_MISSES) {
+            dprintf("rf link lost (p47=%u txb=%u q=%u)\r\n", (unsigned)P4_7,
+                    (unsigned)tx_busy, (unsigned)q_count);
+            probe_misses   = 0;
+            link_connected = 0;
+            /* The factory firmware releases the transmit line here (0x3D5A). */
+            rf_tx_drain();
+            /*
+             * And we discard whatever is lingering in the receive buffer: a
+             * truncated frame whose type announces a length that will never arrive
+             * would stall the buffer indefinitely, since `rf_rx_consume()` waits
+             * for the full byte count.
+             */
+            rf_rx_drop();
+        }
+
+        probe_answered = 0;
         return;
     }
-    if (!rf_send_status_probe()) {
-        probe_ticks = RF_PROBE_PERIOD; /* retry on next pass once tx_busy clears */
-        return;
-    }
-    probe_ticks = 0;
 
-    if (probe_answered) {
-        probe_misses = 0;
-    } else if (probe_misses < RF_PROBE_MISSES) {
-        probe_misses++;
+    if (followup_due) {
+        if (!rf_send_status_probe()) {
+            return;
+        }
+        followup_due = 0;
+        if (followup_left != 0u) {
+            followup_left--;
+            if (followup_left != 0u) {
+                const bool et2 = ET2;
+                ET2            = 0;
+                followup_ticks = RF_FOLLOWUP_TICKS;
+                ET2            = et2;
+            }
+        }
     }
-
-    if (probe_misses >= RF_PROBE_MISSES) {
-        dprintf("rf link lost (p47=%u txb=%u q=%u)\r\n", (unsigned)P4_7,
-                (unsigned)tx_busy, (unsigned)q_count);
-        probe_misses   = 0;
-        link_connected = 0;
-        /* The factory firmware releases the transmit line here (0x3D5A). */
-        rf_tx_drain();
-        /*
-         * And we discard whatever is lingering in the receive buffer: a
-         * truncated frame whose type announces a length that will never arrive
-         * would stall the buffer indefinitely, since `rf_rx_consume()` waits
-         * for the full byte count.
-         */
-        rf_rx_drop();
-    }
-
-    probe_answered = 0;
 }
 
 /*
@@ -1642,6 +1735,7 @@ void rf_sleep_wake(void)
      * without waiting for the next probe, which is slow.
      */
     link_connected = 0;
+    rf_probe_reset();
     rf_queue_link(RF_LINK_SELECT);
 }
 
