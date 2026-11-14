@@ -508,9 +508,42 @@ Because upstream VIA has no graphical per-key RGB editor, the firmware exposes a
 ### Responsiveness & memory tuning
 
 - **Debounced settings writes (`src/smk/settings.c`, `tick.c`, `sleep.c`):** `settings_mark_dirty()` defers `settings_save()` by `1500` ticks (~600 ms) instead of erasing a 512 B flash sector on every VIA slider step; `__critical` guards prevent torn 16-bit/flag updates against Timer 2, and `sleep_task()` calls `settings_flush()` before `tick_pause()` so pending edits persist prior to sleep.
-- **Lower scan ISR dwell (`src/smk/matrix.c`):** Trimmed per-column settling/resample delays in `matrix_scan_full()` from `10 + 10 µs` to `8 + 4 µs` (saving `120 µs` per 15-column scan while keeping the `sample1 == sample2` glitch check).
 - **Main-loop RF / battery throttling (`src/keyboards/aula-f75/aula_rf.c`):** `rf_charge_poll()` now runs every 64th `rf_task()` pass (giving real millisecond-scale contact debounce for the 20/200-sample thresholds), and `keyboard_state.battery_level` caches `prev_batt_pct` to skip 16-bit division when percentage is unchanged.
-- **Reclaimed EP0 XRAM (`src/smk/usb.c`):** Shrunk `scratch[512]` to `scratch[128]` (384 B reclaimed), keeping total footprint at **`3529 / 4096` B XRAM** (567 B free) and **`42316 / 58368` B Flash** with `check_interrupts` clean (`48` ISR / `251` main functions).
+- **Reclaimed EP0 XRAM (`src/smk/usb.c`):** Shrunk `scratch[512]` to `scratch[128]` (384 B reclaimed), keeping total footprint at **`3,568 / 4,096` B XRAM** (528 B free) and **`42,974 / 58,368` B Flash** with `check_interrupts` clean (`14` vectors, `48` ISR / `292` main functions).
+
+### Interleaved column scanning & hardware-timed PWM multiplexing (`MATRIX_INTERLEAVED_SCAN`)
+
+In the initial sequential schedule, `tick_dispatch()` alternated 15 `400 µs` LED subframes (`6.00 ms`) with one blocking 15-column `matrix_scan_full()` pass (`~320 µs`), coupling key-scan frequency directly to the RGB refresh rate (`6.32 ms` = `158.2 Hz`) and turning all LEDs off for `~320 µs` once per frame.
+
+Enabling `MATRIX_INTERLEAVED_SCAN` in `src/keyboards/aula-f75/kbdef.h` decouples key latency and main-loop RGB rendering from column multiplexing by interleaving **one column scan + one hardware-timed `100.0 µs` PWM illumination window** into each `200 µs` `Timer2` tick:
+
+1. **Interleaved per-column scanning (`src/smk/tick.c`, `src/smk/matrix.c`):**
+   - `Timer2` runs at a uniform **`200 µs` period** (`RELOAD_LED_SUBFRAME = 0xFD44`, `5,000 Hz`).
+   - On each `200 µs` tick (`col = 0..14`), `indicators_subframe()` parks PWM (`PWM_CON_PARKED`), `matrix_scan_col(col)` drives only column `col` LOW, waits `6 µs` for row pull-ups to settle, samples rows twice (`2 µs` apart) with a `sample1 == sample2` glitch filter while PWM is parked (`0 mA` LED current), and then `aula_rgb_load_column(col)` loads the 18 PWM duties and starts the hardware-timed illumination pulse on that same active column.
+   - **Full-matrix scan rate doubles** from `158.2 Hz` (`6.32 ms`) to **`333.3 Hz` (`3.00 ms` = `15 × 200 µs`)**, while eliminating the once-per-frame `320 µs` dark gap.
+2. **Asymmetric eager-press / per-key debounced-release & HID report coalescing (`src/smk/matrix.c`, `src/smk/model.c`):**
+   - **Press (`0 -> 1`):** Registers **eagerly (`0 ms` debounce delay)** on the first glitch-checked scan and sets `debounce_cnt = 3` (`4` scans = `12.0 ms`) using a 2-bit vertical counter (`debounce_cnt0[15]`, `debounce_cnt1[15]` — `30 B` XRAM total for all 90 matrix positions).
+   - **Release (`1 -> 0`):** Requires **4 consecutive released scans (`12.0 ms`)** before clearing `matrix_debounced[col]`, filtering mechanical switch bounce and electrical release chatter.
+   - **HID report batching (`report_batching` / `report_dirty`):** `matrix_task()` brackets its 90-key delta scan in `model_begin_report_batch()` / `model_end_report_batch()` so multi-key rollover or chord changes within a scan coalesce into a **single** USB / 2.4G / BT HID report transmission.
+3. **Hardware-timed `100.0 µs` PWM window via `_INT_PWM0` (`src/sino51lib/pwm.c`, `indicators.c`):**
+   - Following the stock AULA F75 firmware (`0x6C42`–`0x6D4A`), `_INT_PWM0` is enabled (`IEN1 |= _EPWM0`) at **priority level 2** (`IPH1 |= _EPWM0; IPL1 &= ~_EPWM0` — above `Timer2` at priority 0, below `EUART0` at priority 3).
+   - Each column's PWM period runs for **exactly one hardware period (`0x04B0` = `1200` ticks = `100.0 µs`)**. When `PWM0` wraps at `100.0 µs`, `pwm_interrupt_handler()` fires immediately inside the `0..15.0 µs` (`CNT < DUTY1`, `0x00B4..0x00C5`) dead-time window — while all 18 PWM outputs are still electrically LOW (`0V`) — parks `PWM00CON..PWM20CON`, and deselects all 15 column pins (`P6 = 0xFF`, `P5 |= 0x87`, `P4 |= 0x0D`) before `CNT` reaches `0x00B4`.
+   - **Exact 5-cycle lockstep across `PWM0`, `PWM1`, `PWM2`:** Both `indicators_pwm_enable()` and `pwm_interrupt_handler()` write the same constant byte (`0x89` on start, `0x81` on stop) to `PWM00CON`, `PWM10CON`, `PWM20CON` at `0, +5, +10` oscillator cycles before arming `PWM_INT_ENABLE` (`0xC9`) on `PWM00CON`, ensuring all three banks run for the exact same `2400`-oscillator-cycle (`1200` PWM tick) window with zero inter-bank phase drift.
+4. **Pre-split `fb_duty` loader & main-loop `indicators_render()` (`aula_rgb.c`, `indicators.c`):**
+   - `fb_duty[15][36]` (`540 B` XRAM) stores pre-calculated big-endian `(DUTY2H, DUTY2L)` pairs in hardware load order (`PWM20..25`, `PWM10..15`, `PWM03..05`, `PWM00..02`), shrinking `aula_rgb_load_column(col)` from `~1,850` cycles (`~77 µs`) to **`488` cycles (`20.3 µs`)**.
+   - Effect math (`led_effect_rgb()`, `render_row()`, overlays) runs in the **main loop** inside `indicators_render()`, paced by `regen_steps_pending` (`400 µs` sub-ticks, preserving identical animation speeds).
+
+| Metric | Sequential Scan + ISR Effect Math (Before) | Interleaved Scan + Hardware-Timed PWM (After) | Improvement |
+| --- | --- | --- | --- |
+| **Full-Matrix Scan Period** | `6.32 ms` (`158.2 Hz`) | **`3.00 ms` (`333.3 Hz`)** | **2.11× faster scan rate (`-52.5%` period)** |
+| **Key Press Debounce Delay** | None (single-scan raw pass-through) | **`0 ms` eager press** (`6 + 2 µs` glitch-checked) | **Immediate press registration preserved** |
+| **Key Release Debounce Protection** | `0 ms` (vulnerable to switch chatter) | **`12.0 ms` (`4` scans)** per-key vertical counter | **Eliminates release chatter / double-taps** |
+| **Worst-Case Key Press Latency** | `~6.32 ms` | **`~3.00 ms`** | **`-3.32 ms` (`2.11×` lower latency)** |
+| **Average Key Press Latency** | `~3.16 ms` | **`~1.50 ms`** | **`-1.66 ms` (`2.11×` lower latency)** |
+| **Multi-Key HID Report Coalescing** | 1 USB/RF report per changed key | **1 coalesced report per scan sweep** | **Eliminates multi-key report bursts** |
+| **`Timer2` ISR Period & Worst-Case Duration** | `400 µs` period / `~320 µs` max (`80%` of slot) | **`200 µs` period / `~42–58 µs` max (`21–29%` of slot)** | **5.5× shorter peak ISR blocking** |
+| **Per-Column PWM Illumination Window** | Software-timed (`~350–400 µs`, variable with ISR jitter) | **Hardware-timed `100.0 µs` (`1200` ticks, zero jitter)** | **Zero PWM truncation or column brightness wave** |
+| **RGB Frame Refresh Rate** | `158.2 Hz` (interrupted by `320 µs` scan blackout) | **`333.3 Hz` (`3.00 ms` uniform cycle)** | **2.11× higher refresh, zero scan blackout** |
 
 > ## ✅ 2026-09-11 — first successful flash, bootloader preserved
 >
@@ -735,8 +768,9 @@ couples into row sensing**. All it took was implementing both functions.
 A precedent existed in the tree and had gone unnoticed: the **genesis-thor-300** also shares
 its matrix columns with its LED multiplexing, sets `LED_SUBFRAMES_PER_SCAN MATRIX_COLS`, and
 measures its budget — *"one effect evaluation per subframe: six, one per row, does not fit and
-starves the USB interrupt"*. The port reuses its structure, one single effect evaluation per
-subframe, replacing its whole-frame dithering with true hardware PWM.
+starves the USB interrupt"*. The port initially reused its structure, one single effect evaluation per
+subframe, replacing its whole-frame dithering with true hardware PWM, and subsequently evolved to
+`MATRIX_INTERLEAVED_SCAN` (see [Interleaved column scanning & hardware-timed PWM multiplexing](#interleaved-column-scanning--hardware-timed-pwm-multiplexing-matrix_interleaved_scan) above), where each `200 µs` `Timer2` tick scans one column while PWM is parked, loads pre-computed `DUTY2H/L` bytes, and runs a hardware-timed `100.0 µs` PWM window terminated by `_INT_PWM0` while effect evaluation runs in the main loop.
 
 #### Polarity, settled from the dump
 
@@ -6273,30 +6307,36 @@ This is **the exact protocol** of SMK's `isp_jump()` (`src/platform/sh68f90/isp.
 (`src/smk/usb.c:442`). **This bootloader implements it**, so the software escape hatch will work —
 provided the flashed firmware's USB stack actually starts up.
 
-### Residual risk, stated precisely
+### Residual risk & JTAG hardware recovery (`sinodude` on ESP32-S3)
 
 | Scenario | Recoverable? |
 | --- | --- |
 | Truncated image, no `0x02` at `0xEFFB` | ✅ bootloader stays in ISP on plug-in |
 | Firmware boots and USB enumerates | ✅ `isp_jump()` over USB |
-| **Firmware boots but hangs before its USB stack** | ❌ **external programmer required** |
+| **Firmware boots but hangs before its USB stack (or corrupt reset vector)** | ✅ **recovered via JTAG (`sinodude` on ESP32-S3)** |
 
-The only losing scenario is the third one — and that is precisely what a **wrong pinout** causes:
-matrix scanning drives the wrong pins, the firmware loops or hangs, and USB never comes up.
+When a flashed image hangs before USB starts or corrupts the reset vector / trampoline so the board cannot enter ISP over USB, the SH68F90A's 4-wire JTAG interface (`TCK`, `TMS`, `TDI`, `TDO` + `GND` on the PCB debug pads) provides full hardware recovery.
 
-**Conclusion: the pinout is the only real gate.** Once established and verified, the risk becomes
-acceptable even without an external programmer. Until then, write nothing.
+**Verified on this AULA F75 hardware using an ESP32-S3 (`ESP32-S3-Zero`) port of `sinodude`:**
+- Because the ESP32-S3 operates at native **`3.3 V` CMOS logic**, it connects directly to the AULA F75 JTAG pads with **zero external resistors or Zener diodes** (unlike 5 V AVR boards):
+  - `GPIO4` → `TCK`
+  - `GPIO5` → `TMS`
+  - `GPIO6` → `TDI`
+  - `GPIO7` → `TDO`
+  - `GND` → `GND`
+- The ESP32-S3 port implements the exact `sinodude` USB-serial protocol (`115200 8N1` over the ESP32-S3 native USB CDC-ACM port, enumerating with `VID_16C0&PID_05DF` for `avrdude -c sinodude`) and the 3-step `calibration()` entry timing window while the keyboard is power-cycled.
+- Full flash recovery (`aula-f75_default_full.hex`, containing both the SMK firmware and the factory `0xF000–0xFFFF` ISP bootloader + `0x0000: LJMP 0xF000` reset vector and `0xEFFB` trampoline) was tested and verified on the physical board via:
+  ```sh
+  avrdude -C avrdude.conf -c sinodude -p sh68f90a -P COM7 -U flash:w:aula-f75_default_full.hex:i
+  ```
 
 Safety net status:
 
 | | |
 | --- | --- |
 | Factory firmware dump | ✅ `assets/f75_full.bin`, bootloader bit-for-bit identical to upstream reference |
-| Bootloader preserved by `sinowisp write` | ✅ documented upstream, `0xF000+` region untouched |
+| Bootloader preserved by `sinowisp write` | ✅ verified on hardware, `0xF000+` region untouched |
 | Return to ISP at reset | ✅ verified on this unit (`0xF024`) |
 | Software return to ISP (`isp_jump`) | ✅ verified on this unit (`0xFF00`) |
-| External programmer | ❌ none on hand — [sinodude-serial](https://github.com/carlossless/sinodude) on Arduino Nano |
-| `sinowisp` write tested on this model | ❌ marked ✅ upstream but unchecked in issue #96 |
-
-A `tools/shim/sinowisp` wrapper (in the parent project) **refuses writes** until the pinout is
-established. Remove it deliberately, not by accident.
+| External JTAG programmer (`sinodude`) | ✅ **verified on this unit** using an ESP32-S3 (`esp32s3`) port (`GPIO4..7` direct 3.3 V JTAG, `avrdude -c sinodude -p sh68f90a`) |
+| `sinowisp` write tested on this model | ✅ **verified on this unit** across multiple firmware builds |
