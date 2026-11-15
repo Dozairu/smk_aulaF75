@@ -237,6 +237,21 @@
       "name": "FACTORY_RST",
       "title": "Factory Reset (Hold 2s)",
       "shortName": "RESET"
+    },
+    {
+      "name": "IND_STATUS",
+      "title": "Toggle the Esc/F1 status indicator",
+      "shortName": "Ind\nStat"
+    },
+    {
+      "name": "IND_CAPS",
+      "title": "Toggle the Caps Lock indicator",
+      "shortName": "Ind\nCaps"
+    },
+    {
+      "name": "IND_CHARGE",
+      "title": "Toggle the charging / low battery indicator",
+      "shortName": "Ind\nChg"
     }  ],
   "matrix": {
     "rows": 6,

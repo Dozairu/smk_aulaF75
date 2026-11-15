@@ -221,13 +221,26 @@ bool via_process_packet(__xdata uint8_t *data)
             dynamic_macro_reset();
             break;
 
-        case VIA_ID_CUSTOM_GET_VALUE:
 #    ifdef VIALRGB_ENABLE
-            if (data[1] >= VIALRGB_FIRST_ID) { /* VialRGB: no channel byte */
+        /* Vial's Lighting tab (VialRGB) replaces the VIA custom menu, which
+         * Vial cannot show (and the VIA app does not talk to a Vial board):
+         * only VialRGB value ids (no channel byte, >= 0x40) are answered.
+         * The menu's indicator toggles are keys instead (IND_* in kbdef.h). */
+        case VIA_ID_CUSTOM_GET_VALUE:
+        case VIA_ID_CUSTOM_SET_VALUE:
+        case VIA_ID_CUSTOM_SAVE:
+            if (data[1] < VIALRGB_FIRST_ID) {
+                data[0] = VIA_ID_UNHANDLED;
+            } else if (data[0] == VIA_ID_CUSTOM_GET_VALUE) {
                 vialrgb_get_value(data);
-                break;
+            } else if (data[0] == VIA_ID_CUSTOM_SET_VALUE) {
+                vialrgb_set_value(data);
+            } else {
+                vialrgb_save();
             }
-#    endif
+            break;
+#    else
+        case VIA_ID_CUSTOM_GET_VALUE:
             switch (data[2]) {
                 case 1:
                     data[3] = user_settings.led_effect;
@@ -260,12 +273,6 @@ bool via_process_packet(__xdata uint8_t *data)
             break;
 
         case VIA_ID_CUSTOM_SET_VALUE:
-#    ifdef VIALRGB_ENABLE
-            if (data[1] >= VIALRGB_FIRST_ID) {
-                vialrgb_set_value(data);
-                break;
-            }
-#    endif
             switch (data[2]) {
                 case 1:
                     user_settings.led_effect = data[3];
@@ -317,14 +324,9 @@ bool via_process_packet(__xdata uint8_t *data)
             break;
 
         case VIA_ID_CUSTOM_SAVE:
-#    ifdef VIALRGB_ENABLE
-            if (data[1] >= VIALRGB_FIRST_ID) {
-                vialrgb_save();
-                break;
-            }
-#    endif
             settings_mark_dirty();
             break;
+#    endif
 
 #    ifdef SIGNALRGB_ENABLE
         case 0xF0u: /* SRGB_CMD_SET_LEDS: [0xF0, start_idx, count(<=9), R,G,B...] */

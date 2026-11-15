@@ -116,8 +116,10 @@ under the closest QMK name:
 The colour picker sets colour mode 8 ("custom"): the hue goes through the factory colour wheel and
 saturation blends toward white, like the stock colours (Vial's on-screen swatch will not match the
 LEDs exactly). Brightness maps onto the 10 stock levels, speed onto the 5. The Fn lighting keys and
-the VIA custom menu keep working; Vial reads their changes back. The indicator toggles and scroll
-direction stay in the VIA custom menu (channel 3), which Vial has no UI for.
+Vial reads their changes back. The VIA custom lighting menu (channel 3) is not built with VialRGB --
+Vial cannot show it, and the VIA app does not talk to a Vial board. Its indicator toggles are keys
+instead, in Vial's User tab: `IND_STATUS` (Esc/F1 status LED), `IND_CAPS` (Caps Lock LED),
+`IND_CHARGE` (charging / low battery); scroll direction is `DIR_TOG`.
 
 ## Storage
 
@@ -159,6 +161,6 @@ or `EE_CLR` clears everything, including the Vial area and the engine's live sta
 
 ## Budget (AULA F75, Vial build)
 
-With `-Dautotype=false -Drf_diag=false`: code 56,585 / 58,368 B, XRAM 3,807 / 4,096 B. With both
-left on (the default): code 57,939 B. `autotype` is the Fn+Space anti-idle mode, `rf_diag` the Fn+R
+With `-Dautotype=false -Drf_diag=false`: code 56,331 / 58,368 B, XRAM 3,807 / 4,096 B. With both
+left on (the default): code 57,685 B. `autotype` is the Fn+Space anti-idle mode, `rf_diag` the Fn+R
 radio diagnostic overlay; turned off, their keys do nothing.

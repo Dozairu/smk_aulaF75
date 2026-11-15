@@ -252,5 +252,11 @@ enum custom_keycodes {
     OS_IOS,
     FACTORY_RST,
 
+    /* Indicator toggles (the VIA custom menu has them too; Vial has no menu):
+     * the Esc/F1 status LED, the Caps Lock LED, charging / low battery. */
+    IND_STATUS,
+    IND_CAPS,
+    IND_CHARGE,
+
     KB_SAFE_RANGE,
 };

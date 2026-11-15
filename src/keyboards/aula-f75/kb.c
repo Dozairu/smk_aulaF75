@@ -218,6 +218,20 @@ bool kb_process_record(uint16_t keycode, bool key_pressed)
         case DIR_TOG:
             if (key_pressed) indicators_toggle_direction();
             return false;
+        case IND_STATUS:
+        case IND_CAPS:
+        case IND_CHARGE:
+            /* The VIA menu's three indicator toggles, as keys (Vial has no
+             * menu): status LED, Caps Lock LED, charging / low battery. */
+            if (key_pressed) {
+                uint8_t *t = (keycode == IND_STATUS) ? &user_settings.battery_indicator_on
+                           : (keycode == IND_CAPS)   ? &user_settings.led_color
+                                                     : &user_settings.ul_speed;
+                *t = *t ? 0u : 1u;
+                settings_mark_dirty();
+                indicators_confirm(matrix_event_row, matrix_event_col);
+            }
+            return false;
         case MACRO_TG:
 #ifndef NO_AUTOTYPE
             if (key_pressed) aula_macro_arm();
