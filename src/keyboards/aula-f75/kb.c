@@ -15,6 +15,7 @@
 #include "vial.h"
 #include "dynamic_keymap.h"
 #include "vialrgb.h"
+#include "action.h"
 #ifdef RF_EUART0
 #    include "aula_rf.h"
 #endif
@@ -358,6 +359,10 @@ void kb_update(void)
         wasd_swap        = 0;
         os_mode          = 0;
         indicators_apply_defaults();
+        action_init(); /* key engine: no locked layer, Caps Word, one-shot... */
+        clear_keys();  /* and whatever it had down, so nothing stays stuck */
+        set_mods(0);
+        send_keyboard_report();
 #ifdef VIA_ENABLE
         dynamic_keymap_reset();
 #endif

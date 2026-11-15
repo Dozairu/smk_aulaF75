@@ -170,27 +170,27 @@ bool dynamic_encoder_set_keycode(uint8_t layer, uint8_t index, bool clockwise, u
 
 void dynamic_keymap_reset(void)
 {
-    for (uint8_t layer = 0; layer < DYNAMIC_KEYMAP_LAYER_COUNT; layer++) {
-        for (uint8_t idx = 0; idx < DYNAMIC_ENCODER_COUNT; idx++) {
-            const uint16_t ccw = layer == 0 ? KC_VOLD : KC_TRANSPARENT;
-            const uint16_t cw  = layer == 0 ? KC_VOLU : KC_TRANSPARENT;
-            uint16_t       o   = encoder_offset(layer, idx, false);
-            dynamic_keymap[o]     = (uint8_t)(ccw >> 8);
-            dynamic_keymap[o + 1] = (uint8_t)ccw;
-            o                     = encoder_offset(layer, idx, true);
-            dynamic_keymap[o]     = (uint8_t)(cw >> 8);
-            dynamic_keymap[o + 1] = (uint8_t)cw;
-        }
+    /* The store keeps the keymap flat, layer by row by column, two bytes per
+     * keycode (big-endian) -- the order of the static keymaps[][][] -- and the
+     * encoder map right after the macros: per layer and encoder, the
+     * counter-clockwise then the clockwise keycode. Layer 0 turns the volume,
+     * the others are transparent. */
+    const uint16_t  *src = &keymaps[0][0][0];
+    __xdata uint8_t *dst = dynamic_keymap;
+    for (uint16_t i = 0; i < DYNAMIC_KEYMAP_BYTES / 2u; i++) {
+        const uint16_t keycode = *src++;
+        *dst++                 = (uint8_t)(keycode >> 8);
+        *dst++                 = (uint8_t)keycode;
     }
-    for (uint8_t layer = 0; layer < DYNAMIC_KEYMAP_LAYER_COUNT; layer++) {
-        for (uint8_t row = 0; row < MATRIX_ROWS; row++) {
-            for (uint8_t col = 0; col < MATRIX_COLS; col++) {
-                uint16_t offset  = key_offset(layer, row, col);
-                uint16_t keycode = keymaps[layer][row][col];
-                dynamic_keymap[offset]     = (uint8_t)(keycode >> 8);
-                dynamic_keymap[offset + 1] = (uint8_t)keycode;
-            }
-        }
+    _Static_assert(KC_VOLD < 0x100 && KC_VOLU < 0x100 && KC_TRANSPARENT < 0x100, "one-byte encoder defaults");
+    dst = &dynamic_keymap[DYNAMIC_KEYMAP_BYTES + DYNAMIC_MACRO_BYTES];
+    for (uint8_t i = 0; i < DYNAMIC_KEYMAP_LAYER_COUNT * DYNAMIC_ENCODER_COUNT; i++) {
+        const bool base = i < DYNAMIC_ENCODER_COUNT;
+        dst[0]          = 0;
+        dst[1]          = base ? (uint8_t)KC_VOLD : (uint8_t)KC_TRANSPARENT;
+        dst[2]          = 0;
+        dst[3]          = base ? (uint8_t)KC_VOLU : (uint8_t)KC_TRANSPARENT;
+        dst += 4;
     }
     __critical
     {

@@ -533,43 +533,41 @@ static void ko_end(uint8_t pos, bool reregister)
  * business: they go out to action_hal_send() for the keyboard to handle.
  */
 #ifdef ACTION_EXTRAS
+/* Magic swaps as {from, to, bits}: the first rule whose bit is set applies
+ * (QMK keymap_config order); a GUI result is dropped by MAGIC_NO_GUI. */
+static const __code uint8_t magic_rules[][3] = {
+    {KC_CAPS, KC_LCTL, 0x03}, /* SWAP_CAPS_LCTL | CAPS_AS_CTRL  (low byte) */
+    {KC_LCTL, KC_CAPS, 0x01}, /* SWAP_CAPS_LCTL                            */
+    {KC_LALT, KC_LGUI, 0x04}, /* SWAP_LALT_LGUI                            */
+    {KC_RALT, KC_RGUI, 0x08}, /* SWAP_RALT_RGUI                            */
+    {KC_LGUI, KC_LALT, 0x04},
+    {KC_RGUI, KC_RALT, 0x08},
+    {KC_GRV, KC_ESC, 0x20},   /* SWAP_GRV_ESC                              */
+    {KC_ESC, KC_GRV, 0x20},
+    {KC_BSLS, KC_BSPC, 0x40}, /* SWAP_BSLS_BSPC                            */
+    {KC_BSPC, KC_BSLS, 0x40},
+    {KC_LCTL, KC_LGUI, 0x81}, /* bit 7 set: high byte -- SWAP_LCTL_LGUI    */
+    {KC_RCTL, KC_RGUI, 0x82}, /*                         SWAP_RCTL_RGUI    */
+    {KC_LGUI, KC_LCTL, 0x81},
+    {KC_RGUI, KC_RCTL, 0x82},
+};
+
 static uint16_t magic_remap(uint16_t kc)
 {
-    const uint16_t m      = action_config.magic;
-    switch (kc) {
-        case KC_CAPS:
-            return (m & (MAGIC_SWAP_CAPS_LCTL | MAGIC_CAPS_AS_CTRL)) ? KC_LCTL : kc;
-        case KC_LCTL:
-            if (m & MAGIC_SWAP_CAPS_LCTL) return KC_CAPS;
-            if (m & MAGIC_SWAP_LCTL_LGUI) return (m & MAGIC_NO_GUI) ? KC_NO : KC_LGUI;
+    const uint16_t m = action_config.magic;
+    if (kc > 0xFFu) {
+        return kc;
+    }
+    for (uint8_t i = 0; i < sizeof(magic_rules) / 3u; i++) {
+        const uint8_t bits = magic_rules[i][2];
+        const uint8_t on   = (bits & 0x80u) ? (uint8_t)(m >> 8) & bits & 0x7Fu : (uint8_t)m & bits;
+        if (on && (uint8_t)kc == magic_rules[i][0]) {
+            kc = magic_rules[i][1];
             break;
-        case KC_RCTL:
-            if (m & MAGIC_SWAP_RCTL_RGUI) return (m & MAGIC_NO_GUI) ? KC_NO : KC_RGUI;
-            break;
-        case KC_LALT:
-            if (m & MAGIC_SWAP_LALT_LGUI) return (m & MAGIC_NO_GUI) ? KC_NO : KC_LGUI;
-            break;
-        case KC_RALT:
-            if (m & MAGIC_SWAP_RALT_RGUI) return (m & MAGIC_NO_GUI) ? KC_NO : KC_RGUI;
-            break;
-        case KC_LGUI:
-            if (m & MAGIC_SWAP_LALT_LGUI) return KC_LALT;
-            if (m & MAGIC_SWAP_LCTL_LGUI) return KC_LCTL;
-            return (m & MAGIC_NO_GUI) ? KC_NO : kc;
-        case KC_RGUI:
-            if (m & MAGIC_SWAP_RALT_RGUI) return KC_RALT;
-            if (m & MAGIC_SWAP_RCTL_RGUI) return KC_RCTL;
-            return (m & MAGIC_NO_GUI) ? KC_NO : kc;
-        case KC_GRV:
-            return (m & MAGIC_SWAP_GRV_ESC) ? KC_ESC : kc;
-        case KC_ESC:
-            return (m & MAGIC_SWAP_GRV_ESC) ? KC_GRV : kc;
-        case KC_BSLS:
-            return (m & MAGIC_SWAP_BSLS_BSPC) ? KC_BSPC : kc;
-        case KC_BSPC:
-            return (m & MAGIC_SWAP_BSLS_BSPC) ? KC_BSLS : kc;
-        default:
-            break;
+        }
+    }
+    if ((m & MAGIC_NO_GUI) && (kc == KC_LGUI || kc == KC_RGUI)) {
+        return KC_NO;
     }
     return kc;
 }
