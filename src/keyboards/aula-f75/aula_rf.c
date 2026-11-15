@@ -319,9 +319,33 @@ __xdata uint8_t rf_batt_pct;
 #define RF_Q_SLOTS 6
 #define RF_Q_SIZE  28
 static __xdata uint8_t q_buf[RF_Q_SLOTS][RF_Q_SIZE];
+static __xdata uint8_t heal_frame[RF_Q_SIZE]; /* the last keyboard report frame */
 static __xdata uint8_t q_head;
 static __xdata uint8_t q_tail;
 static __xdata uint8_t q_count;
+
+/*
+ * Report pacing and healing.
+ *
+ * The module acknowledges every report frame (02 02 / 02 03, see above) but
+ * has no flow control ("module ready" P4.7 is always high), so frames sent
+ * back to back could reach it while it was still busy with the previous one:
+ * the tap of a tap-hold key -- press and release in the same instant -- lost
+ * its press, and a lost release left a key "held" on the host, auto-repeating
+ * until the next frame. So:
+ *  - after a report frame, the next one waits for its ACK, at most
+ *    RF_ACK_WAIT_TICKS (never stalls if an ACK goes missing);
+ *  - RF_HEAL_TICKS after the last keyboard report, if nothing else is queued,
+ *    that report is sent once more: the host already has that state, unless
+ *    a frame got lost, and then it heals before auto-repeat (>= 250 ms) kicks in.
+ */
+#define RF_ACK_WAIT_TICKS 20u /* 20 * 400 us = 8 ms */
+#define RF_HEAL_TICKS     75u /* 75 * 400 us = 30 ms */
+static volatile __xdata uint8_t ack_wait;
+static volatile __xdata uint8_t heal_ticks;
+static volatile __bit           heal_due;
+static __bit                    heal_valid;
+static __bit                    heal_sending;
 
 /*
  * Selector debounce counters, one per position (0x08BD/0x02DF/0x0960).
@@ -608,7 +632,7 @@ static void rf_queue_report(uint8_t cmd, const __xdata uint8_t *data, uint8_t le
  */
 static void rf_queue_flush(void)
 {
-    while (q_count != 0 && rf_can_send(RF_GATE_REPORT)) {
+    while (q_count != 0 && ack_wait == 0u && rf_can_send(RF_GATE_REPORT)) {
         const __xdata uint8_t *slot = q_buf[q_tail];
         const uint8_t          len =
             (slot[0] == RF_CMD_REPORT_L) ? RF_LEN_REPORT_L : RF_LEN_REPORT_S;
@@ -619,6 +643,17 @@ static void rf_queue_flush(void)
         }
         if (!rf_send_frame(len, RF_GATE_REPORT)) {
             return; /* keep the slot for the next pass */
+        }
+        ack_wait = RF_ACK_WAIT_TICKS; /* next report waits for this one's ACK */
+        if (slot[0] == RF_CMD_REPORT_L) {
+            if (heal_sending) {
+                heal_sending = 0; /* the heal frame itself: no new heal */
+            } else {
+                memcpy(heal_frame, slot, RF_Q_SIZE);
+                heal_valid = 1;
+                heal_due   = 0;
+                heal_ticks = RF_HEAL_TICKS;
+            }
         }
         if (slot[0] == RF_CMD_REPORT_L && followup_arm_pending) {
             const bool et2       = ET2;
@@ -1016,6 +1051,9 @@ static void rf_rx_classify(void)
         rf_rx_dump(RF_WHY_OK02);
         return;
     }
+    if (type == RF_RX_TYPE_STATUS && (rx_buf[1] == RF_CMD_REPORT_L || rx_buf[1] == RF_CMD_REPORT_S)) {
+        ack_wait = 0; /* report ACK: the next report may go */
+    }
     rf_rx_dump(RF_WHY_ANN);
 }
 
@@ -1183,12 +1221,17 @@ static void rf_probe_reset(void)
     probe_due            = 0;
     followup_ticks       = 0;
     followup_due         = 0;
+    ack_wait             = 0;
+    heal_ticks           = 0;
+    heal_due             = 0;
     ET2                  = et2;
     followup_left        = 0;
     followup_arm_pending = 0;
     lock_key_down        = 0;
     probe_misses         = 0;
     probe_answered       = 0;
+    heal_valid           = 0; /* never replay a report to another host */
+    heal_sending         = 0;
 }
 
 static void rf_enter_24g(void)
@@ -1366,6 +1409,12 @@ void rf_tick(void)
     if (++probe_ticks >= RF_PROBE_TICKS) {
         probe_ticks = 0;
         probe_due   = 1;
+    }
+    if (ack_wait != 0u) {
+        ack_wait--;
+    }
+    if (heal_ticks != 0u && --heal_ticks == 0u) {
+        heal_due = 1;
     }
     if (followup_ticks != 0u) {
         if (--followup_ticks == 0u) {
@@ -1609,6 +1658,11 @@ void rf_task(void)
             if (rf_send_name(name_stage, (name_stage == 0) ? rf_name_bt3 : rf_name_bt5)) {
                 name_stage++;
             }
+        }
+        if (heal_due && q_count == 0u && heal_valid) { /* see "Report pacing" */
+            heal_due     = 0;
+            heal_sending = 1;
+            rf_queue_report(heal_frame[0], &heal_frame[1], (uint8_t)(RF_Q_SIZE - 1u));
         }
         rf_queue_flush();
         rf_probe_task();
