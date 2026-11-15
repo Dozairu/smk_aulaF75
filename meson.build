@@ -65,6 +65,10 @@ if get_option('sleep').enabled()
     cc_base_args += '-DSLEEP_ENABLE=1'
 endif
 
+if get_option('rgb_default_off')
+    cc_base_args += '-DRGB_DEFAULT_OFF=1'
+endif
+
 if get_option('via').enabled()
     cc_base_args += '-DVIA_ENABLE=1'
     cc_base_args += '-DDYNAMIC_KEYMAP_ENABLE=1'

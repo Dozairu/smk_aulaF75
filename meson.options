@@ -1,5 +1,11 @@
 option('nkro', type : 'feature', value : 'enabled', description : 'NKRO support')
 option(
+    'rgb_default_off',
+    type : 'boolean',
+    value : false,
+    description : 'Boot with the RGB effect off whenever lighting settings are reset (first boot after every flash). Effects can still be turned on from the keyboard or VIA.',
+)
+option(
     'via',
     type : 'feature',
     value : 'disabled',

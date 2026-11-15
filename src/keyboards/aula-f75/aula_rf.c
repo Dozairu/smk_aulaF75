@@ -183,6 +183,7 @@ static __xdata uint8_t   bt_slot;
 static __bit             link_connected;
 static __bit             vbus_present;
 static __bit             rf_charging;
+static __bit             charge_known; /* P7_7 has settled since VBUS rose */
 static __xdata uint8_t   vbus_on_cnt;
 static __xdata uint8_t   vbus_off_cnt;
 static __xdata uint8_t   chg_on_cnt;
@@ -1542,19 +1543,24 @@ static void rf_charge_poll(void)
     P7_6 = vbus_present ? 0 : 1;
 
     if (!vbus_present) {
-        chg_on_cnt  = 0;
-        chg_off_cnt = 0;
-        rf_charging = 0;
+        chg_on_cnt   = 0;
+        chg_off_cnt  = 0;
+        rf_charging  = 0;
+        charge_known = 0;
         return;
     }
 
+    /* `charge_known` stays clear until either verdict has been reached, so the
+     * LED does not claim "full" during the first samples after plug-in, when
+     * `rf_charging` is still at its initial 0. */
     if (!P7_7) {
         chg_off_cnt = 0;
         if (chg_on_cnt < 20) {
             chg_on_cnt++;
         }
         if (chg_on_cnt >= 20) {
-            rf_charging = 1;
+            rf_charging  = 1;
+            charge_known = 1;
         }
     } else {
         chg_on_cnt = 0;
@@ -1562,7 +1568,8 @@ static void rf_charge_poll(void)
             chg_off_cnt++;
         }
         if (chg_off_cnt >= 200) {
-            rf_charging = 0;
+            rf_charging  = 0;
+            charge_known = 1;
         }
     }
 }
@@ -1643,11 +1650,23 @@ void rf_task(void)
         prev_batt_pct = rf_batt_pct;
         keyboard_state.battery_level = (uint8_t)(((uint16_t)rf_batt_pct * 7u + 50u) / 100u);
     }
+#ifdef AULA_FAKE_LOW_BATT
+    {
+        /* Test builds only: exercise the low-battery visuals without draining
+         * the battery. Never define this in a firmware you keep. Read through
+         * a volatile so SDCC cannot fold the branches below (error 110). */
+        static volatile __xdata uint8_t fake_low = 1;
+        batt_low = fake_low ? 1 : 0;
+    }
+#endif
     keyboard_state.low_power     = batt_low ? 1 : 0;
 
-    /* The status LED tracks these four. All edge detection lives in
-     * `aula_status.c`: here we only publish the state. */
-    aula_status_poll(keyboard_state.rf_link, link_connected, batt_low, rf_charging);
+    /* The status LED tracks these. All edge detection lives in
+     * `aula_status.c`: here we only publish the state. Low battery is only
+     * reported on battery -- with the cable in, charging/full take over. */
+    aula_status_poll(keyboard_state.rf_link, link_connected,
+                     batt_low && !vbus_present, rf_charging,
+                     vbus_present && charge_known && !rf_charging);
 
     rf_diag_state[RF_DIAG_P74]    = P7_4 ? 1 : 0;
     rf_diag_state[RF_DIAG_P45]    = P4_5 ? 1 : 0;

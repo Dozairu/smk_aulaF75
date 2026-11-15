@@ -20,13 +20,20 @@
  *   AULA_STATUS_LOST         2 long flashes         32 steps  1.21 s
  *   AULA_STATUS_SLEEP_IN     fade out               21 steps  0.80 s
  *   AULA_STATUS_SLEEP_OUT    fade in                11 steps  0.42 s
- *   AULA_STATUS_LOW_BATT     slow pulse             40 steps  1.52 s  (loops)
+ *   AULA_STATUS_LOW_BATT     bright slow pulse      40 steps  1.52 s  (loops)
+ *   AULA_STATUS_CHARGING     breath (LINKED data)   24 steps  0.91 s  (loops)
+ *   AULA_STATUS_FULL         steady glow             1 step           (loops)
+ *
+ * The LED is white only (green + blue drive the same die), so charging, full
+ * and low battery are told apart by rhythm: breathing, steady, pulse-and-rest.
+ * LOW_BATT used to peak at 64/255, which was invisible in daylight; it is now
+ * the same curve scaled to full range.
  *
  * Everything fits in a single flat array with offset and length tables: an
  * array of `__code` pointers would cost more flash and an extra indirection on
  * every step, for nothing.
  */
-static const __code uint8_t pat_data[197] = {
+static const __code uint8_t pat_data[198] = {
     255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
     255, 255, 255, 255, 255, 255, 255, 255, 255, 255,   0,   0,
       0,   0,   0, 255, 255, 255, 255, 255, 255, 255, 255, 255,
@@ -40,18 +47,28 @@ static const __code uint8_t pat_data[197] = {
     255, 255, 255, 255, 255, 255, 242, 228, 214, 200, 185, 170,
     155, 140, 124, 108,  92,  76,  62,  48,  36,  26,  17,  10,
       4,   0,   0,  20,  50,  90, 135, 180, 215, 240, 255, 255,
-      0,   0,   4,  10,  18,  28,  40,  52,  60,  64,  60,  52,
-     40,  28,  18,  10,   4,   0,   0,   0,   0,   0,   0,   0,
+      0,   0,  16,  40,  72, 112, 160, 208, 240, 255, 240, 208,
+    160, 112,  72,  40,  16,   0,   0,   0,   0,   0,   0,   0,
       0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
       0,   0,   0,   0,   0,
+    /* 197: FULL -- one constant step, looped. Moderate so it is not a
+     * lighthouse on a desk at night. */
+    120,
 };
 
-static const __code uint8_t pat_off[9] = {0,  16, 33,  61,  69,  93,
-                                          125, 146, 157};
-static const __code uint8_t pat_len[9] = {16, 17, 28, 8, 24, 32, 21, 11, 40};
+/* CHARGING (9) reuses the LINKED breath (offset 69, 24 steps) as a loop. */
+static const __code uint8_t pat_off[11] = {0,  16, 33,  61,  69,  93,
+                                           125, 146, 157, 69, 197};
+static const __code uint8_t pat_len[11] = {16, 17, 28, 8, 24, 32, 21, 11, 40, 24, 1};
 
-/* Bit N set: pattern N loops instead of ending (pairing, low battery). */
-#define PAT_LOOPING 0x0108u
+/* Bit N set: pattern N loops instead of ending (pairing, low battery,
+ * charging, full). */
+#define PAT_LOOPING 0x0708u
+
+/* Resting states: they hold the LED between events and are re-evaluated when
+ * the battery state changes. */
+#define PAT_RESTING(p) ((p) == AULA_STATUS_LOW_BATT || (p) == AULA_STATUS_CHARGING || \
+                        (p) == AULA_STATUS_FULL)
 
 #define PAT_LOOPS(p) ((PAT_LOOPING & (uint16_t)(1u << (p))) != 0u)
 
@@ -64,15 +81,17 @@ static __xdata uint8_t prev_link = 0xFF;
 static __bit           prev_conn;
 static __bit           prev_low;
 static __bit           prev_chg;
+static __bit           prev_full;
 static __bit           low_batt;
 static __bit           chg_active;
+static __bit           chg_full;
 
 static bool status_pattern_allowed(uint8_t p)
 {
     if (p == AULA_STATUS_NONE) {
         return false;
     }
-    if (p == AULA_STATUS_LOW_BATT || (p == AULA_STATUS_LINKED && chg_active && !low_batt)) {
+    if (PAT_RESTING(p)) {
         return user_settings.ul_speed != 0;
     }
     return user_settings.battery_indicator_on != 0;
@@ -93,10 +112,14 @@ void aula_status_event(uint8_t event)
  * cannot be told apart, so one must be chosen. */
 static void status_rest(void)
 {
-    if (low_batt) {
+    /* Charging outranks low battery: once the cable is in, "it is charging"
+     * is the news. The caller only reports `low` while running on battery. */
+    if (chg_active) {
+        st_pat = AULA_STATUS_CHARGING;
+    } else if (chg_full) {
+        st_pat = AULA_STATUS_FULL;
+    } else if (low_batt) {
         st_pat = AULA_STATUS_LOW_BATT;
-    } else if (chg_active) {
-        st_pat = AULA_STATUS_LINKED;
     } else {
         st_pat = AULA_STATUS_NONE;
     }
@@ -144,17 +167,19 @@ uint8_t aula_status_level(void)
     return pat_data[(uint8_t)(pat_off[p] + st_pos)];
 }
 
-void aula_status_poll(uint8_t link, bool connected, bool low, bool charging)
+void aula_status_poll(uint8_t link, bool connected, bool low, bool charging, bool full)
 {
-    /* Low battery and charging do not trigger one-shot patterns: they are
-     * STATES that hold the indicator at rest and yield to any event. */
-    if (low != prev_low || charging != prev_chg) {
+    /* Low battery, charging and full do not trigger one-shot patterns: they
+     * are STATES that hold the indicator at rest and yield to any event. */
+    if (low != prev_low || charging != prev_chg || full != prev_full) {
         prev_low   = low;
         low_batt   = low;
         prev_chg   = charging;
         chg_active = charging;
+        prev_full  = full;
+        chg_full   = full;
         ET2        = 0;
-        if (st_pat == AULA_STATUS_NONE || st_pat == AULA_STATUS_LOW_BATT) {
+        if (st_pat == AULA_STATUS_NONE || PAT_RESTING(st_pat)) {
             status_rest();
         }
         ET2 = 1;

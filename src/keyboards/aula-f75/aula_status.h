@@ -28,7 +28,9 @@
 #define AULA_STATUS_LOST      5 /* link lost                 : 2 long flashes  */
 #define AULA_STATUS_SLEEP_IN  6 /* entering sleep            : fade out        */
 #define AULA_STATUS_SLEEP_OUT 7 /* waking from sleep         : fade in         */
-#define AULA_STATUS_LOW_BATT  8 /* low battery               : slow pulse      */
+#define AULA_STATUS_LOW_BATT  8 /* low battery (on battery)  : bright pulse    */
+#define AULA_STATUS_CHARGING  9 /* charging                  : looping breath  */
+#define AULA_STATUS_FULL      10 /* USB in, charge complete  : steady glow     */
 #define AULA_STATUS_NONE      0xFF
 
 /* From the main loop: plays a pattern, overriding whichever is currently running. */
@@ -39,7 +41,7 @@ void aula_status_event(uint8_t event);
  * posts the corresponding event. All edge-detection logic lives here so that
  * `aula_rf.c` only has a single line to call.
  */
-void aula_status_poll(uint8_t link, bool connected, bool low_batt, bool charging);
+void aula_status_poll(uint8_t link, bool connected, bool low_batt, bool charging, bool full);
 
 /* True while a ONE-SHOT pattern is playing. Looping patterns -- pairing,
  * low battery -- do not count: they never finish on their own. */

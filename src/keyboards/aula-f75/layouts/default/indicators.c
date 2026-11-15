@@ -1508,7 +1508,11 @@ void indicators_post_update(void)
 
 void indicators_apply_defaults(void)
 {
+#ifdef RGB_DEFAULT_OFF
+    user_settings.led_effect     = AULA_FX_OFF;  /* meson -Drgb_default_off=true */
+#else
     user_settings.led_effect     = AULA_FX_LAKE; /* requested as default */
+#endif
     user_settings.led_brightness = LED_BRIGHTNESS_DEFAULT;
     user_settings.led_speed      = LED_SPEED_DEFAULT;
     user_settings.ul_effect            = AULA_FX_COLOR_WHEEL; /* rainbow, as in factory firmware */
