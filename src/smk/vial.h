@@ -25,4 +25,9 @@ bool vial_unlocked(void);
 /* From the tick ISR, ~400 us per call: timebase for the unlock hold. */
 void vial_tick(void);
 
+/* QMK settings in the dynamic store (dynamic_vial_store()):
+ * defaults when the store is created, and store -> action engine. */
+void vial_store_defaults(void);
+void vial_store_apply(void);
+
 #endif

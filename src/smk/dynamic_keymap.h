@@ -27,7 +27,23 @@
 #endif
 #define DYNAMIC_ENCODER_BYTES ((uint16_t)DYNAMIC_KEYMAP_LAYER_COUNT * DYNAMIC_ENCODER_COUNT * 4u)
 
-#define DYNAMIC_STORE_BYTES ((uint16_t)(DYNAMIC_KEYMAP_BYTES + DYNAMIC_MACRO_BYTES + DYNAMIC_ENCODER_BYTES))
+/* Vial-owned bytes at the end of the store (QMK settings, later the dynamic
+ * entries). Laid out and interpreted by vial.c; this file only keeps them. */
+#ifdef VIAL_ENABLE
+#    ifndef DYNAMIC_VIAL_BYTES
+#        define DYNAMIC_VIAL_BYTES 16u
+#    endif
+#else
+#    define DYNAMIC_VIAL_BYTES 0u
+#endif
+
+#define DYNAMIC_STORE_BYTES ((uint16_t)(DYNAMIC_KEYMAP_BYTES + DYNAMIC_MACRO_BYTES + DYNAMIC_ENCODER_BYTES + DYNAMIC_VIAL_BYTES))
+
+#if defined(VIAL_ENABLE)
+/* The Vial area inside the XDATA mirror, and "it changed, save it soon". */
+__xdata uint8_t *dynamic_vial_store(void);
+void             dynamic_vial_mark_dirty(void);
+#endif
 
 void dynamic_keymap_init(void);
 void dynamic_keymap_tick(void);

@@ -10,7 +10,8 @@ then runs the handshake Vial GUI does and checks each answer:
   - Vial keyboard id: protocol 6 + 8-byte UID
   - definition: size, every 32-byte page, LZMA-decompresses to JSON, and
     (if a vial.json is given) equals it
-  - encoder 0 on layer 0, unlock status, QMK settings / dynamic entries empty
+  - encoder 0 on layer 0, unlock status, QMK settings listed + readable,
+    dynamic entries empty
 
 Nothing is written to the keyboard. Needs read/write access to the hidraw node
 (udev rule or ACL, as for VIA in the browser).
@@ -101,8 +102,20 @@ def main():
     keys = [(r[i], r[i + 1]) for i in range(2, 30, 2) if r[i] != 0xFF]
     good &= check(r[0] in (0, 1) and r[1] in (0, 1) and len(keys) > 0, 'unlock status: unlocked={} in_progress={} keys={}'.format(r[0], r[1], keys))
 
-    r = d.xfer(0xFE, 0x09, 0, 0)
-    good &= check(r[:2] == b'\xff\xff', 'QMK settings query: none')
+    names = {6: "one-shot timeout", 7: "tapping term", 22: "permissive hold",
+             23: "hold on other key press", 24: "retro tapping", 25: "quick tap term"}
+    widths = {6: 2, 7: 2, 25: 2}
+    supported, cur = [], 0
+    while cur != 0xFFFF:
+        r = d.xfer(0xFE, 0x09, *struct.pack("<H", cur))
+        ids = [int.from_bytes(r[i:i + 2], "little") for i in range(0, 32, 2)]
+        supported += [q for q in ids if q != 0xFFFF]
+        cur = max(ids)
+    good &= check(sorted(supported) == sorted(names), "QMK settings listed: {}".format(supported))
+    for q in supported:
+        r = d.xfer(0xFE, 0x0A, *struct.pack("<H", q))
+        v = int.from_bytes(r[1:1 + widths.get(q, 1)], "little")
+        good &= check(r[0] == 0, "  {} (qsid {}) = {}".format(names.get(q, "?"), q, v))
 
     r = d.xfer(0xFE, 0x0D, 0x00)
     good &= check(r[:4] == b'\x00\x00\x00\x00', 'dynamic entries: TD/combo/KO/alt-repeat = {}'.format(list(r[:4])))

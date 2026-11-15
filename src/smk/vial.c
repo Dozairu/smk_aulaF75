@@ -2,6 +2,7 @@
 
 #ifdef VIAL_ENABLE
 
+#    include "action.h"
 #    include "dynamic_keymap.h"
 #    include "kbdef.h"
 #    include "matrix.h"
@@ -17,8 +18,10 @@
  * request buffer is edited in place and sent back, integers are little-endian
  * except keycodes, which are big-endian like the rest of VIA.
  *
+ * QMK settings (0x09..0x0C) expose the action engine's knobs; only settings
+ * the engine implements are listed, and Vial GUI shows only listed ones.
+ *
  * Not yet backed by firmware features, so reported as empty:
- *   - QMK settings (0x09 query answers "none"),
  *   - dynamic entries (0x0D: zero tap dances / combos / key overrides).
  * Vial GUI hides the corresponding tabs.
  */
@@ -33,6 +36,9 @@
 #    define VIAL_UNLOCK_POLL           0x07u
 #    define VIAL_LOCK                  0x08u
 #    define VIAL_QMK_SETTINGS_QUERY    0x09u
+#    define VIAL_QMK_SETTINGS_GET      0x0Au
+#    define VIAL_QMK_SETTINGS_SET      0x0Bu
+#    define VIAL_QMK_SETTINGS_RESET    0x0Cu
 #    define VIAL_DYNAMIC_ENTRY_OP      0x0Du
 
 #    define DYNAMIC_VIAL_GET_NUMBER_OF_ENTRIES 0x00u
@@ -132,6 +138,145 @@ static void unlock_poll(void)
     }
 }
 
+/* ------------------------------------------------------------ QMK settings
+ *
+ * Stored in the Vial area of the dynamic store, little-endian:
+ *   [0..1] tapping term   [2..3] quick tap term   [4..5] one-shot timeout
+ *   [6]    flags (ACTION_PERMISSIVE_HOLD | ...)    [7]    marker
+ * QSIDs and wire widths follow vial-gui's qmk_settings.json: integers are
+ * u16 LE, the three tap-hold booleans are each their own QSID carrying 0/1.
+ */
+#    define QS_TAPPING_TERM   0u
+#    define QS_QUICK_TAP_TERM 2u
+#    define QS_OSK_TIMEOUT    4u
+#    define QS_FLAGS          6u
+#    define QS_MARKER         7u
+#    define QS_MARKER_VALUE   0x51u
+
+#    define QSID_OSK_TIMEOUT       6u
+#    define QSID_TAPPING_TERM      7u
+#    define QSID_PERMISSIVE_HOLD   22u
+#    define QSID_HOLD_ON_OTHER_KEY 23u
+#    define QSID_RETRO_TAPPING     24u
+#    define QSID_QUICK_TAP_TERM    25u
+
+/* Ascending: the query pages through them in order. */
+static const __code uint8_t qsids[] = {
+    QSID_OSK_TIMEOUT,     QSID_TAPPING_TERM,  QSID_PERMISSIVE_HOLD,
+    QSID_HOLD_ON_OTHER_KEY, QSID_RETRO_TAPPING, QSID_QUICK_TAP_TERM,
+};
+
+static uint16_t qs_rd16(uint8_t off)
+{
+    const __xdata uint8_t *s = dynamic_vial_store();
+    return (uint16_t)s[off] | (uint16_t)((uint16_t)s[off + 1u] << 8);
+}
+
+static void qs_wr16(uint8_t off, uint16_t v)
+{
+    __xdata uint8_t *s = dynamic_vial_store();
+    s[off]      = (uint8_t)v;
+    s[off + 1u] = (uint8_t)(v >> 8);
+}
+
+void vial_store_defaults(void)
+{
+    __xdata uint8_t *s = dynamic_vial_store();
+    memset(s, 0, DYNAMIC_VIAL_BYTES);
+    qs_wr16(QS_TAPPING_TERM, ACTION_TAPPING_TERM_DEFAULT);
+    qs_wr16(QS_QUICK_TAP_TERM, ACTION_TAPPING_TERM_DEFAULT);
+    qs_wr16(QS_OSK_TIMEOUT, ACTION_OSK_TIMEOUT_DEFAULT);
+    s[QS_FLAGS]  = 0;
+    s[QS_MARKER] = QS_MARKER_VALUE;
+}
+
+void vial_store_apply(void)
+{
+    if (dynamic_vial_store()[QS_MARKER] != QS_MARKER_VALUE) {
+        vial_store_defaults();
+        dynamic_vial_mark_dirty();
+    }
+    action_config.tapping_term   = qs_rd16(QS_TAPPING_TERM);
+    action_config.quick_tap_term = qs_rd16(QS_QUICK_TAP_TERM);
+    action_config.osk_timeout    = qs_rd16(QS_OSK_TIMEOUT);
+    action_config.flags          = dynamic_vial_store()[QS_FLAGS];
+}
+
+static uint8_t qsid_flag(uint16_t qsid)
+{
+    switch (qsid) {
+        case QSID_PERMISSIVE_HOLD:   return ACTION_PERMISSIVE_HOLD;
+        case QSID_HOLD_ON_OTHER_KEY: return ACTION_HOLD_ON_OTHER_KEY_PRESS;
+        case QSID_RETRO_TAPPING:     return ACTION_RETRO_TAPPING;
+        default:                     return 0;
+    }
+}
+
+static uint8_t qsid_u16_offset(uint16_t qsid)
+{
+    switch (qsid) {
+        case QSID_TAPPING_TERM:   return QS_TAPPING_TERM;
+        case QSID_QUICK_TAP_TERM: return QS_QUICK_TAP_TERM;
+        case QSID_OSK_TIMEOUT:    return QS_OSK_TIMEOUT;
+        default:                  return 0xFFu;
+    }
+}
+
+static void qmk_settings_query(__xdata uint8_t *data)
+{
+    const uint16_t gt = (uint16_t)data[2] | (uint16_t)((uint16_t)data[3] << 8);
+    uint8_t        o  = 0;
+    memset(data, 0xFF, RAW_HID_REPORT_SIZE); /* 0xFFFF = end of list */
+    for (uint8_t i = 0; i < sizeof(qsids); i++) {
+        if (qsids[i] > gt) {
+            data[o++] = qsids[i];
+            data[o++] = 0;
+        }
+    }
+}
+
+static void qmk_settings_get(__xdata uint8_t *data)
+{
+    const uint16_t qsid = (uint16_t)data[2] | (uint16_t)((uint16_t)data[3] << 8);
+    const uint8_t  off  = qsid_u16_offset(qsid);
+    const uint8_t  flag = qsid_flag(qsid);
+
+    memset(data, 0, RAW_HID_REPORT_SIZE);
+    if (off != 0xFFu) {
+        const uint16_t v = qs_rd16(off);
+        data[1] = (uint8_t)v;
+        data[2] = (uint8_t)(v >> 8);
+    } else if (flag) {
+        data[1] = (dynamic_vial_store()[QS_FLAGS] & flag) ? 1u : 0u;
+    } else {
+        data[0] = 0xFFu; /* unknown setting */
+    }
+}
+
+static void qmk_settings_set(__xdata uint8_t *data)
+{
+    const uint16_t qsid = (uint16_t)data[2] | (uint16_t)((uint16_t)data[3] << 8);
+    const uint8_t  off  = qsid_u16_offset(qsid);
+    const uint8_t  flag = qsid_flag(qsid);
+
+    if (off != 0xFFu) {
+        qs_wr16(off, (uint16_t)data[4] | (uint16_t)((uint16_t)data[5] << 8));
+    } else if (flag) {
+        __xdata uint8_t *s = dynamic_vial_store();
+        if (data[4] & 1u) {
+            s[QS_FLAGS] |= flag;
+        } else {
+            s[QS_FLAGS] &= (uint8_t)~flag;
+        }
+    } else {
+        data[0] = 0xFFu;
+        return;
+    }
+    vial_store_apply();
+    dynamic_vial_mark_dirty();
+    data[0] = 0;
+}
+
 void vial_process(__xdata uint8_t *data)
 {
     switch (data[1]) {
@@ -212,8 +357,21 @@ void vial_process(__xdata uint8_t *data)
             break;
 
         case VIAL_QMK_SETTINGS_QUERY:
-            /* No settings: 0xFFFF in the first slot ends the GUI's query loop. */
-            memset(data, 0xFF, RAW_HID_REPORT_SIZE);
+            qmk_settings_query(data);
+            break;
+
+        case VIAL_QMK_SETTINGS_GET:
+            qmk_settings_get(data);
+            break;
+
+        case VIAL_QMK_SETTINGS_SET:
+            qmk_settings_set(data);
+            break;
+
+        case VIAL_QMK_SETTINGS_RESET:
+            vial_store_defaults();
+            vial_store_apply();
+            dynamic_vial_mark_dirty();
             break;
 
         case VIAL_DYNAMIC_ENTRY_OP:

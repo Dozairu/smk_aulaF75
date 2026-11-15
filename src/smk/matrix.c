@@ -63,6 +63,23 @@ static void emit_keyboard_report(void)
     }
 }
 
+/*
+ * Called before any key or modifier is RELEASED. matrix_task() batches all the
+ * changes of one scan into a single report; that is fine for presses, but a
+ * tap decided by its own release (LT/MT tap, retro tap) presses AND releases
+ * the tap keycode inside the same batch, and the one report that goes out no
+ * longer contains it -- the host never sees the key. So a press still waiting
+ * in the batch goes out first. EP1 sends drain the endpoint, so the two
+ * reports cannot overwrite each other.
+ */
+static void flush_pending_press(void)
+{
+    if (report_batching && report_dirty) {
+        report_dirty = false;
+        send_keyboard_report();
+    }
+}
+
 void set_default_layer(uint8_t layer)
 {
     action_set_default_layer(layer);
@@ -88,6 +105,7 @@ void send_keycode(uint16_t qcode, bool pressed)
             emit_keyboard_report();
             send_keycode(QK_MODS_GET_BASIC_KEYCODE(qcode), true);
         } else {
+            flush_pending_press();
             send_keycode(QK_MODS_GET_BASIC_KEYCODE(qcode), false);
             del_mods(mods);
             emit_keyboard_report();
@@ -99,6 +117,7 @@ void send_keycode(uint16_t qcode, bool pressed)
         if (pressed) {
             add_mods(MOD_BIT((uint8_t)(qcode & 0xFF)));
         } else {
+            flush_pending_press();
             del_mods(MOD_BIT((uint8_t)(qcode & 0xFF)));
         }
         emit_keyboard_report();
@@ -109,6 +128,7 @@ void send_keycode(uint16_t qcode, bool pressed)
         if (pressed) {
             add_key((uint8_t)(qcode & 0xFF));
         } else {
+            flush_pending_press();
             del_key((uint8_t)(qcode & 0xFF));
         }
         emit_keyboard_report();
@@ -164,6 +184,7 @@ void action_hal_mods(uint8_t mods, bool on)
     if (on) {
         add_mods(mods);
     } else {
+        flush_pending_press();
         del_mods(mods);
     }
     emit_keyboard_report();

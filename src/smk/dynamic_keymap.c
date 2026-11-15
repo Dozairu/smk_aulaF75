@@ -6,12 +6,18 @@
 #    include "kbdef.h"
 #    include "layout.h"
 #    include "tick.h"
+#    include "vial.h"
 #    include <string.h>
 
 #    define DYNAMIC_KEYMAP_MAGIC0  0x56u
 #    define DYNAMIC_KEYMAP_MAGIC1  0x49u
 #    ifndef DYNAMIC_KEYMAP_STORAGE_VERSION
-#        define DYNAMIC_KEYMAP_STORAGE_VERSION 0x01u
+#        ifdef VIAL_ENABLE
+/* The store gained the Vial area: a different layout, never load the old one. */
+#            define DYNAMIC_KEYMAP_STORAGE_VERSION 0x02u
+#        else
+#            define DYNAMIC_KEYMAP_STORAGE_VERSION 0x01u
+#        endif
 #    endif
 #    define DYNAMIC_KEYMAP_VERSION DYNAMIC_KEYMAP_STORAGE_VERSION
 #    define DYNAMIC_KEYMAP_HEADER  8u
@@ -191,6 +197,22 @@ void dynamic_keymap_reset(void)
     }
 }
 
+#    ifdef VIAL_ENABLE
+__xdata uint8_t *dynamic_vial_store(void)
+{
+    return &dynamic_keymap[DYNAMIC_KEYMAP_BYTES + DYNAMIC_MACRO_BYTES + DYNAMIC_ENCODER_BYTES];
+}
+
+void dynamic_vial_mark_dirty(void)
+{
+    __critical
+    {
+        dirty      = true;
+        save_delay = 1024;
+    }
+}
+#    endif
+
 void dynamic_keymap_init(void)
 {
     dirty      = false;
@@ -198,8 +220,14 @@ void dynamic_keymap_init(void)
     if (!load_flash()) {
         dynamic_macro_reset();
         dynamic_keymap_reset();
+#    ifdef VIAL_ENABLE
+        vial_store_defaults();
+#    endif
         save_flash();
     }
+#    ifdef VIAL_ENABLE
+    vial_store_apply(); /* QMK settings -> action engine */
+#    endif
 }
 
 void dynamic_keymap_tick(void)
