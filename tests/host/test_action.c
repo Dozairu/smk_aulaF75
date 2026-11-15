@@ -81,6 +81,18 @@ bool action_hal_tap_dance(uint8_t index, uint16_t *entry)
     return true;
 }
 
+#define COMBO_COUNT 4
+static uint16_t combos[COMBO_COUNT][COMBO_FIELDS];
+
+bool action_hal_combo(uint8_t index, uint16_t *entry)
+{
+    if (index >= COMBO_COUNT) {
+        return false;
+    }
+    memcpy(entry, combos[index], sizeof combos[index]);
+    return true;
+}
+
 /* -------------------------------------------------------------- harness */
 
 static int failures;
@@ -90,6 +102,7 @@ static void reset(uint8_t flags)
 {
     memset(keymap, 0, sizeof keymap); /* KC_NO everywhere */
     memset(tds, 0, sizeof tds);
+    memset(combos, 0, sizeof combos);
     for (int l = 1; l < LAYERS; l++) {
         for (int r = 0; r < ROWS; r++) {
             for (int c = 0; c < COLS; c++) {
@@ -531,6 +544,104 @@ static void t_td_term_and_layers(void)
     expect_idle("TD term and layers");
 }
 
+/* --------------------------------------------------------------- combos */
+
+#define J_ 1, 0
+#define K_ 1, 1
+#define L_ 1, 2
+#define X_ 1, 3
+
+/* J K L X on row 1; combo 0: J + K -> Esc. */
+static void combo_setup(void)
+{
+    reset(0);
+    keymap[0][1][0] = KC_J;
+    keymap[0][1][1] = KC_K;
+    keymap[0][1][2] = KC_L;
+    keymap[0][1][3] = KC_X;
+    combos[0][0]            = KC_J;
+    combos[0][1]            = KC_K;
+    combos[0][COMBO_OUTPUT] = KC_ESC;
+}
+
+static void t_combo_basic(void)
+{
+    combo_setup();
+    dn(J_); dn(K_);
+    expect("combo fires when complete", "+29");
+    up(J_);
+    expect("combo released by its first key", "-29");
+    up(K_);
+    expect("second key's release swallowed", "");
+
+    dn(J_); up(J_);
+    expect("combo key tapped alone", "+0D -0D");
+
+    dn(J_); wait_ms(60);
+    expect("combo key held past the term", "+0D");
+    dn(K_); up(K_); up(J_);
+    expect("late second key types normally", "+0E -0E -0D");
+
+    dn(J_); dn(X_); up(X_); up(J_);
+    expect("combo key, then a non-combo key", "+0D +1B -1B -0D");
+
+    dn(K_); dn(J_); up(K_); up(J_);
+    expect("combo keys in either order", "+29 -29");
+
+    dn(J_); dn(K_); dn(X_); up(X_); up(K_); up(J_);
+    expect("other keys while a combo is held", "+29 +1B -1B -29");
+    expect_idle("combo basic");
+}
+
+static void t_combo_overlap(void)
+{
+    combo_setup();
+    combos[1][0]            = KC_J;
+    combos[1][1]            = KC_K;
+    combos[1][2]            = KC_L;
+    combos[1][COMBO_OUTPUT] = KC_B;
+
+    dn(J_); dn(K_);
+    expect("J+K waits: J+K+L could still form", "");
+    dn(L_);
+    expect("J+K+L fires", "+05");
+    up(L_); up(K_); up(J_);
+    expect("J+K+L released", "-05");
+
+    dn(J_); dn(K_); wait_ms(60);
+    expect("J+K fires at the combo term", "+29");
+    up(J_); up(K_);
+    expect("J+K released", "-29");
+
+    dn(J_); dn(K_); up(K_);
+    expect("J+K fires when a key is released", "+29 -29");
+    up(J_);
+    expect_idle("combo overlap");
+}
+
+static void t_combo_outputs(void)
+{
+    combo_setup();
+    combos[0][COMBO_OUTPUT] = LCTL(KC_C);
+    dn(J_); dn(K_); up(J_); up(K_);
+    expect("combo output: modded keycode", "+106 -106");
+
+    combos[0][COMBO_OUTPUT] = MO(1);
+    keymap[1][1][3]         = KC_B;
+    dn(J_); dn(K_); dn(X_); up(X_); up(J_); up(K_); dn(X_); up(X_);
+    expect("combo output: MO(1)", "+05 -05 +1B -1B");
+
+    combos[0][COMBO_OUTPUT] = MT(MOD_LCTL, KC_A);
+    dn(J_); dn(K_); up(J_); up(K_);
+    expect("combo output: mod-tap tapped", "+04 -04");
+    wait_ms(300); /* past the quick tap term of the tap above */
+    dn(J_); dn(K_); wait_ms(250);
+    expect("combo output: mod-tap held", "m+01");
+    up(K_); up(J_);
+    expect("combo output: mod-tap released", "m-01");
+    expect_idle("combo outputs");
+}
+
 int main(void)
 {
     t_plain();
@@ -558,6 +669,9 @@ int main(void)
     t_td_interrupt();
     t_td_fallbacks();
     t_td_term_and_layers();
+    t_combo_basic();
+    t_combo_overlap();
+    t_combo_outputs();
 
     printf("\n%d/%d checks passed\n", checks - failures, checks);
     return failures ? 1 : 0;

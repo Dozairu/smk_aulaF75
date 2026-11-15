@@ -28,16 +28,26 @@
 #define DYNAMIC_ENCODER_BYTES ((uint16_t)DYNAMIC_KEYMAP_LAYER_COUNT * DYNAMIC_ENCODER_COUNT * 4u)
 
 /* Vial-owned bytes at the end of the store: 16 bytes of QMK settings, then
- * the tap dance entries (10 bytes each). Laid out and interpreted by vial.c;
+ * the tap dance, combo and key override entries (10 bytes each; key
+ * overrides reserved, not used yet). Laid out and interpreted by vial.c;
  * this file only keeps them. */
 #ifdef VIAL_ENABLE
 #    ifndef VIAL_TAP_DANCE_ENTRIES
 #        define VIAL_TAP_DANCE_ENTRIES 8u
 #    endif
+#    ifndef VIAL_COMBO_ENTRIES
+#        define VIAL_COMBO_ENTRIES 8u
+#    endif
+#    ifndef VIAL_KEY_OVERRIDE_ENTRIES
+#        define VIAL_KEY_OVERRIDE_ENTRIES 4u
+#    endif
 #    define VIAL_SETTINGS_BYTES 16u
-#    define VIAL_TD_BYTES       10u
+#    define VIAL_ENTRY_BYTES    10u
+#    define VIAL_TD_OFFSET      VIAL_SETTINGS_BYTES
+#    define VIAL_COMBO_OFFSET   (VIAL_TD_OFFSET + VIAL_TAP_DANCE_ENTRIES * VIAL_ENTRY_BYTES)
+#    define VIAL_KO_OFFSET      (VIAL_COMBO_OFFSET + VIAL_COMBO_ENTRIES * VIAL_ENTRY_BYTES)
 #    ifndef DYNAMIC_VIAL_BYTES
-#        define DYNAMIC_VIAL_BYTES (VIAL_SETTINGS_BYTES + VIAL_TAP_DANCE_ENTRIES * VIAL_TD_BYTES)
+#        define DYNAMIC_VIAL_BYTES (VIAL_KO_OFFSET + VIAL_KEY_OVERRIDE_ENTRIES * VIAL_ENTRY_BYTES)
 #    endif
 #else
 #    define DYNAMIC_VIAL_BYTES 0u

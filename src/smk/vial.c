@@ -21,9 +21,8 @@
  * QMK settings (0x09..0x0C) expose the action engine's knobs; only settings
  * the engine implements are listed, and Vial GUI shows only listed ones.
  *
- * Dynamic entries (0x0D): VIAL_TAP_DANCE_ENTRIES tap dances, run by the
- * action engine. Combos and key overrides are reported as zero entries, so
- * Vial GUI hides those tabs.
+ * Dynamic entries (0x0D): tap dances and combos, run by the action engine.
+ * Key overrides are reported as zero entries, so Vial GUI hides that tab.
  */
 
 #    define VIAL_GET_KEYBOARD_ID       0x00u
@@ -44,6 +43,8 @@
 #    define DYNAMIC_VIAL_GET_NUMBER_OF_ENTRIES 0x00u
 #    define DYNAMIC_VIAL_TAP_DANCE_GET         0x01u
 #    define DYNAMIC_VIAL_TAP_DANCE_SET         0x02u
+#    define DYNAMIC_VIAL_COMBO_GET             0x03u
+#    define DYNAMIC_VIAL_COMBO_SET             0x04u
 
 /* VIAL_UNLOCK_ROWS / _COLS come from the generated header (board options
  * vial_unlock_rows / vial_unlock_cols); the generator refuses an empty list. */
@@ -145,6 +146,7 @@ static void unlock_poll(void)
  * Stored in the Vial area of the dynamic store, little-endian:
  *   [0..1] tapping term   [2..3] quick tap term   [4..5] one-shot timeout
  *   [6]    flags (ACTION_PERMISSIVE_HOLD | ...)    [7]    marker
+ *   [8..9] combo term
  * QSIDs and wire widths follow vial-gui's qmk_settings.json: integers are
  * u16 LE, the three tap-hold booleans are each their own QSID carrying 0/1.
  */
@@ -154,7 +156,9 @@ static void unlock_poll(void)
 #    define QS_FLAGS          6u
 #    define QS_MARKER         7u
 #    define QS_MARKER_VALUE   0x51u
+#    define QS_COMBO_TERM     8u
 
+#    define QSID_COMBO_TERM        2u
 #    define QSID_OSK_TIMEOUT       6u
 #    define QSID_TAPPING_TERM      7u
 #    define QSID_PERMISSIVE_HOLD   22u
@@ -164,7 +168,7 @@ static void unlock_poll(void)
 
 /* Ascending: the query pages through them in order. */
 static const __code uint8_t qsids[] = {
-    QSID_OSK_TIMEOUT,     QSID_TAPPING_TERM,  QSID_PERMISSIVE_HOLD,
+    QSID_COMBO_TERM,      QSID_OSK_TIMEOUT,   QSID_TAPPING_TERM,  QSID_PERMISSIVE_HOLD,
     QSID_HOLD_ON_OTHER_KEY, QSID_RETRO_TAPPING, QSID_QUICK_TAP_TERM,
 };
 
@@ -181,15 +185,25 @@ static void qs_wr16(uint8_t off, uint16_t v)
     s[off + 1u] = (uint8_t)(v >> 8);
 }
 
-/* ------------------------------------------------------------- tap dance
+/* ------------------------------------------------- tap dances and combos
  *
- * Entry n at VIAL_SETTINGS_BYTES + n * 10, five u16 LE: on tap, on hold, on
- * double tap, on tap + hold, tapping term -- vial_tap_dance_entry_t, which
- * is also the wire format of get/set.
+ * Both are tables of 10-byte entries, five u16 LE, in the Vial area -- the
+ * vial-qmk structs, which are also the wire format of get/set:
+ *   tap dance (VIAL_TD_OFFSET):    on tap, on hold, on double tap,
+ *                                  on tap + hold, tapping term
+ *   combo     (VIAL_COMBO_OFFSET): input 1..4 (KC_NO = unused), output
  */
-static __xdata uint8_t *td_entry(uint8_t index)
+static __xdata uint8_t *entry_ptr(uint8_t table, uint8_t index)
 {
-    return dynamic_vial_store() + VIAL_SETTINGS_BYTES + (uint16_t)index * VIAL_TD_BYTES;
+    return dynamic_vial_store() + table + (uint16_t)index * VIAL_ENTRY_BYTES;
+}
+
+static void entry_read(uint8_t table, uint8_t index, __xdata uint16_t *entry)
+{
+    const __xdata uint8_t *p = entry_ptr(table, index);
+    for (uint8_t i = 0; i < VIAL_ENTRY_BYTES / 2u; i++, p += 2) {
+        entry[i] = (uint16_t)p[0] | (uint16_t)((uint16_t)p[1] << 8);
+    }
 }
 
 bool action_hal_tap_dance(uint8_t index, __xdata uint16_t *entry)
@@ -197,19 +211,29 @@ bool action_hal_tap_dance(uint8_t index, __xdata uint16_t *entry)
     if (index >= VIAL_TAP_DANCE_ENTRIES) {
         return false;
     }
-    const __xdata uint8_t *p = td_entry(index);
-    for (uint8_t i = 0; i < TD_FIELDS; i++, p += 2) {
-        entry[i] = (uint16_t)p[0] | (uint16_t)((uint16_t)p[1] << 8);
-    }
+    entry_read(VIAL_TD_OFFSET, index, entry);
     return true;
 }
 
-static void td_defaults(void)
+bool action_hal_combo(uint8_t index, __xdata uint16_t *entry)
 {
-    /* vial-qmk: all KC_NO, tapping term TAPPING_TERM. */
+    if (index >= VIAL_COMBO_ENTRIES) {
+        return false;
+    }
+    entry_read(VIAL_COMBO_OFFSET, index, entry);
+    return true;
+}
+
+_Static_assert(TD_FIELDS * 2u == VIAL_ENTRY_BYTES && COMBO_FIELDS * 2u == VIAL_ENTRY_BYTES,
+               "Vial entries are five u16");
+_Static_assert(VIAL_COMBO_ENTRIES <= COMBO_MAX, "the engine addresses at most COMBO_MAX combos");
+
+static void entries_defaults(void)
+{
+    /* vial-qmk: everything KC_NO; tap dances get tapping term TAPPING_TERM. */
+    memset(entry_ptr(VIAL_TD_OFFSET, 0), 0, DYNAMIC_VIAL_BYTES - VIAL_TD_OFFSET);
     for (uint8_t i = 0; i < VIAL_TAP_DANCE_ENTRIES; i++) {
-        __xdata uint8_t *p = td_entry(i);
-        memset(p, 0, VIAL_TD_BYTES);
+        __xdata uint8_t *p = entry_ptr(VIAL_TD_OFFSET, i);
         p[8] = (uint8_t)ACTION_TAPPING_TERM_DEFAULT;
         p[9] = (uint8_t)(ACTION_TAPPING_TERM_DEFAULT >> 8);
     }
@@ -223,6 +247,7 @@ static void qs_defaults(void)
     qs_wr16(QS_TAPPING_TERM, ACTION_TAPPING_TERM_DEFAULT);
     qs_wr16(QS_QUICK_TAP_TERM, ACTION_TAPPING_TERM_DEFAULT);
     qs_wr16(QS_OSK_TIMEOUT, ACTION_OSK_TIMEOUT_DEFAULT);
+    qs_wr16(QS_COMBO_TERM, ACTION_COMBO_TERM_DEFAULT);
     s[QS_FLAGS]  = 0;
     s[QS_MARKER] = QS_MARKER_VALUE;
 }
@@ -231,7 +256,7 @@ static void qs_defaults(void)
 void vial_store_defaults(void)
 {
     qs_defaults();
-    td_defaults();
+    entries_defaults();
 }
 
 void vial_store_apply(void)
@@ -243,6 +268,7 @@ void vial_store_apply(void)
     action_config.tapping_term   = qs_rd16(QS_TAPPING_TERM);
     action_config.quick_tap_term = qs_rd16(QS_QUICK_TAP_TERM);
     action_config.osk_timeout    = qs_rd16(QS_OSK_TIMEOUT);
+    action_config.combo_term     = qs_rd16(QS_COMBO_TERM);
     action_config.flags          = dynamic_vial_store()[QS_FLAGS];
 }
 
@@ -262,6 +288,7 @@ static uint8_t qsid_u16_offset(uint16_t qsid)
         case QSID_TAPPING_TERM:   return QS_TAPPING_TERM;
         case QSID_QUICK_TAP_TERM: return QS_QUICK_TAP_TERM;
         case QSID_OSK_TIMEOUT:    return QS_OSK_TIMEOUT;
+        case QSID_COMBO_TERM:     return QS_COMBO_TERM;
         default:                  return 0xFFu;
     }
 }
@@ -327,36 +354,39 @@ static void qmk_settings_set(__xdata uint8_t *data)
 static void dynamic_entry_op(__xdata uint8_t *data)
 {
     const uint8_t idx = data[3];
+    uint8_t       table, count;
     switch (data[2]) {
         case DYNAMIC_VIAL_GET_NUMBER_OF_ENTRIES:
             /* [0] tap dance, [1] combo, [2] key override, [3] alt repeat,
              * [31] feature bits (Caps Word, Layer Lock). */
             memset(data, 0, RAW_HID_REPORT_SIZE);
             data[0] = VIAL_TAP_DANCE_ENTRIES;
-            break;
-
+            data[1] = VIAL_COMBO_ENTRIES;
+            return;
         case DYNAMIC_VIAL_TAP_DANCE_GET:
-            memset(data, 0, RAW_HID_REPORT_SIZE);
-            if (idx >= VIAL_TAP_DANCE_ENTRIES) {
-                data[0] = 0xFFu;
-            } else {
-                memcpy(&data[1], td_entry(idx), VIAL_TD_BYTES);
-            }
-            break;
-
         case DYNAMIC_VIAL_TAP_DANCE_SET:
-            if (idx >= VIAL_TAP_DANCE_ENTRIES) {
-                data[0] = 0xFFu;
-            } else {
-                memcpy(td_entry(idx), &data[4], VIAL_TD_BYTES);
-                dynamic_vial_mark_dirty();
-                data[0] = 0;
-            }
+            table = VIAL_TD_OFFSET;
+            count = VIAL_TAP_DANCE_ENTRIES;
             break;
-
+        case DYNAMIC_VIAL_COMBO_GET:
+        case DYNAMIC_VIAL_COMBO_SET:
+            table = VIAL_COMBO_OFFSET;
+            count = VIAL_COMBO_ENTRIES;
+            break;
         default:
             data[0] = 0xFFu;
-            break;
+            return;
+    }
+
+    if (idx >= count) {
+        data[0] = 0xFFu;
+    } else if (data[2] & 1u) { /* odd sub-commands are the gets */
+        memset(data, 0, RAW_HID_REPORT_SIZE);
+        memcpy(&data[1], entry_ptr(table, idx), VIAL_ENTRY_BYTES);
+    } else {
+        memcpy(entry_ptr(table, idx), &data[4], VIAL_ENTRY_BYTES);
+        dynamic_vial_mark_dirty();
+        data[0] = 0;
     }
 }
 

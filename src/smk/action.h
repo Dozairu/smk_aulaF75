@@ -25,9 +25,13 @@
 #    define __code const
 #endif
 
-/* Tap dance (TD(n) keycodes) is compiled in with Vial, which configures it. */
+/* Tap dance (TD(n) keycodes) and combos are compiled in with Vial, which
+ * configures them. */
 #if defined(VIAL_ENABLE) && !defined(ACTION_TAP_DANCE)
 #    define ACTION_TAP_DANCE
+#endif
+#if defined(VIAL_ENABLE) && !defined(ACTION_COMBO)
+#    define ACTION_COMBO
 #endif
 
 /* --------------------------------------------------------------- config */
@@ -40,6 +44,7 @@ typedef struct {
     uint16_t tapping_term;   /* ms: hold decision for tap-hold keys        */
     uint16_t quick_tap_term; /* ms: re-press after a tap repeats the tap   */
     uint16_t osk_timeout;    /* ms: one-shot mod/layer expiry, 0 = never   */
+    uint16_t combo_term;     /* ms: all keys of a combo pressed within it  */
     uint8_t  flags;          /* ACTION_PERMISSIVE_HOLD | ...               */
 } action_config_t;
 
@@ -47,6 +52,7 @@ extern __xdata action_config_t action_config;
 
 #define ACTION_TAPPING_TERM_DEFAULT 200u
 #define ACTION_OSK_TIMEOUT_DEFAULT  5000u
+#define ACTION_COMBO_TERM_DEFAULT   50u
 
 void action_config_defaults(void);
 
@@ -87,4 +93,15 @@ void     action_hal_event_pos(uint8_t row, uint8_t col);
 #    define TD_TERM        4u
 #    define TD_FIELDS      5u
 bool action_hal_tap_dance(uint8_t index, __xdata uint16_t *entry);
+#endif
+
+#ifdef ACTION_COMBO
+/* Combo entry n in Vial's layout: four input keycodes (KC_NO = unused), then
+ * the output keycode. False: no entry n. Inputs are keycodes, matched against
+ * what each key resolves to on the active layers when it is pressed. */
+#    define COMBO_INPUTS 4u
+#    define COMBO_OUTPUT 4u
+#    define COMBO_FIELDS 5u
+#    define COMBO_MAX    16u /* entries the engine can address */
+bool action_hal_combo(uint8_t index, __xdata uint16_t *entry);
 #endif

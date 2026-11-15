@@ -119,6 +119,24 @@ static __xdata uint16_t osm_time;
 static __xdata uint8_t  osl_layer = 0xFFu;
 static __xdata uint16_t osl_time;
 
+#ifdef ACTION_COMBO
+/* A fired combo is a virtual key at row 14, column = combo index: it goes
+ * through the queue, slots and tap-hold logic like a real key, and resolve()
+ * returns the combo's output keycode for it. */
+#    define COMBO_ROW    0x0Eu
+#    define IS_VPOS(p)   (POS_ROW(p) == COMBO_ROW)
+#    define COMBO_BUF    4u  /* presses held back while a combo may form */
+#    define COMBO_SWLEN  10u /* combo keys still down after their combo fired */
+static __xdata uint16_t ce[COMBO_FIELDS]; /* scratch: one entry */
+static __xdata uint8_t  cb_pos[COMBO_BUF];
+static __xdata uint16_t cb_kc[COMBO_BUF];
+static __xdata uint16_t cb_time[COMBO_BUF];
+static __xdata uint8_t  cb_n;
+static __xdata uint8_t  sw_pos[COMBO_SWLEN]; /* their releases are swallowed */
+static __xdata uint8_t  sw_idx[COMBO_SWLEN];
+static __xdata uint16_t combo_down; /* bit n: combo n's output is pressed */
+#endif
+
 #ifdef ACTION_TAP_DANCE
 /* The one tap dance in progress (see "tap dance" below). */
 static __xdata uint16_t td_e[TD_FIELDS];
@@ -138,6 +156,7 @@ void action_config_defaults(void)
     action_config.tapping_term   = ACTION_TAPPING_TERM_DEFAULT;
     action_config.quick_tap_term = ACTION_TAPPING_TERM_DEFAULT;
     action_config.osk_timeout    = ACTION_OSK_TIMEOUT_DEFAULT;
+    action_config.combo_term     = ACTION_COMBO_TERM_DEFAULT;
     action_config.flags          = 0;
 }
 
@@ -156,6 +175,13 @@ void action_init(void)
     osl_layer           = 0xFFu;
 #ifdef ACTION_TAP_DANCE
     td_pos = POS_NONE;
+#endif
+#ifdef ACTION_COMBO
+    cb_n       = 0;
+    combo_down = 0;
+    for (uint8_t i = 0; i < COMBO_SWLEN; i++) {
+        sw_pos[i] = POS_NONE;
+    }
 #endif
 }
 
@@ -206,6 +232,11 @@ void action_set_default_layer(uint8_t layer)
 
 static uint16_t resolve(uint8_t pos)
 {
+#ifdef ACTION_COMBO
+    if (IS_VPOS(pos)) {
+        return action_hal_combo(POS_COL(pos), ce) ? ce[COMBO_OUTPUT] : KC_NO;
+    }
+#endif
     const uint8_t st = action_layer_state();
     for (uint8_t l = layer_count(); l-- > 0;) {
         if (st & (uint8_t)(1u << l)) {
@@ -245,7 +276,10 @@ static uint16_t dual_tap_kc(uint16_t kc)
 
 static void send(uint8_t pos, uint16_t kc, bool down)
 {
-    action_hal_event_pos(POS_ROW(pos), POS_COL(pos));
+#ifdef ACTION_COMBO
+    if (!IS_VPOS(pos)) /* a combo has no matrix position: keep the last one */
+#endif
+        action_hal_event_pos(POS_ROW(pos), POS_COL(pos));
     action_hal_send(kc, down);
 }
 
@@ -677,14 +711,197 @@ static void process(void)
     }
 }
 
+/* ------------------------------------------------------------------ combos
+ *
+ * A stage in front of the queue. A press whose keycode is an input of some
+ * combo is held back (cb_*) while more presses may complete a combo:
+ *   - the held-back keys are exactly a combo's inputs, and no bigger combo
+ *     could still form: the combo fires;
+ *   - the combo term runs out, any key is released, or a press that fits no
+ *     combo arrives: the best complete combo fires if there is one,
+ *     else the held-back presses go on as ordinary keys, in order.
+ * A fired combo presses its virtual key; the release of the FIRST of its keys
+ * releases it, and the releases of all its keys are swallowed (QMK default).
+ */
+#ifdef ACTION_COMBO
+/* Number of inputs of combo idx (loaded into ce), 0 if unused. */
+static uint8_t combo_load(uint8_t idx)
+{
+    if (!action_hal_combo(idx, ce)) {
+        return 0;
+    }
+    uint8_t n = 0;
+    for (uint8_t i = 0; i < COMBO_INPUTS; i++) {
+        if (ce[i] != KC_NO) {
+            n++;
+        }
+    }
+    return n;
+}
+
+static bool ce_has(uint16_t kc)
+{
+    for (uint8_t i = 0; i < COMBO_INPUTS; i++) {
+        if (ce[i] == kc) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Inputs of combo idx if the held-back keys plus `extra` (KC_NO: none) are
+ * all inputs of it, else 0. */
+static uint8_t combo_fits(uint8_t idx, uint16_t extra)
+{
+    const uint8_t n = combo_load(idx);
+    if (n == 0 || (extra != KC_NO && !ce_has(extra))) {
+        return 0;
+    }
+    for (uint8_t i = 0; i < cb_n; i++) {
+        if (!ce_has(cb_kc[i])) {
+            return 0;
+        }
+    }
+    return n;
+}
+
+static bool combo_any_fits(uint16_t extra)
+{
+    for (uint8_t idx = 0; idx < COMBO_MAX; idx++) {
+        if (combo_fits(idx, extra)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* The first combo whose inputs are exactly the held-back keys (0xFF: none);
+ * *bigger: some combo with more inputs could still form. */
+static uint8_t combo_complete(bool *bigger)
+{
+    uint8_t found = 0xFFu;
+    *bigger       = false;
+    for (uint8_t idx = 0; idx < COMBO_MAX; idx++) {
+        const uint8_t n = combo_fits(idx, KC_NO);
+        if (n == cb_n) {
+            if (found == 0xFFu) {
+                found = idx;
+            }
+        } else if (n > cb_n) {
+            *bigger = true;
+        }
+    }
+    return found;
+}
+
+static void combo_fire(uint8_t idx)
+{
+    for (uint8_t i = 0; i < cb_n; i++) {
+        for (uint8_t s = 0; s < COMBO_SWLEN; s++) {
+            if (sw_pos[s] == POS_NONE) {
+                sw_pos[s] = cb_pos[i];
+                sw_idx[s] = idx;
+                break;
+            }
+        }
+    }
+    combo_down |= (uint16_t)(1u << idx);
+    q_push_back(POS(COMBO_ROW, idx), 1u, cb_time[cb_n - 1u]);
+    cb_n = 0;
+}
+
+/* Settle the held-back keys: fire the best complete combo, or let them go. */
+static void combo_settle(void)
+{
+    bool          bigger;
+    const uint8_t idx = combo_complete(&bigger);
+    if (idx != 0xFFu) {
+        combo_fire(idx);
+        return;
+    }
+    for (uint8_t i = 0; i < cb_n; i++) {
+        q_push_back(cb_pos[i], 1u, cb_time[i]);
+    }
+    cb_n = 0;
+}
+
+/* A key that belongs to a fired combo was released: swallowed, and the first
+ * one releases the combo. False if pos is not such a key. */
+static bool combo_swallow(uint8_t pos, uint16_t time)
+{
+    for (uint8_t s = 0; s < COMBO_SWLEN; s++) {
+        if (sw_pos[s] == pos) {
+            const uint8_t  idx = sw_idx[s];
+            const uint16_t bit = (uint16_t)(1u << idx);
+            sw_pos[s]          = POS_NONE;
+            if (combo_down & bit) {
+                combo_down &= (uint16_t)~bit;
+                q_push_back(POS(COMBO_ROW, idx), 0u, time);
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+static void combo_input(uint8_t pos, uint8_t down, uint16_t time)
+{
+    if (!down) {
+        /* Any release ends the wait (keeps the event order intact). */
+        if (cb_n) {
+            combo_settle();
+        }
+        if (!combo_swallow(pos, time)) {
+            q_push_back(pos, 0u, time);
+        }
+        return;
+    }
+
+    const uint16_t kc = resolve(pos);
+    if (cb_n) {
+        bool dup = false;
+        for (uint8_t i = 0; i < cb_n; i++) {
+            dup |= (cb_kc[i] == kc);
+        }
+        if (dup || kc == KC_NO || cb_n >= COMBO_BUF || !combo_any_fits(kc)) {
+            combo_settle(); /* this press starts afresh below */
+        }
+    }
+    if (cb_n == 0 && (kc == KC_NO || !combo_any_fits(kc))) {
+        q_push_back(pos, 1u, time);
+        return;
+    }
+    cb_pos[cb_n]  = pos;
+    cb_kc[cb_n]   = kc;
+    cb_time[cb_n] = time;
+    cb_n++;
+
+    bool          bigger;
+    const uint8_t idx = combo_complete(&bigger);
+    if (idx != 0xFFu && !bigger) {
+        combo_fire(idx);
+    }
+}
+#endif
+
 void action_event(uint8_t row, uint8_t col, bool pressed)
 {
+#ifdef ACTION_COMBO
+    combo_input(POS(row, col), pressed ? 1u : 0u, action_hal_timer());
+#else
     q_push_back(POS(row, col), pressed ? 1u : 0u, action_hal_timer());
+#endif
     process();
 }
 
 void action_task(void)
 {
+#ifdef ACTION_COMBO
+    if (cb_n && elapsed(cb_time[0]) >= action_config.combo_term) {
+        combo_settle();
+        process();
+    }
+#endif
     if (tapping && elapsed(tk_time) >= action_config.tapping_term) {
         decide_hold();
         process();
@@ -713,6 +930,16 @@ bool action_idle(void)
 #ifdef ACTION_TAP_DANCE
     if (td_pos != POS_NONE) {
         return false;
+    }
+#endif
+#ifdef ACTION_COMBO
+    if (cb_n || combo_down) {
+        return false;
+    }
+    for (uint8_t i = 0; i < COMBO_SWLEN; i++) {
+        if (sw_pos[i] != POS_NONE) {
+            return false;
+        }
     }
 #endif
     for (uint8_t i = 0; i < SLOTS; i++) {
