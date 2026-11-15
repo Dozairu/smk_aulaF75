@@ -150,7 +150,7 @@ or `EE_CLR` clears everything, including the Vial area and the engine's live sta
 - **VialRGB direct mode** (per-LED colour from the host): its frame buffer does not fit in XRAM.
 - **Mouse keys, MIDI, joystick, steno, Unicode, leader, swap hands, dynamic macros, `QK_REBOOT`**:
   not implemented.
-- **More than 4 layers**: each layer costs 192 B of XRAM; ~300 B are left.
+- **More than 4 layers**: each layer costs 192 B of XRAM; ~270 B are left.
 - **Stale raw HID reply**: if a host tool sends a request and exits without reading the reply, the
   next tool reads that old reply first and stays one behind. `vial_probe.py` drains it on open; for
   Vial / VIA, replug the keyboard. (A firmware fix needs a way to withdraw a queued EP2 IN packet on
@@ -158,4 +158,4 @@ or `EE_CLR` clears everything, including the Vial area and the engine's live sta
 
 ## Budget (AULA F75, Vial build)
 
-Code 57,745 / 58,368 B, XRAM 3,798 / 4,096 B. Further features need code to be freed first.
+Code 57,939 / 58,368 B, XRAM 3,828 / 4,096 B. Further features need code to be freed first.
