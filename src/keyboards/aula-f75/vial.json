@@ -2,6 +2,7 @@
   "name": "AULA F75 (SMK)",
   "vendorId": "0x258A",
   "productId": "0x010C",
+  "lighting": "vialrgb",
   "customKeycodes": [
     {
       "name": "FX_NEXT",

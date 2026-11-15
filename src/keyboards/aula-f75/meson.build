@@ -31,6 +31,7 @@ keyboards += {
             'aula_encoder.c',
             'aula_macro.c',
             'aula_status.c',
+            'aula_vialrgb.c', # empty unless VIALRGB_ENABLE
         ),
         'boot_src' : files('user_matrix.c', 'user_init.c'),
         'layouts' : {
@@ -56,6 +57,8 @@ keyboards += {
             # Unlock chord: Esc + Enter, held ~5 s when Vial asks for it.
             'vial_unlock_rows' : '0,3',
             'vial_unlock_cols' : '0,13',
+            # Vial's Lighting tab drives the Aula effects (aula_vialrgb.c).
+            'vialrgb' : 'true',
         },
     },
 }

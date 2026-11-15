@@ -7,6 +7,7 @@
 #    include "kbdef.h"
 #    include "matrix.h"
 #    include "raw_hid.h"
+#    include "vialrgb.h"
 #    include <string.h>
 
 #    include VIAL_DEFINITION_HEADER
@@ -148,7 +149,7 @@ static void unlock_poll(void)
  * Stored in the Vial area of the dynamic store, little-endian:
  *   [0..1] tapping term   [2..3] quick tap term   [4..5] one-shot timeout
  *   [6]    flags (ACTION_PERMISSIVE_HOLD | ...)    [7]    marker
- *   [8..9] combo term
+ *   [8..9] combo term     [10] / [11] VialRGB hue / saturation (aula_vialrgb.c)
  * QSIDs and wire widths follow vial-gui's qmk_settings.json: integers are
  * u16 LE, the three tap-hold booleans are each their own QSID carrying 0/1.
  */
@@ -281,7 +282,7 @@ static void entries_defaults(void)
 static void qs_defaults(void)
 {
     __xdata uint8_t *s = dynamic_vial_store();
-    memset(s, 0, VIAL_SETTINGS_BYTES);
+    memset(s, 0, VIAL_RGB_HUE); /* the QMK settings; leaves the color picker */
     qs_wr16(QS_TAPPING_TERM, ACTION_TAPPING_TERM_DEFAULT);
     qs_wr16(QS_QUICK_TAP_TERM, ACTION_TAPPING_TERM_DEFAULT);
     qs_wr16(QS_OSK_TIMEOUT, ACTION_OSK_TIMEOUT_DEFAULT);
@@ -295,6 +296,8 @@ void vial_store_defaults(void)
 {
     qs_defaults();
     entries_defaults();
+    dynamic_vial_store()[VIAL_RGB_HUE] = 0; /* picker: white */
+    dynamic_vial_store()[VIAL_RGB_SAT] = 0;
 }
 
 void vial_store_apply(void)
@@ -311,6 +314,9 @@ void vial_store_apply(void)
     action_config.osk_timeout    = qs_rd16(QS_OSK_TIMEOUT);
     action_config.combo_term     = qs_rd16(QS_COMBO_TERM);
     action_config.flags          = dynamic_vial_store()[QS_FLAGS];
+#    ifdef VIALRGB_ENABLE
+    vialrgb_apply(); /* stored picker color -> lighting engine */
+#    endif
 }
 
 static uint8_t qsid_flag(uint16_t qsid)
@@ -446,7 +452,11 @@ void vial_process(__xdata uint8_t *data)
             for (uint8_t i = 0; i < 8u; i++) {
                 data[4u + i] = keyboard_uid[i];
             }
-            data[12] = 0; /* no VialRGB (yet) */
+#    ifdef VIALRGB_ENABLE
+            data[12] = 1; /* VialRGB: Lighting tab */
+#    else
+            data[12] = 0;
+#    endif
             break;
 
         case VIAL_GET_SIZE:

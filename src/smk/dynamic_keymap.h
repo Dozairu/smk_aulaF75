@@ -42,6 +42,9 @@
 #        define VIAL_KEY_OVERRIDE_ENTRIES 4u
 #    endif
 #    define VIAL_SETTINGS_BYTES 16u
+/* Inside the settings bytes, after the QMK settings: VialRGB color picker. */
+#    define VIAL_RGB_HUE        10u
+#    define VIAL_RGB_SAT        11u
 #    define VIAL_ENTRY_BYTES    10u
 #    define VIAL_TD_OFFSET      VIAL_SETTINGS_BYTES
 #    define VIAL_COMBO_OFFSET   (VIAL_TD_OFFSET + VIAL_TAP_DANCE_ENTRIES * VIAL_ENTRY_BYTES)

@@ -755,7 +755,7 @@ static uint8_t led_scale(uint8_t value, uint8_t gain)
  */
 static void fx_color(uint8_t wheel_index, uint8_t out[3])
 {
-    if (user_settings.ul_effect >= AULA_FX_COLOR_WHEEL) {
+    if (user_settings.ul_effect == AULA_FX_COLOR_WHEEL) {
         aula_rgb_wheel(wheel_index, out);
     } else {
         aula_fx_color(user_settings.ul_effect, out);
@@ -1182,7 +1182,7 @@ static void led_regen_one(void)
          */
         const uint8_t idx = (uint8_t)(aula_fx_keywave(regen_col, regen_row) + led_phase);
 
-        if (user_settings.ul_effect >= AULA_FX_COLOR_WHEEL) {
+        if (user_settings.ul_effect == AULA_FX_COLOR_WHEEL) {
             aula_fx_palette(idx, rgb); /* the second factory wheel, 128 hues */
         } else {
             aula_fx_color(user_settings.ul_effect, rgb);
@@ -1225,7 +1225,7 @@ static void led_regen_one(void)
          * is this port's design choice, explained above, and applied here just
          * like on the wave.
          */
-        if (user_settings.ul_effect >= AULA_FX_COLOR_WHEEL) {
+        if (user_settings.ul_effect == AULA_FX_COLOR_WHEEL) {
             const uint16_t p = (uint16_t)aula_fx_shimmer_phase(regen_col, regen_row, 1) + fx_phase192;
 
             aula_rgb_wheel((uint8_t)(p % AULA_RGB_WHEEL_SIZE), rgb);
@@ -1576,7 +1576,7 @@ void indicators_validate_settings(void)
     if (user_settings.led_speed >= LED_SPEED_LEVELS) {
         user_settings.led_speed = LED_SPEED_DEFAULT;
     }
-    if (user_settings.ul_effect >= AULA_FX_COLOR_MODES) {
+    if (user_settings.ul_effect > AULA_FX_COLOR_CUSTOM) {
         user_settings.ul_effect = AULA_FX_COLOR_WHEEL;
     }
     if (user_settings.ul_brightness > 1) {

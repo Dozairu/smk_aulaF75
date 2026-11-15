@@ -64,8 +64,16 @@ static const __code uint8_t colors[AULA_FX_COLOR_MODES - 1][3] = {
     {255, 255, 255}, /* white   */
 };
 
+__xdata uint8_t aula_fx_custom[3]; /* set at boot by VialRGB (vialrgb_apply) */
+
 void aula_fx_color(uint8_t mode, uint8_t out[3])
 {
+    if (mode == AULA_FX_COLOR_CUSTOM) {
+        out[0] = aula_fx_custom[0];
+        out[1] = aula_fx_custom[1];
+        out[2] = aula_fx_custom[2];
+        return;
+    }
     const uint8_t i = (mode < (uint8_t)(AULA_FX_COLOR_MODES - 1)) ? mode : 0;
 
     out[0] = colors[i][0];

@@ -10,6 +10,7 @@
 #    include "settings.h"
 #    include "tick.h"
 #    include "vial.h"
+#    include "vialrgb.h"
 #    include <string.h>
 
 #    define VIA_ID_GET_PROTOCOL_VERSION           0x01u
@@ -220,6 +221,12 @@ bool via_process_packet(__xdata uint8_t *data)
             break;
 
         case VIA_ID_CUSTOM_GET_VALUE:
+#    ifdef VIALRGB_ENABLE
+            if (data[1] >= VIALRGB_FIRST_ID) { /* VialRGB: no channel byte */
+                vialrgb_get_value(data);
+                break;
+            }
+#    endif
             switch (data[2]) {
                 case 1:
                     data[3] = user_settings.led_effect;
@@ -252,6 +259,12 @@ bool via_process_packet(__xdata uint8_t *data)
             break;
 
         case VIA_ID_CUSTOM_SET_VALUE:
+#    ifdef VIALRGB_ENABLE
+            if (data[1] >= VIALRGB_FIRST_ID) {
+                vialrgb_set_value(data);
+                break;
+            }
+#    endif
             switch (data[2]) {
                 case 1:
                     user_settings.led_effect = data[3];
@@ -303,6 +316,12 @@ bool via_process_packet(__xdata uint8_t *data)
             break;
 
         case VIA_ID_CUSTOM_SAVE:
+#    ifdef VIALRGB_ENABLE
+            if (data[1] >= VIALRGB_FIRST_ID) {
+                vialrgb_save();
+                break;
+            }
+#    endif
             settings_mark_dirty();
             break;
 

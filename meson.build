@@ -439,6 +439,10 @@ foreach keyboard, board : keyboards
             )
             cc_args += '-DVIAL_ENABLE=1'
             cc_args += '-DVIAL_DEFINITION_HEADER="@0@vial_definition.h"'.format(prefix)
+            # VialRGB (Vial's Lighting tab): the board supplies vialrgb.h's functions.
+            if options.get('vialrgb', '') == 'true'
+                cc_args += '-DVIALRGB_ENABLE=1'
+            endif
             cc_args += '-I' + meson.current_build_dir()
         endif
 

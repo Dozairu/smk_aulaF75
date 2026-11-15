@@ -7,7 +7,7 @@ Finds the raw HID interface (usage page 0xFF60) by its report descriptor,
 then runs the handshake Vial GUI does and checks each answer:
 
   - VIA protocol version is 9
-  - Vial keyboard id: protocol 6 + 8-byte UID
+  - Vial keyboard id: protocol 6 + 8-byte UID (+ VialRGB: info, effect list, mode)
   - definition: size, every 32-byte page, LZMA-decompresses to JSON, and
     (if a vial.json is given) equals it
   - encoder 0 on layer 0, unlock status, QMK settings listed + readable,
@@ -72,6 +72,7 @@ def main():
 
     r = d.xfer(0xFE, 0x00)
     proto, uid = struct.unpack('<IQ', r[:12])
+    vialrgb = r[12] == 1
     good &= check(proto == 6, 'Vial protocol = {} (want 6), uid = {:016x}, vialrgb = {}'.format(proto, uid, r[12]))
 
     r = d.xfer(0xFE, 0x01)
@@ -146,6 +147,24 @@ def main():
                                                               '' if opt & 0x80 else ' (off)'))
     t = d.xfer(0xFE, 0x0D, 0x05, n_ko)
     good &= check(t[0] == 0xFF, '  key override {} past the end refused'.format(n_ko))
+
+    if vialrgb:
+        r = d.xfer(0x08, 0x40)
+        good &= check(r[2] | r[3] << 8 == 1, 'VialRGB protocol = {}, max brightness = {}'.format(r[2] | r[3] << 8, r[4]))
+        ids, cur = [], 0
+        while True:
+            r = d.xfer(0x08, 0x42, *struct.pack('<H', cur))
+            page = [v for v in struct.unpack('<15H', bytes(r[2:32])) if v != 0xFFFF]
+            if not page:
+                break
+            ids += page
+            cur = page[-1]
+        # Off (0) is never listed (vial-qmk pages ids > 0; the GUI adds Off itself).
+        good &= check(len(ids) == 28 and ids == sorted(ids) and 0 not in ids,
+                      'VialRGB effects ({}): {}'.format(len(ids), ids))
+        r = d.xfer(0x08, 0x41)
+        mode, speed, h, s, v = r[2] | r[3] << 8, r[4], r[5], r[6], r[7]
+        good &= check(mode == 0 or mode in ids, 'VialRGB mode = {}, speed {}, hsv ({}, {}, {})'.format(mode, speed, h, s, v))
 
     r = d.xfer(0x11)
     good &= check(r[1] == 4, 'layer count = {}'.format(r[1]))
