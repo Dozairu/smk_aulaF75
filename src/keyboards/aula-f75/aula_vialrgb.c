@@ -118,6 +118,20 @@ void vialrgb_apply(void)
     hs_to_rgb(hs()[0], hs()[1], aula_fx_custom);
 }
 
+void vialrgb_step(uint8_t which, int8_t delta)
+{
+    __xdata uint8_t *p = hs() + which;
+    int16_t          v = (int16_t)*p + delta;
+    if (which) { /* saturation stops at the ends; hue wraps around */
+        v = v < 0 ? 0 : (v > 255 ? 255 : v);
+    }
+    *p                      = (uint8_t)v;
+    user_settings.ul_effect = AULA_FX_COLOR_CUSTOM;
+    vialrgb_apply();
+    dynamic_vial_mark_dirty();
+    settings_mark_dirty();
+}
+
 static uint8_t current_id(void)
 {
     const uint8_t fx = user_settings.led_effect;

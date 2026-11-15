@@ -93,6 +93,13 @@ bool action_hal_key_override(uint8_t index, uint16_t *entry)
     return true;
 }
 
+static int      config_changes;
+
+void action_hal_config_changed(void)
+{
+    config_changes++;
+}
+
 #define COMBO_COUNT 4
 static uint16_t combos[COMBO_COUNT][COMBO_FIELDS];
 
@@ -116,6 +123,7 @@ static void reset(uint8_t flags)
     memset(tds, 0, sizeof tds);
     memset(combos, 0, sizeof combos);
     memset(kos, 0, sizeof kos);
+    config_changes = 0;
     for (int l = 1; l < LAYERS; l++) {
         for (int r = 0; r < ROWS; r++) {
             for (int c = 0; c < COLS; c++) {
@@ -408,11 +416,25 @@ static void t_tt(void)
     expect("TT hold = momentary", "+05 -05");
     dn(A_); up(A_);
     expect("TT hold released", "+04 -04");
+    action_config.tapping_toggle = 1;
     dn(C_); up(C_); dn(A_); up(A_);
     expect("TT tap toggles on", "+05 -05");
     wait_ms(300);
     dn(C_); up(C_); dn(A_); up(A_);
     expect("TT tap toggles off", "+04 -04");
+
+    action_config.tapping_toggle = 5; /* QMK default */
+    wait_ms(300);
+    for (int i = 0; i < 4; i++) {
+        dn(C_); up(C_);
+    }
+    dn(A_); up(A_);
+    expect("TT: 4 taps of 5 do not toggle", "+04 -04");
+    for (int i = 0; i < 5; i++) {
+        dn(C_); up(C_);
+    }
+    dn(A_); up(A_);
+    expect("TT: 5 taps toggle", "+05 -05");
 }
 
 static void t_lm(void)
@@ -741,6 +763,203 @@ static void t_ko_conditions(void)
     expect_idle("KO conditions");
 }
 
+/* ------------------------------------------------- QMK quantum keycodes */
+
+static void expect_true(const char *name, bool cond)
+{
+    checks++;
+    if (!cond) {
+        failures++;
+        printf("FAIL %s\n", name);
+    } else {
+        printf("ok   %s\n", name);
+    }
+    out[0] = 0;
+}
+
+#define D_ 0, 3
+#define E_ 0, 4
+
+static void t_magic(void)
+{
+    reset(0);
+    keymap[0][0][0] = KC_CAPS;
+    keymap[0][0][1] = KC_LCTL;
+    keymap[0][0][2] = QK_MAGIC + 0x00; /* swap Caps Lock and Left Control */
+    keymap[0][0][3] = QK_MAGIC + 0x13; /* toggle NKRO */
+    keymap[0][0][4] = KC_LGUI;
+    dn(C_); up(C_);
+    expect_true("magic key: config changed and stored", config_changes == 1 &&
+                (action_config.magic & MAGIC_SWAP_CAPS_LCTL));
+    dn(A_); up(A_); dn(B_); up(B_);
+    expect("magic: Caps <-> LCtrl", "+E0 -E0 +39 -39");
+    dn(D_); up(D_);
+    expect_true("magic: NKRO toggled off", !(action_config.magic & MAGIC_NKRO));
+    action_config.magic = MAGIC_NO_GUI;
+    dn(E_); up(E_);
+    expect("magic: GUI disabled", "");
+    action_config.magic = MAGIC_SWAP_LALT_LGUI;
+    dn(E_); up(E_);
+    expect("magic: LGUI -> LAlt", "+E2 -E2");
+    expect_idle("magic");
+}
+
+static void t_grave_escape(void)
+{
+    reset(0);
+    keymap[0][0][0] = QK_GRAVE_ESCAPE;
+    keymap[0][0][1] = KC_LSFT;
+    dn(A_); up(A_);
+    expect("GESC alone: Esc", "+29 -29");
+    dn(B_); dn(A_); up(A_); up(B_);
+    expect("GESC with Shift: `", "+E1 +35 -35 -E1");
+    action_config.grave_esc = GESC_SHIFT;
+    dn(B_); dn(A_); up(A_); up(B_);
+    expect("GESC with Shift, shift override: Esc", "+E1 +29 -29 -E1");
+    expect_idle("grave escape");
+}
+
+static void t_space_cadet(void)
+{
+    reset(0);
+    keymap[0][0][0] = QK_SPACE_CADET_LEFT_SHIFT_PARENTHESIS_OPEN;
+    keymap[0][0][1] = KC_X;
+    keymap[0][0][2] = QK_SPACE_CADET_LEFT_CTRL_PARENTHESIS_OPEN;
+    dn(A_); up(A_);
+    expect("SC_LSPO tapped: (", "m+02 +26 -26 m-02");
+    dn(A_); wait_ms(250); up(A_);
+    expect("SC_LSPO held past the term: just Shift", "m+02 m-02");
+    dn(A_); dn(B_); up(B_); up(A_);
+    expect("SC_LSPO + another key: Shift", "m+02 +1B -1B m-02");
+    dn(C_); up(C_);
+    expect("SC_LCPO tapped: Ctrl off, Shift + 9", "m+01 m-01 m+02 +26 -26 m-02");
+    expect_idle("space cadet");
+}
+
+static void t_caps_word(void)
+{
+    reset(0);
+    keymap[0][0][0] = QK_CAPS_WORD_TOGGLE;
+    keymap[0][0][1] = KC_X;
+    keymap[0][0][2] = KC_1;
+    keymap[0][0][3] = KC_SPC;
+    keymap[0][0][4] = KC_MINS;
+    dn(A_); up(A_);
+    dn(B_); up(B_); dn(C_); up(C_); dn(E_); up(E_);
+    expect("Caps Word: letters and - shifted, digits not", "m+02 +1B -1B m-02 +1E -1E m+02 +2D -2D m-02");
+    dn(D_); up(D_); dn(B_); up(B_);
+    expect("Caps Word: ended by space", "+2C -2C +1B -1B");
+    dn(A_); up(A_); wait_ms(6000); dn(B_); up(B_);
+    expect("Caps Word: idle timeout", "+1B -1B");
+    expect_idle("caps word");
+}
+
+static void t_repeat(void)
+{
+    reset(0);
+    keymap[0][0][0] = KC_A;
+    keymap[0][0][1] = QK_REPEAT_KEY;
+    keymap[0][0][2] = KC_LSFT;
+    dn(B_); up(B_);
+    expect("Repeat with no last key: nothing", "");
+    dn(A_); up(A_); dn(B_); up(B_); dn(B_); up(B_);
+    expect("Repeat", "+04 -04 +04 -04 +04 -04");
+    dn(C_); dn(A_); up(A_); up(C_); dn(B_); up(B_);
+    expect("Repeat brings the mods back", "+E1 +04 -04 -E1 m+02 +04 -04 m-02");
+    expect_idle("repeat");
+}
+
+static void t_alt_repeat(void)
+{
+    reset(0);
+    keymap[0][0][0] = KC_LEFT;
+    keymap[0][0][1] = QK_ALT_REPEAT_KEY;
+    keymap[0][0][2] = KC_LSFT;
+    keymap[0][0][3] = KC_Z;
+    keymap[0][0][4] = KC_LCTL;
+    dn(A_); up(A_); dn(B_); up(B_);
+    expect("Alt Repeat: Left -> Right", "+50 -50 +4F -4F");
+    dn(C_); dn(A_); up(A_); up(C_); dn(B_); up(B_);
+    expect("Alt Repeat keeps the mods", "+E1 +50 -50 -E1 m+02 +4F -4F m-02");
+    dn(E_); dn(D_); up(D_); up(E_); dn(B_); up(B_);
+    expect("Alt Repeat: Ctrl+Z -> Ctrl+Y", "+E0 +1D -1D -E0 m+01 +1C -1C m-01");
+
+    expect_idle("alt repeat");
+}
+
+static void t_layer_lock(void)
+{
+    reset(0);
+    keymap[0][5][8] = MO(1);
+    keymap[1][0][1] = QK_LAYER_LOCK;
+    keymap[0][0][0] = KC_A;
+    keymap[1][0][0] = KC_B;
+    dn(FN_); dn(B_); up(B_); up(FN_); dn(A_); up(A_);
+    expect("Layer Lock keeps MO's layer on", "+05 -05");
+    dn(B_); up(B_); dn(A_); up(A_);
+    expect("Layer Lock again: unlocked, off", "+04 -04");
+    expect_idle("layer lock");
+}
+
+#define FN2_ 5, 9
+
+static void t_tri_layer(void)
+{
+    reset(0);
+    keymap[0][5][8] = QK_TRI_LAYER_LOWER;
+    keymap[0][5][9] = QK_TRI_LAYER_UPPER;
+    keymap[0][0][0] = KC_A;
+    keymap[1][0][0] = KC_B;
+    keymap[2][0][0] = KC_C;
+    keymap[3][0][0] = KC_D;
+    dn(FN_); dn(A_); up(A_);
+    expect("tri-layer: lower", "+05 -05");
+    dn(FN2_); dn(A_); up(A_);
+    expect("tri-layer: both -> layer 3", "+07 -07");
+    up(FN_); dn(A_); up(A_);
+    expect("tri-layer: upper only", "+06 -06");
+    up(FN2_); dn(A_); up(A_);
+    expect("tri-layer: none", "+04 -04");
+    expect_idle("tri-layer");
+}
+
+static void t_combo_toggle(void)
+{
+    combo_setup();
+    keymap[0][0][2] = QK_COMBO_TOGGLE;
+    dn(C_); up(C_);
+    dn(J_); dn(K_); up(J_); up(K_);
+    expect("combos off", "+0D +0E -0D -0E");
+    dn(C_); up(C_);
+    dn(J_); dn(K_); up(J_); up(K_);
+    expect("combos back on", "+29 -29");
+    expect_idle("combo toggle");
+}
+
+static void t_osm_tap_toggle(void)
+{
+    reset(0);
+    action_config.osk_tap_toggle = 2;
+    keymap[0][0][0] = OSM(MOD_LSFT);
+    keymap[0][0][1] = KC_X;
+    dn(A_); up(A_); dn(A_); up(A_);
+    dn(B_); up(B_); dn(B_); up(B_);
+    expect("one-shot tapped twice: locked", "m+02 m-02 m+02 +1B -1B +1B -1B");
+    dn(A_); up(A_);
+    expect("tapped again: unlocked", "m+02 m-02");
+    expect_idle("one-shot tap toggle");
+}
+
+static void t_mt_tap_takes_oneshot(void)
+{
+    reset(0);
+    keymap[0][0][0] = OSM(MOD_LSFT);
+    keymap[0][3][0] = MT(MOD_LCTL, KC_A);
+    dn(A_); up(A_); dn(DUAL); up(DUAL);
+    expect("mod-tap's tap takes an armed one-shot mod", "m+02 m-02 m+02 +04 -04 m-02");
+    expect_idle("mod-tap + one-shot");
+}
+
 int main(void)
 {
     t_plain();
@@ -773,6 +992,17 @@ int main(void)
     t_combo_outputs();
     t_ko_basic();
     t_ko_conditions();
+    t_magic();
+    t_grave_escape();
+    t_space_cadet();
+    t_caps_word();
+    t_repeat();
+    t_alt_repeat();
+    t_layer_lock();
+    t_tri_layer();
+    t_combo_toggle();
+    t_osm_tap_toggle();
+    t_mt_tap_takes_oneshot();
 
     printf("\n%d/%d checks passed\n", checks - failures, checks);
     return failures ? 1 : 0;

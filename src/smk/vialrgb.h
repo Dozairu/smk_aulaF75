@@ -28,4 +28,7 @@ void vialrgb_save(void);
 /* Stored lighting state -> engine, at boot (after the dynamic store loads). */
 void vialrgb_apply(void);
 
+/* RGB keycodes: step the picker color, 0 = hue (wraps), 1 = saturation. */
+void vialrgb_step(uint8_t which, int8_t delta);
+
 #endif

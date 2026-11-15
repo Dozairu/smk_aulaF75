@@ -27,9 +27,9 @@
 #endif
 #define DYNAMIC_ENCODER_BYTES ((uint16_t)DYNAMIC_KEYMAP_LAYER_COUNT * DYNAMIC_ENCODER_COUNT * 4u)
 
-/* Vial-owned bytes at the end of the store: 16 bytes of QMK settings, then
- * the tap dance, combo and key override entries (10 bytes each; key
- * overrides reserved, not used yet). Laid out and interpreted by vial.c;
+/* Vial-owned bytes at the end of the store: 32 bytes of QMK settings, then
+ * the tap dance, combo and key override entries (10 bytes each).
+ * Laid out and interpreted by vial.c;
  * this file only keeps them. */
 #ifdef VIAL_ENABLE
 #    ifndef VIAL_TAP_DANCE_ENTRIES
@@ -41,7 +41,7 @@
 #    ifndef VIAL_KEY_OVERRIDE_ENTRIES
 #        define VIAL_KEY_OVERRIDE_ENTRIES 4u
 #    endif
-#    define VIAL_SETTINGS_BYTES 16u
+#    define VIAL_SETTINGS_BYTES 32u
 /* Inside the settings bytes, after the QMK settings: VialRGB color picker. */
 #    define VIAL_RGB_HUE        10u
 #    define VIAL_RGB_SAT        11u

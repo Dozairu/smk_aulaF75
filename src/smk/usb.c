@@ -598,6 +598,14 @@ void usb_wait_for_enumeration(void)
 }
 
 // not from the ISR: the bootloader never RETIs and reboots by jumping, so an in-service latch outlives it and kills USB.
+#ifdef ISP_ENABLE
+/* QK_BOOT: into the ISP bootloader from the main loop, like the USB command. */
+void usb_request_isp(void)
+{
+    usb_isp_requested = 1;
+}
+#endif
+
 void usb_task(void)
 {
 #ifdef ISP_ENABLE

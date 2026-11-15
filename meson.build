@@ -645,7 +645,7 @@ test(
         'test_action',
         ['src/smk/action.c', 'tests/host/test_action.c'],
         include_directories : include_directories('src/smk'),
-        c_args : ['-std=gnu2x', '-Wall', '-Wextra', '-Werror', '-DACTION_TAP_DANCE', '-DACTION_COMBO', '-DACTION_KEY_OVERRIDE'],
+        c_args : ['-std=gnu2x', '-Wall', '-Wextra', '-Werror', '-DACTION_TAP_DANCE', '-DACTION_COMBO', '-DACTION_KEY_OVERRIDE', '-DACTION_EXTRAS'],
         native : true,
         build_by_default : false,
     ),

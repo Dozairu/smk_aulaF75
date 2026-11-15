@@ -103,9 +103,10 @@ def main():
     keys = [(r[i], r[i + 1]) for i in range(2, 30, 2) if r[i] != 0xFF]
     good &= check(r[0] in (0, 1) and r[1] in (0, 1) and len(keys) > 0, 'unlock status: unlocked={} in_progress={} keys={}'.format(r[0], r[1], keys))
 
-    names = {2: "combo term", 6: "one-shot timeout", 7: "tapping term", 22: "permissive hold",
+    names = {1: "grave escape overrides", 2: "combo term", 5: "one-shot tap toggle",
+             6: "one-shot timeout", 20: "tapping toggle", 21: "magic", 7: "tapping term", 22: "permissive hold",
              23: "hold on other key press", 24: "retro tapping", 25: "quick tap term"}
-    widths = {2: 2, 6: 2, 7: 2, 25: 2}
+    widths = {2: 2, 6: 2, 7: 2, 21: 4, 25: 2}
     supported, cur = [], 0
     while cur != 0xFFFF:
         r = d.xfer(0xFE, 0x09, *struct.pack("<H", cur))
@@ -121,8 +122,8 @@ def main():
     r = d.xfer(0xFE, 0x0D, 0x00)
     r_entries = r
     n_td, n_combo = r[0], r[1]
-    good &= check(n_td == 8 and n_combo == 8 and r[2] == 4 and r[3] == 0,
-                  'dynamic entries: TD/combo/KO/alt-repeat = {}'.format(list(r[:4])))
+    good &= check(n_td == 8 and n_combo == 8 and r[2] == 4 and r[3] == 0 and r[31] == 3,
+                  'dynamic entries: TD/combo/KO/alt-repeat = {}, features (caps word, layer lock) = {}'.format(list(r[:4]), r[31]))
     for i in range(n_td):
         t = d.xfer(0xFE, 0x0D, 0x01, i)
         tap, hold, dbl, taphold, term = struct.unpack('<5H', bytes(t[1:11]))

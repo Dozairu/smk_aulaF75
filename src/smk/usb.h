@@ -27,6 +27,9 @@ void usb_task(void);
 
 // the part of the USB interrupt that does not vary by part; the vector calls it inside its own banking prologue.
 void usb_irq_dispatch(void);
+#ifdef ISP_ENABLE
+void usb_request_isp(void);
+#endif
 
 extern __bit usb_suspended;
 

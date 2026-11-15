@@ -126,7 +126,7 @@ bool via_process_packet(__xdata uint8_t *data)
         }
 
         case VIA_ID_DYNAMIC_KEYMAP_SET_KEYCODE: {
-            uint16_t keycode = (uint16_t)((uint16_t)data[4] << 8) | data[5];
+            uint16_t keycode = vial_firewall((uint16_t)((uint16_t)data[4] << 8) | data[5]);
             if (!dynamic_keymap_set_keycode(data[1], data[2], data[3], keycode)) {
                 data[0] = VIA_ID_UNHANDLED;
             }
@@ -141,7 +141,7 @@ bool via_process_packet(__xdata uint8_t *data)
         }
 
         case VIA_ID_DYNAMIC_KEYMAP_SET_ENCODER: {
-            uint16_t keycode = (uint16_t)((uint16_t)data[4] << 8) | data[5];
+            uint16_t keycode = vial_firewall((uint16_t)((uint16_t)data[4] << 8) | data[5]);
             if (!dynamic_encoder_set_keycode(data[1], data[2], data[3] != 0, keycode)) {
                 data[0] = VIA_ID_UNHANDLED;
             }
@@ -175,6 +175,7 @@ bool via_process_packet(__xdata uint8_t *data)
             if (size > RAW_HID_REPORT_SIZE - 4u) {
                 size = RAW_HID_REPORT_SIZE - 4u;
             }
+            vial_firewall_be(&data[4], size); /* keymap: big-endian keycodes */
             dynamic_keymap_set_buffer(offset, size, &data[4]);
             data[3] = requested;
             break;

@@ -30,4 +30,14 @@ void vial_tick(void);
 void vial_store_defaults(void);
 void vial_store_apply(void);
 
+
+/* QK_BOOT may not be put on a key while Vial is locked (vial-qmk's
+ * firewall): it is stored as KC_NO instead. _be: a buffer of big-endian
+ * keycodes (the VIA keymap buffer). */
+uint16_t vial_firewall(uint16_t keycode);
+void     vial_firewall_be(__xdata uint8_t *p, uint8_t size);
+
+#else
+#    define vial_firewall(kc)         (kc)
+#    define vial_firewall_be(p, size) ((void)0)
 #endif

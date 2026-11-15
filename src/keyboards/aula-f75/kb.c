@@ -14,6 +14,7 @@
 #include "aula_status.h"
 #include "vial.h"
 #include "dynamic_keymap.h"
+#include "vialrgb.h"
 #ifdef RF_EUART0
 #    include "aula_rf.h"
 #endif
@@ -55,6 +56,47 @@ extern void indicators_brightness_up(void);
 extern void indicators_brightness_down(void);
 extern void indicators_speed_up(void);
 extern void indicators_speed_down(void);
+
+/* QMK's RGB Matrix keycodes (QK_RGB_MATRIX_*), as Vial's Lighting keycodes. */
+#define RM_ON   0x7840u
+#define RM_OFF  0x7841u
+#define RM_TOGG 0x7842u
+#define RM_NEXT 0x7843u
+#define RM_PREV 0x7844u
+#define RM_HUEU 0x7845u
+#define RM_HUED 0x7846u
+#define RM_SATU 0x7847u
+#define RM_SATD 0x7848u
+#define RM_VALU 0x7849u
+#define RM_VALD 0x784Au
+#define RM_SPDU 0x784Bu
+#define RM_SPDD 0x784Cu
+
+#define FX_OFF_ID  14u /* AULA_FX_OFF (indicators.c) */
+#define FX_LAKE_ID 9u
+
+/* Lighting on / off (0 off, 1 on, 2 toggle): off remembers the effect. */
+static __xdata uint8_t rgb_saved = FX_LAKE_ID;
+
+static void rgb_power(uint8_t how)
+{
+    const uint8_t on = user_settings.led_effect != FX_OFF_ID;
+    if (how == 2u) {
+        how = on ? 0u : 1u;
+    }
+    if (how == 0u && on) {
+        rgb_saved               = user_settings.led_effect;
+        user_settings.led_effect = FX_OFF_ID;
+    } else if (how == 1u && !on) {
+        user_settings.led_effect = rgb_saved;
+    } else {
+        return;
+    }
+    tick_pause();
+    indicators_init();
+    tick_resume();
+    settings_mark_dirty();
+}
 #ifdef RF_EUART0
 extern void indicators_toggle_rf_diag(void);
 extern void indicators_show_battery(void);
@@ -94,35 +136,83 @@ bool kb_process_record(uint16_t keycode, bool key_pressed)
     switch (keycode) {
         case FX_NEXT:
         case RGB_MODE_FORWARD:
+        case RM_NEXT:
             if (key_pressed) indicators_next_effect();
             return false;
         case FX_PREV:
         case RGB_MODE_REVERSE:
+        case RM_PREV:
             if (key_pressed) indicators_prev_effect();
             return false;
         case BRI_UP:
         case RGB_VAI:
+        case RM_VALU:
             if (key_pressed) indicators_brightness_up();
             return false;
         case BRI_DN:
         case RGB_VAD:
+        case RM_VALD:
             if (key_pressed) indicators_brightness_down();
             return false;
         case SPD_UP:
         case RGB_SPI:
+        case RM_SPDU:
             if (key_pressed) indicators_speed_up();
             return false;
         case SPD_DN:
         case RGB_SPD:
+        case RM_SPDD:
             if (key_pressed) indicators_speed_down();
             return false;
         case CLR_NEXT:
+            if (key_pressed) indicators_next_color();
+            return false;
+#ifdef VIALRGB_ENABLE
+        /* Hue / saturation: steps of the VialRGB picker color (QMK's steps). */
+        case RGB_HUI:
+        case RM_HUEU:
+            if (key_pressed) vialrgb_step(0, 8);
+            return false;
+        case RGB_HUD:
+        case RM_HUED:
+            if (key_pressed) vialrgb_step(0, -8);
+            return false;
+        case RGB_SAI:
+        case RM_SATU:
+            if (key_pressed) vialrgb_step(1, 17);
+            return false;
+        case RGB_SAD:
+        case RM_SATD:
+            if (key_pressed) vialrgb_step(1, -17);
+            return false;
+#else
         case RGB_HUI:
         case RGB_HUD:
             if (key_pressed) indicators_next_color();
             return false;
-        case DIR_TOG:
+#endif
         case RGB_TOG:
+        case RM_TOGG:
+            if (key_pressed) rgb_power(2);
+            return false;
+        case RM_ON:
+            if (key_pressed) rgb_power(1);
+            return false;
+        case RM_OFF:
+            if (key_pressed) rgb_power(0);
+            return false;
+        case QK_BOOT:
+#ifdef ISP_ENABLE
+            if (key_pressed) usb_request_isp(); /* flashing mode, as sinowisp's command */
+#endif
+            return false;
+        case QK_CLEAR_EEPROM:
+            if (key_pressed) { /* factory reset, as holding Fn+Esc: next kb_update */
+                factory_rst_held = 1;
+                factory_rst_cnt  = 2999u;
+            }
+            return false;
+        case DIR_TOG:
             if (key_pressed) indicators_toggle_direction();
             return false;
         case MACRO_TG:

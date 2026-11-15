@@ -4,6 +4,7 @@
 
 #    include "action.h"
 #    include "dynamic_keymap.h"
+#    include "keyboard.h"
 #    include "kbdef.h"
 #    include "matrix.h"
 #    include "raw_hid.h"
@@ -92,6 +93,29 @@ bool vial_unlocked(void)
     return unlocked;
 }
 
+/* vial-qmk's firewall: no QK_BOOT on a key unless unlocked. */
+uint16_t vial_firewall(uint16_t keycode)
+{
+    return (keycode == QK_BOOT && !unlocked) ? KC_NO : keycode;
+}
+
+static void firewall_buf(__xdata uint8_t *p, uint8_t size, uint8_t hi)
+{
+    if (unlocked) {
+        return;
+    }
+    for (uint8_t i = 0; i + 1u < size; i += 2u) {
+        if (p[i + hi] == (uint8_t)(QK_BOOT >> 8) && p[i + 1u - hi] == (uint8_t)QK_BOOT) {
+            p[i] = p[i + 1u] = 0;
+        }
+    }
+}
+
+void vial_firewall_be(__xdata uint8_t *p, uint8_t size)
+{
+    firewall_buf(p, size, 0);
+}
+
 bool vial_unlock_in_progress(void)
 {
     return unlock_busy;
@@ -146,12 +170,15 @@ static void unlock_poll(void)
 
 /* ------------------------------------------------------------ QMK settings
  *
- * Stored in the Vial area of the dynamic store, little-endian:
- *   [0..1] tapping term   [2..3] quick tap term   [4..5] one-shot timeout
- *   [6]    flags (ACTION_PERMISSIVE_HOLD | ...)    [7]    marker
- *   [8..9] combo term     [10] / [11] VialRGB hue / saturation (aula_vialrgb.c)
- * QSIDs and wire widths follow vial-gui's qmk_settings.json: integers are
- * u16 LE, the three tap-hold booleans are each their own QSID carrying 0/1.
+ * Stored in the Vial area of the dynamic store (VIAL_SETTINGS_BYTES), LE:
+ *   [0..1]   tapping term       [2..3]   quick tap term   [4..5] one-shot timeout
+ *   [6]      tap-hold flags     [7]      marker           [8..9] combo term
+ *   [10..11] VialRGB hue / sat (aula_vialrgb.c)           [12..13] magic
+ *   [14..15] spare              [16] grave escape  [17] spare
+ *   [18]     one-shot tap toggle [19] tapping toggle       [20..31] spare
+ * QSIDs and wire widths follow vial-gui's qmk_settings.json. The three
+ * tap-hold booleans (22-24) are each their own QSID carrying 0/1; everything
+ * else is a 1- or 2-byte value (QSID 21 travels as 4 bytes, the top two 0).
  */
 #    define QS_TAPPING_TERM   0u
 #    define QS_QUICK_TAP_TERM 2u
@@ -160,20 +187,22 @@ static void unlock_poll(void)
 #    define QS_MARKER         7u
 #    define QS_MARKER_VALUE   0x51u
 #    define QS_COMBO_TERM     8u
+#    define QS_MAGIC          12u
+#    define QS_GRAVE_ESC      16u
+#    define QS_OSK_TAP_TOGGLE 18u
+#    define QS_TAPPING_TOGGLE 19u
 
-#    define QSID_COMBO_TERM        2u
-#    define QSID_OSK_TIMEOUT       6u
-#    define QSID_TAPPING_TERM      7u
-#    define QSID_PERMISSIVE_HOLD   22u
-#    define QSID_HOLD_ON_OTHER_KEY 23u
-#    define QSID_RETRO_TAPPING     24u
-#    define QSID_QUICK_TAP_TERM    25u
+_Static_assert(QS_TAPPING_TOGGLE < VIAL_SETTINGS_BYTES && VIAL_RGB_SAT < QS_MAGIC, "QMK settings layout");
 
-/* Ascending: the query pages through them in order. */
-static const __code uint8_t qsids[] = {
-    QSID_COMBO_TERM,      QSID_OSK_TIMEOUT,   QSID_TAPPING_TERM,  QSID_PERMISSIVE_HOLD,
-    QSID_HOLD_ON_OTHER_KEY, QSID_RETRO_TAPPING, QSID_QUICK_TAP_TERM,
+/* {QSID, offset, bytes}, ascending by QSID: the query pages through it. */
+static const __code uint8_t qs_map[][3] = {
+    {1, QS_GRAVE_ESC, 1},       {2, QS_COMBO_TERM, 2},
+    {5, QS_OSK_TAP_TOGGLE, 1}, {6, QS_OSK_TIMEOUT, 2},
+    {7, QS_TAPPING_TERM, 2},    {20, QS_TAPPING_TOGGLE, 1}, {21, QS_MAGIC, 2},
+    {22, 0xFF, ACTION_PERMISSIVE_HOLD}, {23, 0xFF, ACTION_HOLD_ON_OTHER_KEY_PRESS},
+    {24, 0xFF, ACTION_RETRO_TAPPING},   {25, QS_QUICK_TAP_TERM, 2},
 };
+#    define QS_COUNT ((uint8_t)(sizeof(qs_map) / sizeof(qs_map[0])))
 
 static uint16_t qs_rd16(uint8_t off)
 {
@@ -278,17 +307,20 @@ static void entries_defaults(void)
     ko_fill_defaults();
 }
 
-/* QMK settings only (the GUI's "Reset to defaults" button). */
+/* QMK settings only (the GUI's "Reset to defaults" button); leaves the
+ * VialRGB color picker bytes alone. */
 static void qs_defaults(void)
 {
     __xdata uint8_t *s = dynamic_vial_store();
-    memset(s, 0, VIAL_RGB_HUE); /* the QMK settings; leaves the color picker */
+    memset(s, 0, VIAL_RGB_HUE);
+    memset(s + QS_MAGIC, 0, VIAL_SETTINGS_BYTES - QS_MAGIC);
     qs_wr16(QS_TAPPING_TERM, ACTION_TAPPING_TERM_DEFAULT);
     qs_wr16(QS_QUICK_TAP_TERM, ACTION_TAPPING_TERM_DEFAULT);
     qs_wr16(QS_OSK_TIMEOUT, ACTION_OSK_TIMEOUT_DEFAULT);
     qs_wr16(QS_COMBO_TERM, ACTION_COMBO_TERM_DEFAULT);
-    s[QS_FLAGS]  = 0;
-    s[QS_MARKER] = QS_MARKER_VALUE;
+    qs_wr16(QS_MAGIC, ACTION_MAGIC_DEFAULT);
+    s[QS_TAPPING_TOGGLE] = ACTION_TAPPING_TOGGLE_DEF;
+    s[QS_MARKER]         = QS_MARKER_VALUE;
 }
 
 /* Everything Vial keeps: new store, factory reset. */
@@ -302,42 +334,48 @@ void vial_store_defaults(void)
 
 void vial_store_apply(void)
 {
-    if (dynamic_vial_store()[QS_MARKER] != QS_MARKER_VALUE) {
+    __xdata uint8_t *s = dynamic_vial_store();
+    if (s[QS_MARKER] != QS_MARKER_VALUE) {
         vial_store_defaults();
         dynamic_vial_mark_dirty();
     }
     if (ko_fill_defaults()) {
         dynamic_vial_mark_dirty();
     }
-    action_config.tapping_term   = qs_rd16(QS_TAPPING_TERM);
-    action_config.quick_tap_term = qs_rd16(QS_QUICK_TAP_TERM);
-    action_config.osk_timeout    = qs_rd16(QS_OSK_TIMEOUT);
-    action_config.combo_term     = qs_rd16(QS_COMBO_TERM);
-    action_config.flags          = dynamic_vial_store()[QS_FLAGS];
+    action_config.tapping_term       = qs_rd16(QS_TAPPING_TERM);
+    action_config.quick_tap_term     = qs_rd16(QS_QUICK_TAP_TERM);
+    action_config.osk_timeout        = qs_rd16(QS_OSK_TIMEOUT);
+    action_config.combo_term         = qs_rd16(QS_COMBO_TERM);
+    action_config.flags              = s[QS_FLAGS];
+    action_config.magic              = qs_rd16(QS_MAGIC);
+    action_config.grave_esc          = s[QS_GRAVE_ESC];
+    action_config.osk_tap_toggle     = s[QS_OSK_TAP_TOGGLE];
+    action_config.tapping_toggle     = s[QS_TAPPING_TOGGLE];
+    keymap_config.nkro               = (action_config.magic & MAGIC_NKRO) ? 1u : 0u;
 #    ifdef VIALRGB_ENABLE
     vialrgb_apply(); /* stored picker color -> lighting engine */
 #    endif
 }
 
-static uint8_t qsid_flag(uint16_t qsid)
+/* A Magic keycode changed action_config.magic: store it, apply NKRO. */
+void action_hal_config_changed(void)
 {
-    switch (qsid) {
-        case QSID_PERMISSIVE_HOLD:   return ACTION_PERMISSIVE_HOLD;
-        case QSID_HOLD_ON_OTHER_KEY: return ACTION_HOLD_ON_OTHER_KEY_PRESS;
-        case QSID_RETRO_TAPPING:     return ACTION_RETRO_TAPPING;
-        default:                     return 0;
-    }
+    __xdata uint8_t *s = dynamic_vial_store();
+    qs_wr16(QS_MAGIC, action_config.magic);
+    keymap_config.nkro = (action_config.magic & MAGIC_NKRO) ? 1u : 0u;
+    dynamic_vial_mark_dirty();
 }
 
-static uint8_t qsid_u16_offset(uint16_t qsid)
+/* Index into qs_map for a QSID in data[2..3], 0xFF if unknown. */
+static uint8_t qs_find(const __xdata uint8_t *data)
 {
-    switch (qsid) {
-        case QSID_TAPPING_TERM:   return QS_TAPPING_TERM;
-        case QSID_QUICK_TAP_TERM: return QS_QUICK_TAP_TERM;
-        case QSID_OSK_TIMEOUT:    return QS_OSK_TIMEOUT;
-        case QSID_COMBO_TERM:     return QS_COMBO_TERM;
-        default:                  return 0xFFu;
+    const uint16_t qsid = (uint16_t)data[2] | (uint16_t)((uint16_t)data[3] << 8);
+    for (uint8_t i = 0; i < QS_COUNT; i++) {
+        if (qs_map[i][0] == qsid) {
+            return i;
+        }
     }
+    return 0xFFu;
 }
 
 static void qmk_settings_query(__xdata uint8_t *data)
@@ -345,9 +383,9 @@ static void qmk_settings_query(__xdata uint8_t *data)
     const uint16_t gt = (uint16_t)data[2] | (uint16_t)((uint16_t)data[3] << 8);
     uint8_t        o  = 0;
     memset(data, 0xFF, RAW_HID_REPORT_SIZE); /* 0xFFFF = end of list */
-    for (uint8_t i = 0; i < sizeof(qsids); i++) {
-        if (qsids[i] > gt) {
-            data[o++] = qsids[i];
+    for (uint8_t i = 0; i < QS_COUNT; i++) {
+        if (qs_map[i][0] > gt) {
+            data[o++] = qs_map[i][0];
             data[o++] = 0;
         }
     }
@@ -355,40 +393,40 @@ static void qmk_settings_query(__xdata uint8_t *data)
 
 static void qmk_settings_get(__xdata uint8_t *data)
 {
-    const uint16_t qsid = (uint16_t)data[2] | (uint16_t)((uint16_t)data[3] << 8);
-    const uint8_t  off  = qsid_u16_offset(qsid);
-    const uint8_t  flag = qsid_flag(qsid);
-
+    const uint8_t          i = qs_find(data);
+    const __xdata uint8_t *s = dynamic_vial_store();
     memset(data, 0, RAW_HID_REPORT_SIZE);
-    if (off != 0xFFu) {
-        const uint16_t v = qs_rd16(off);
-        data[1] = (uint8_t)v;
-        data[2] = (uint8_t)(v >> 8);
-    } else if (flag) {
-        data[1] = (dynamic_vial_store()[QS_FLAGS] & flag) ? 1u : 0u;
-    } else {
+    if (i == 0xFFu) {
         data[0] = 0xFFu; /* unknown setting */
+    } else if (qs_map[i][1] == 0xFFu) {
+        data[1] = (s[QS_FLAGS] & qs_map[i][2]) ? 1u : 0u;
+    } else {
+        data[1] = s[qs_map[i][1]];
+        if (qs_map[i][2] == 2u) {
+            data[2] = s[qs_map[i][1] + 1u];
+        }
     }
 }
 
 static void qmk_settings_set(__xdata uint8_t *data)
 {
-    const uint16_t qsid = (uint16_t)data[2] | (uint16_t)((uint16_t)data[3] << 8);
-    const uint8_t  off  = qsid_u16_offset(qsid);
-    const uint8_t  flag = qsid_flag(qsid);
-
-    if (off != 0xFFu) {
-        qs_wr16(off, (uint16_t)data[4] | (uint16_t)((uint16_t)data[5] << 8));
-    } else if (flag) {
-        __xdata uint8_t *s = dynamic_vial_store();
-        if (data[4] & 1u) {
-            s[QS_FLAGS] |= flag;
-        } else {
-            s[QS_FLAGS] &= (uint8_t)~flag;
-        }
-    } else {
+    const uint8_t    i = qs_find(data);
+    __xdata uint8_t *s = dynamic_vial_store();
+    if (i == 0xFFu) {
         data[0] = 0xFFu;
         return;
+    }
+    if (qs_map[i][1] == 0xFFu) {
+        if (data[4] & 1u) {
+            s[QS_FLAGS] |= qs_map[i][2];
+        } else {
+            s[QS_FLAGS] &= (uint8_t)~qs_map[i][2];
+        }
+    } else {
+        s[qs_map[i][1]] = data[4];
+        if (qs_map[i][2] == 2u) {
+            s[qs_map[i][1] + 1u] = data[5];
+        }
     }
     vial_store_apply();
     dynamic_vial_mark_dirty();
@@ -410,6 +448,7 @@ static void dynamic_entry_op(__xdata uint8_t *data)
             data[0] = VIAL_TAP_DANCE_ENTRIES;
             data[1] = VIAL_COMBO_ENTRIES;
             data[2] = VIAL_KEY_OVERRIDE_ENTRIES;
+            data[31] = 0x03u; /* Caps Word, Layer Lock (keycodes in the engine) */
             return;
         case DYNAMIC_VIAL_TAP_DANCE_GET:
         case DYNAMIC_VIAL_TAP_DANCE_SET:
@@ -437,6 +476,9 @@ static void dynamic_entry_op(__xdata uint8_t *data)
         memset(data, 0, RAW_HID_REPORT_SIZE);
         memcpy(&data[1], entry_ptr(table, idx), VIAL_ENTRY_BYTES);
     } else {
+        /* entries: little-endian keycodes; key overrides have
+         * them only in the first two fields (then the layer mask, mods, options) */
+        firewall_buf(&data[4], table == VIAL_KO_OFFSET ? 4u : VIAL_ENTRY_BYTES, 1);
         memcpy(entry_ptr(table, idx), &data[4], VIAL_ENTRY_BYTES);
         dynamic_vial_mark_dirty();
         data[0] = 0;

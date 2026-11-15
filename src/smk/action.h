@@ -36,6 +36,12 @@
 #if defined(VIAL_ENABLE) && !defined(ACTION_KEY_OVERRIDE)
 #    define ACTION_KEY_OVERRIDE
 #endif
+/* The QMK quantum keycodes Vial offers: Grave Escape, Space Cadet, Caps Word,
+ * Repeat / Alt Repeat, Layer Lock, tri-layer, Magic, combo
+ * on/off, one-shot tap toggle, tapping toggle count. */
+#if defined(VIAL_ENABLE) && !defined(ACTION_EXTRAS)
+#    define ACTION_EXTRAS
+#endif
 
 /* --------------------------------------------------------------- config */
 
@@ -43,12 +49,37 @@
 #define ACTION_HOLD_ON_OTHER_KEY_PRESS 0x02u
 #define ACTION_RETRO_TAPPING           0x04u
 
+/* Magic (QMK keymap_config, Vial QSID 21), bit = vial-gui's. */
+#define MAGIC_SWAP_CAPS_LCTL 0x0001u
+#define MAGIC_CAPS_AS_CTRL   0x0002u
+#define MAGIC_SWAP_LALT_LGUI 0x0004u
+#define MAGIC_SWAP_RALT_RGUI 0x0008u
+#define MAGIC_NO_GUI         0x0010u
+#define MAGIC_SWAP_GRV_ESC   0x0020u
+#define MAGIC_SWAP_BSLS_BSPC 0x0040u
+#define MAGIC_NKRO           0x0080u
+#define MAGIC_SWAP_LCTL_LGUI 0x0100u
+#define MAGIC_SWAP_RCTL_RGUI 0x0200u
+
+/* Grave Escape overrides (QSID 1): send Escape anyway when this mod is held. */
+#define GESC_ALT   0x01u
+#define GESC_CTRL  0x02u
+#define GESC_GUI   0x04u
+#define GESC_SHIFT 0x08u
+
+
 typedef struct {
     uint16_t tapping_term;   /* ms: hold decision for tap-hold keys        */
     uint16_t quick_tap_term; /* ms: re-press after a tap repeats the tap   */
     uint16_t osk_timeout;    /* ms: one-shot mod/layer expiry, 0 = never   */
     uint16_t combo_term;     /* ms: all keys of a combo pressed within it  */
     uint8_t  flags;          /* ACTION_PERMISSIVE_HOLD | ...               */
+#ifdef ACTION_EXTRAS
+    uint16_t magic;              /* MAGIC_*                                 */
+    uint8_t  grave_esc;          /* GESC_*                                  */
+    uint8_t  osk_tap_toggle;     /* taps that lock a one-shot mod, 0 = off  */
+    uint8_t  tapping_toggle;     /* TT taps that toggle the layer           */
+#endif
 } action_config_t;
 
 extern __xdata action_config_t action_config;
@@ -56,6 +87,8 @@ extern __xdata action_config_t action_config;
 #define ACTION_TAPPING_TERM_DEFAULT 200u
 #define ACTION_OSK_TIMEOUT_DEFAULT  5000u
 #define ACTION_COMBO_TERM_DEFAULT   50u
+#define ACTION_TAPPING_TOGGLE_DEF   5u
+#define ACTION_MAGIC_DEFAULT        MAGIC_NKRO
 
 void action_config_defaults(void);
 
@@ -131,4 +164,10 @@ bool action_hal_combo(uint8_t index, __xdata uint16_t *entry);
 #    define KO_OPT_NO_UNREGISTER_ON_OTHER 0x20u
 #    define KO_OPT_ENABLED                0x80u
 bool action_hal_key_override(uint8_t index, __xdata uint16_t *entry);
+#endif
+
+#ifdef ACTION_EXTRAS
+/* A Magic keycode changed action_config.magic:
+ * store it and apply what lives outside the engine (NKRO). */
+void action_hal_config_changed(void);
 #endif

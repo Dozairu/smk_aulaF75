@@ -15,8 +15,8 @@
 #        ifdef VIAL_ENABLE
 /* The store gained the Vial area: a different layout, never load the old one.
  * 0x02: QMK settings. 0x03: + tap dance entries. 0x04: + combo entries, key
- * override space, combo term. */
-#            define DYNAMIC_KEYMAP_STORAGE_VERSION 0x04u
+ * override space, combo term. 0x05: 32 bytes of QMK settings. */
+#            define DYNAMIC_KEYMAP_STORAGE_VERSION 0x05u
 #        else
 #            define DYNAMIC_KEYMAP_STORAGE_VERSION 0x01u
 #        endif

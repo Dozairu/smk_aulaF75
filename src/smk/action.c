@@ -146,6 +146,38 @@ static __xdata uint8_t  ko_slot = 0xFFu; /* slot of the trigger key; 0xFF: none 
 static __xdata uint8_t  ko_lifted;       /* suppressed mods taken off the report */
 #endif
 
+#ifdef ACTION_EXTRAS
+#    define ROLE_SC 6u /* Space Cadet key, held: its hold mod is down        */
+#    define MOD_SHIFT 0x22u
+#    define CW_IDLE_MS 5000u
+static __xdata uint8_t  llock;          /* Layer Lock: locked layers           */
+static __xdata uint8_t  combos_off;     /* CMB_OFF                             */
+static __xdata uint8_t  cw_on;          /* Caps Word active                    */
+static __xdata uint16_t cw_time;        /* ...last key, for its idle timeout   */
+static __xdata uint16_t rep_kc;         /* Repeat: last output keycode          */
+static __xdata uint8_t  rep_mods;       /* ...and the mods held with it         */
+static __xdata uint8_t  rep_busy;       /* a Repeat / Alt Repeat is being sent  */
+static __xdata uint16_t sc_time;        /* Space Cadet: when its key went down */
+static __xdata uint8_t  osm_lock;       /* one-shot mods locked by tap toggle  */
+static __xdata uint8_t  osm_taps;
+static __xdata uint8_t  osm_tap_m;
+static __xdata uint8_t  tt_pos = POS_NONE; /* TT taps toggling the layer       */
+static __xdata uint8_t  tt_n;
+static __xdata uint16_t tt_time;
+
+/* Space Cadet (QK_SPACE_CADET_*, 0x7C18..0x7C1E): hold mod, tap mod, tap key.
+ * Held: the hold mod; tapped alone: tap mod + key (QMK's defaults). */
+static const __code uint8_t sc_keys[7][3] = {
+    {0x01, 0x02, KC_9},   /* SC_LCPO  LCtrl  / (   */
+    {0x10, 0x20, KC_0},   /* SC_RCPC  RCtrl  / )   */
+    {0x02, 0x02, KC_9},   /* SC_LSPO  LShift / (   */
+    {0x20, 0x20, KC_0},   /* SC_RSPC  RShift / )   */
+    {0x04, 0x02, KC_9},   /* SC_LAPO  LAlt   / (   */
+    {0x40, 0x20, KC_0},   /* SC_RAPC  RAlt   / )   */
+    {0x20, 0x20, KC_ENT}, /* SC_SENT  RShift / Shift+Enter (tap mod = hold mod) */
+};
+#endif
+
 #ifdef ACTION_TAP_DANCE
 /* The one tap dance in progress (see "tap dance" below). */
 static __xdata uint16_t td_e[TD_FIELDS];
@@ -167,6 +199,12 @@ void action_config_defaults(void)
     action_config.osk_timeout    = ACTION_OSK_TIMEOUT_DEFAULT;
     action_config.combo_term     = ACTION_COMBO_TERM_DEFAULT;
     action_config.flags          = 0;
+#ifdef ACTION_EXTRAS
+    action_config.magic              = ACTION_MAGIC_DEFAULT;
+    action_config.grave_esc          = 0;
+    action_config.osk_tap_toggle     = 0;
+    action_config.tapping_toggle     = ACTION_TAPPING_TOGGLE_DEF;
+#endif
 }
 
 void action_init(void)
@@ -187,6 +225,11 @@ void action_init(void)
 #endif
 #ifdef ACTION_KEY_OVERRIDE
     ko_slot = 0xFFu;
+#endif
+#ifdef ACTION_EXTRAS
+    llock = combos_off = cw_on = rep_busy = osm_lock = osm_taps = 0;
+    rep_kc  = KC_NO;
+    tt_pos  = POS_NONE;
 #endif
 #ifdef ACTION_COMBO
     cb_n       = 0;
@@ -214,6 +257,11 @@ static void layer_on(uint8_t l)
 
 static void layer_off(uint8_t l)
 {
+#ifdef ACTION_EXTRAS
+    if (llock & (uint8_t)(1u << l)) {
+        return; /* Layer Lock: stays on until unlocked */
+    }
+#endif
     if (l < 8u) {
         layer_state &= (uint8_t)~(1u << l);
     }
@@ -306,13 +354,27 @@ static void mark_interrupted(uint8_t except_pos)
     }
 }
 
-static void tap_press(uint8_t pos, uint16_t kc)
+static void press_output(uint8_t slot, uint8_t pos, uint16_t kc);
+
+/* The tap of a tap-hold key (slot role ROLE_TAP). MT / LT taps go through the
+ * output stage like any key (one-shot mods, Caps Word, Repeat, Magic...). */
+static void tap_press(uint8_t slot, uint8_t pos, uint16_t kc)
 {
     if (IS_QK_LAYER_TAP_TOGGLE(kc)) {
+#ifdef ACTION_EXTRAS
+        /* TT: toggles after action_config.tapping_toggle taps in a row. */
+        tt_n    = (tt_pos == pos && elapsed(tt_time) < action_config.tapping_term) ? (uint8_t)(tt_n + 1u) : 1u;
+        tt_pos  = pos;
+        tt_time = action_hal_timer();
+        if (tt_n < action_config.tapping_toggle) {
+            return;
+        }
+        tt_n = 0;
+#endif
         layer_state ^= (uint8_t)(1u << dual_layer(kc));
         layer_state &= (uint8_t)((1u << layer_count()) - 1u);
     } else if (dual_tap_kc(kc) != KC_NO) {
-        send(pos, dual_tap_kc(kc), true);
+        press_output(slot, pos, dual_tap_kc(kc));
     }
 }
 
@@ -350,10 +412,13 @@ static void hold_off(uint16_t kc)
  * "Mods held" is worked out from the engine's own held keys, not from the
  * report, so a mod that is let go during the override is never put back.
  */
-#ifdef ACTION_KEY_OVERRIDE
+#if defined(ACTION_KEY_OVERRIDE) || defined(ACTION_EXTRAS)
 static uint8_t held_mods(void)
 {
     uint8_t m = osm_mods;
+#    ifdef ACTION_EXTRAS
+    m |= osm_lock;
+#    endif
     for (uint8_t i = 0; i < SLOTS; i++) {
         if (s_pos[i] == POS_NONE) {
             continue;
@@ -378,13 +443,20 @@ static uint8_t held_mods(void)
             case ROLE_OSM:
                 m |= mods8((uint8_t)(kc & 0x1Fu));
                 break;
+#    ifdef ACTION_EXTRAS
+            case ROLE_SC:
+                m |= sc_keys[(uint8_t)(kc - QK_SPACE_CADET_LEFT_CTRL_PARENTHESIS_OPEN)][0];
+                break;
+#    endif
             default:
                 break;
         }
     }
     return m;
 }
+#endif
 
+#ifdef ACTION_KEY_OVERRIDE
 /* ko_e's mod condition against the held mods. */
 static bool ko_mods_match(void)
 {
@@ -452,6 +524,296 @@ static void ko_end(uint8_t pos, bool reregister)
 }
 #endif
 
+/* ------------------------------------------------- QMK quantum keycodes
+ *
+ * The keycodes Vial's picker offers beyond layers / tap-hold, with QMK's
+ * default behaviour: Magic (keymap_config swaps), Grave Escape, Space Cadet,
+ * Caps Word, Repeat / Alt Repeat, Layer Lock, tri-layer (FN_MO13 / FN_MO23),
+ * combo on/off. QK_BOOT, EE_CLR and the RGB keys are not engine
+ * business: they go out to action_hal_send() for the keyboard to handle.
+ */
+#ifdef ACTION_EXTRAS
+static uint16_t magic_remap(uint16_t kc)
+{
+    const uint16_t m      = action_config.magic;
+    switch (kc) {
+        case KC_CAPS:
+            return (m & (MAGIC_SWAP_CAPS_LCTL | MAGIC_CAPS_AS_CTRL)) ? KC_LCTL : kc;
+        case KC_LCTL:
+            if (m & MAGIC_SWAP_CAPS_LCTL) return KC_CAPS;
+            if (m & MAGIC_SWAP_LCTL_LGUI) return (m & MAGIC_NO_GUI) ? KC_NO : KC_LGUI;
+            break;
+        case KC_RCTL:
+            if (m & MAGIC_SWAP_RCTL_RGUI) return (m & MAGIC_NO_GUI) ? KC_NO : KC_RGUI;
+            break;
+        case KC_LALT:
+            if (m & MAGIC_SWAP_LALT_LGUI) return (m & MAGIC_NO_GUI) ? KC_NO : KC_LGUI;
+            break;
+        case KC_RALT:
+            if (m & MAGIC_SWAP_RALT_RGUI) return (m & MAGIC_NO_GUI) ? KC_NO : KC_RGUI;
+            break;
+        case KC_LGUI:
+            if (m & MAGIC_SWAP_LALT_LGUI) return KC_LALT;
+            if (m & MAGIC_SWAP_LCTL_LGUI) return KC_LCTL;
+            return (m & MAGIC_NO_GUI) ? KC_NO : kc;
+        case KC_RGUI:
+            if (m & MAGIC_SWAP_RALT_RGUI) return KC_RALT;
+            if (m & MAGIC_SWAP_RCTL_RGUI) return KC_RCTL;
+            return (m & MAGIC_NO_GUI) ? KC_NO : kc;
+        case KC_GRV:
+            return (m & MAGIC_SWAP_GRV_ESC) ? KC_ESC : kc;
+        case KC_ESC:
+            return (m & MAGIC_SWAP_GRV_ESC) ? KC_GRV : kc;
+        case KC_BSLS:
+            return (m & MAGIC_SWAP_BSLS_BSPC) ? KC_BSPC : kc;
+        case KC_BSPC:
+            return (m & MAGIC_SWAP_BSLS_BSPC) ? KC_BSLS : kc;
+        default:
+            break;
+    }
+    return kc;
+}
+
+/* Magic keycodes 0x7000 + n: op (set / clear / toggle) on one of the masks. */
+#    define MG_SET 0x40u
+#    define MG_CLR 0x80u
+#    define MG_TOG 0xC0u
+static const __code uint16_t magic_masks[12] = {
+    MAGIC_SWAP_CAPS_LCTL, MAGIC_CAPS_AS_CTRL,   MAGIC_SWAP_LALT_LGUI, MAGIC_SWAP_RALT_RGUI,
+    MAGIC_NO_GUI,         MAGIC_SWAP_GRV_ESC,   MAGIC_SWAP_BSLS_BSPC, MAGIC_NKRO,
+    MAGIC_SWAP_LCTL_LGUI, MAGIC_SWAP_RCTL_RGUI,
+    MAGIC_SWAP_LALT_LGUI | MAGIC_SWAP_RALT_RGUI, MAGIC_SWAP_LCTL_LGUI | MAGIC_SWAP_RCTL_RGUI,
+};
+static const __code uint8_t magic_ops[30] = {
+    MG_SET | 0, MG_CLR | 0, MG_TOG | 0, MG_CLR | 1,  MG_SET | 1,  /* 00 caps/ctrl  */
+    MG_SET | 2, MG_CLR | 2, MG_SET | 3, MG_CLR | 3,               /* 05 alt/gui    */
+    MG_CLR | 4, MG_SET | 4, MG_TOG | 4,                           /* 09 no gui     */
+    MG_SET | 5, MG_CLR | 5, MG_SET | 6, MG_CLR | 6,  MG_TOG | 6,  /* 0C grv, bsls  */
+    MG_SET | 7, MG_CLR | 7, MG_TOG | 7,                           /* 11 nkro       */
+    MG_SET | 10, MG_CLR | 10, MG_TOG | 10,                        /* 14 alt/gui    */
+    MG_SET | 8, MG_CLR | 8, MG_SET | 9, MG_CLR | 9,               /* 17 ctl/gui    */
+    MG_SET | 11, MG_CLR | 11, MG_TOG | 11,                        /* 1B ctl/gui    */
+};
+
+static void magic_key(uint8_t n)
+{
+    if (n >= sizeof(magic_ops)) {
+        return; /* EE_HANDS and beyond: no meaning here */
+    }
+    const uint8_t  op   = magic_ops[n];
+    const uint16_t mask = magic_masks[op & 0x0Fu];
+    if ((op & MG_TOG) == MG_SET) {
+        action_config.magic |= mask;
+    } else if ((op & MG_TOG) == MG_CLR) {
+        action_config.magic &= (uint16_t)~mask;
+    } else {
+        action_config.magic ^= mask;
+    }
+    action_hal_config_changed();
+}
+
+/* Caps Word: 2 = shift it, 1 = goes on unshifted, 0 = ends Caps Word. */
+static uint8_t cw_class(uint16_t kc)
+{
+    if ((kc >= KC_A && kc <= KC_Z) || kc == KC_MINS) {
+        return 2;
+    }
+    if ((kc >= KC_1 && kc <= KC_0) || kc == KC_BSPC || kc == KC_DEL || kc == LSFT(KC_MINS) ||
+        IS_MODIFIER_KEYCODE(kc)) {
+        return 1;
+    }
+    return 0;
+}
+
+#endif
+
+/*
+ * Output stage: a key that ends up as a keycode for the host (basic, modded,
+ * consumer, macro, keyboard-specific). Magic, armed one-shot
+ * mods, Caps Word, Repeat bookkeeping and key overrides apply here. The final
+ * keycode is kept in the slot, so the release sends exactly what was pressed.
+ */
+static void press_output(uint8_t slot, uint8_t pos, uint16_t kc)
+{
+#ifdef ACTION_EXTRAS
+    kc         = magic_remap(kc);
+    s_kc[slot] = kc;
+    if (kc == KC_NO) {
+        return;
+    }
+#else
+    s_kc[slot] = kc;
+#endif
+    /* Armed one-shot mods: down until this key is released. */
+    if (osm_mods) {
+        s_mods[slot] |= osm_mods;
+        action_hal_mods(osm_mods, true);
+        osm_mods = 0;
+    }
+#ifdef ACTION_EXTRAS
+    if (cw_on) {
+        const uint8_t c = cw_class(kc);
+        if (c == 0 || elapsed(cw_time) >= CW_IDLE_MS || (held_mods() & (uint8_t)~MOD_SHIFT)) {
+            cw_on = 0;
+        } else {
+            cw_time = action_hal_timer();
+            if (c == 2 && !(held_mods() & MOD_SHIFT)) {
+                s_mods[slot] |= 0x02u;
+                action_hal_mods(0x02u, true);
+            }
+        }
+    }
+    if (!rep_busy && !IS_MODIFIER_KEYCODE(kc)) {
+        rep_kc   = kc;
+        rep_mods = held_mods();
+    }
+#endif
+#ifdef ACTION_KEY_OVERRIDE
+    if (ko_try(slot, pos, kc)) {
+        return;
+    }
+#endif
+    send(pos, kc, true);
+}
+
+#ifdef ACTION_EXTRAS
+/* Alt Repeat: the alternate of the last key, from QMK's built-in pairs
+ * (arrows, Home/End, PgUp/PgDn, media, browser, brightness, Ctrl+Z/Y); the
+ * last key's mods carry over. (Vial's own Alt Repeat table is not offered:
+ * no code space left for it.) Returns KC_NO if there is none. */
+static const __code uint8_t arep_pairs[][2] = {
+    {KC_LEFT, KC_RGHT}, {KC_UP, KC_DOWN},   {KC_HOME, KC_END},  {KC_PGUP, KC_PGDN},
+    {KC_VOLU, KC_VOLD}, {KC_MNXT, KC_MPRV}, {KC_WBAK, KC_WFWD}, {KC_BRIU, KC_BRID},
+};
+
+static uint16_t arep_lookup(uint8_t *out_mods)
+{
+    uint8_t  mods = rep_mods;
+    uint16_t kc   = rep_kc;
+    if (IS_QK_MODS(kc)) { /* e.g. LCTL(KC_Z) on a key: its mods count too */
+        mods |= mods8((uint8_t)QK_MODS_GET_MODS(kc));
+        kc = (uint16_t)(kc & 0xFFu);
+    }
+    *out_mods = mods;
+    if ((mods & 0x11u) && (kc == KC_Y || kc == KC_Z)) {
+        return (uint16_t)(kc ^ (KC_Y ^ KC_Z)); /* Ctrl+Z <-> Ctrl+Y */
+    }
+    for (uint8_t i = 0; i < sizeof(arep_pairs) / 2u; i++) {
+        if (kc == arep_pairs[i][0]) {
+            return arep_pairs[i][1];
+        }
+        if (kc == arep_pairs[i][1]) {
+            return arep_pairs[i][0];
+        }
+    }
+    return KC_NO;
+}
+
+/* Repeat / Alt Repeat: kc with mods (those not already held), as a key of
+ * its own; it is not recorded as the new "last key". */
+static void rep_press(uint8_t slot, uint8_t pos, uint16_t kc, uint8_t mods)
+{
+    if (kc == KC_NO) {
+        return;
+    }
+    mods &= (uint8_t)~held_mods();
+    if (mods) {
+        s_mods[slot] = mods;
+        action_hal_mods(mods, true);
+    }
+    rep_busy = 1;
+    press_output(slot, pos, kc);
+    rep_busy = 0;
+}
+
+static void tri_update(void)
+{
+    if ((layer_state & 0x06u) == 0x06u) {
+        layer_on(3);
+    } else {
+        layer_off(3);
+    }
+}
+
+/* Quantum keycodes the engine handles itself. False: not one of them. */
+static bool extra_press(uint8_t slot, uint8_t pos, uint16_t kc)
+{
+    if (kc >= QK_MAGIC && kc <= QK_MAGIC_MAX) {
+        s_kc[slot] = KC_NO;
+        magic_key((uint8_t)kc);
+        return true;
+    }
+    if (kc >= QK_SPACE_CADET_LEFT_CTRL_PARENTHESIS_OPEN && kc <= QK_SPACE_CADET_RIGHT_SHIFT_ENTER) {
+        s_role[slot] = ROLE_SC;
+        sc_time      = action_hal_timer();
+        action_hal_mods(sc_keys[(uint8_t)(kc - QK_SPACE_CADET_LEFT_CTRL_PARENTHESIS_OPEN)][0], true);
+        return true;
+    }
+    if (kc == QK_TRI_LAYER_LOWER || kc == QK_TRI_LAYER_UPPER) {
+        layer_on(kc == QK_TRI_LAYER_LOWER ? 1u : 2u);
+        tri_update();
+        return true; /* released in release_plain */
+    }
+
+    const uint8_t mods = held_mods();
+    uint8_t       amods;
+    switch (kc) {
+        case QK_GRAVE_ESCAPE: {
+            /* Escape; ` when Shift or GUI is held, unless a Grave Escape
+             * override says Escape for one of the held mods. */
+            const uint8_t g  = action_config.grave_esc;
+            const uint8_t om = (uint8_t)(((g & GESC_ALT) ? 0x44u : 0u) | ((g & GESC_CTRL) ? 0x11u : 0u) |
+                                         ((g & GESC_GUI) ? 0x88u : 0u) | ((g & GESC_SHIFT) ? 0x22u : 0u));
+            press_output(slot, pos, ((mods & 0xAAu) && !(mods & om)) ? KC_GRV : KC_ESC);
+            return true;
+        }
+        case QK_REPEAT_KEY:
+            s_kc[slot] = KC_NO;
+            rep_press(slot, pos, rep_kc, rep_mods);
+            return true;
+        case QK_ALT_REPEAT_KEY:
+            s_kc[slot] = KC_NO;
+            amods      = 0;
+            kc         = arep_lookup(&amods); /* before amods is read */
+            rep_press(slot, pos, kc, amods);
+            return true;
+        case QK_CAPS_WORD_TOGGLE:
+            cw_on ^= 1u;
+            cw_time = action_hal_timer();
+            break;
+        case QK_LAYER_LOCK:
+            /* Lock the highest layer that is on (not the default one); on a
+             * locked layer, unlock it and turn it off. */
+            for (uint8_t l = 8; l-- > 1;) {
+                const uint8_t bit = (uint8_t)(1u << l);
+                if (layer_state & bit) {
+                    if (llock & bit) {
+                        llock &= (uint8_t)~bit;
+                        layer_off(l);
+                    } else {
+                        llock |= bit;
+                    }
+                    break;
+                }
+            }
+            break;
+        case QK_COMBO_ON:
+            combos_off = 0;
+            break;
+        case QK_COMBO_OFF:
+            combos_off = 1;
+            break;
+        case QK_COMBO_TOGGLE:
+            combos_off ^= 1u;
+            break;
+        default:
+            return false;
+    }
+    s_kc[slot] = KC_NO; /* nothing to do on release */
+    return true;
+}
+#endif
+
 static void press_plain(uint8_t slot, uint8_t pos, uint16_t kc)
 {
     if (kc == KC_NO || kc == KC_TRANSPARENT) {
@@ -480,20 +842,12 @@ static void press_plain(uint8_t slot, uint8_t pos, uint16_t kc)
     } else if (IS_QK_ONE_SHOT_LAYER(kc)) {
         s_role[slot] = ROLE_OSL;
         layer_on((uint8_t)(kc & 0x1Fu));
-    } else {
-        /* An output key: it consumes armed one-shots. The mods stay down
-         * until this key is released (stored in the slot). */
-        if (osm_mods) {
-            s_mods[slot] = osm_mods;
-            action_hal_mods(osm_mods, true);
-            osm_mods = 0;
-        }
-#ifdef ACTION_KEY_OVERRIDE
-        if (ko_try(slot, pos, kc)) {
-            return;
-        }
+#ifdef ACTION_EXTRAS
+    } else if (extra_press(slot, pos, kc)) {
+        /* quantum keycode, handled */
 #endif
-        send(pos, kc, true);
+    } else {
+        press_output(slot, pos, kc);
     }
 }
 
@@ -504,6 +858,11 @@ static void release_plain(uint8_t slot, uint8_t pos, uint16_t kc)
     } else if (IS_QK_LAYER_MOD(kc)) {
         action_hal_mods(mods8((uint8_t)(kc & 0x1Fu)), false);
         layer_off((uint8_t)((kc >> 5) & 0x0Fu));
+#ifdef ACTION_EXTRAS
+    } else if (kc == QK_TRI_LAYER_LOWER || kc == QK_TRI_LAYER_UPPER) {
+        layer_off(kc == QK_TRI_LAYER_LOWER ? 1u : 2u);
+        tri_update();
+#endif
     } else if (IS_QK_TOGGLE_LAYER(kc) || IS_QK_TO(kc) || IS_QK_DEF_LAYER(kc) ||
                kc == KC_NO || kc == KC_TRANSPARENT) {
         /* nothing on release */
@@ -518,6 +877,16 @@ static void release_plain(uint8_t slot, uint8_t pos, uint16_t kc)
 static void do_press(uint8_t pos, uint16_t time)
 {
     const uint16_t kc = resolve(pos);
+
+#ifdef ACTION_EXTRAS
+    /* Another key breaks a run of one-shot taps (tap toggle) or TT taps. */
+    if (!IS_QK_ONE_SHOT_MOD(kc)) {
+        osm_taps = 0;
+    }
+    if (!IS_QK_LAYER_TAP_TOGGLE(kc)) {
+        tt_pos = POS_NONE;
+    }
+#endif
 
 #ifdef ACTION_KEY_OVERRIDE
     if (ko_slot != 0xFFu && !((uint8_t)(ko_e[KO_SUPPRESS] >> 8) & KO_OPT_NO_UNREGISTER_ON_OTHER)) {
@@ -549,8 +918,9 @@ static void do_press(uint8_t pos, uint16_t time)
         if (qt_pos == pos && elapsed(qt_time) < action_config.quick_tap_term) {
             /* Quick tap: tapped and pressed again right away -> the tap
              * keycode is held (auto-repeat), no hold decision. */
-            if (slot_add(pos, kc, ROLE_TAP) != 0xFFu) {
-                tap_press(pos, kc);
+            const uint8_t s = slot_add(pos, kc, ROLE_TAP);
+            if (s != 0xFFu) {
+                tap_press(s, pos, kc);
             }
             return;
         }
@@ -590,8 +960,12 @@ static void slot_release(uint8_t slot)
             break;
 
         case ROLE_TAP:
+            /* s_kc is the tap's output keycode (press_output), or the TT key. */
             if (dual_tap_kc(kc) != KC_NO) {
                 send(pos, dual_tap_kc(kc), false);
+            }
+            if (s_mods[slot]) {
+                action_hal_mods(s_mods[slot], false);
             }
             qt_pos  = pos;
             qt_time = action_hal_timer();
@@ -599,6 +973,26 @@ static void slot_release(uint8_t slot)
 
         case ROLE_OSM: {
             const uint8_t m = mods8((uint8_t)(kc & 0x1Fu));
+#ifdef ACTION_EXTRAS
+            /* One-shot tap toggle: tapped osk_tap_toggle times in a row ->
+             * locked on; the next tap unlocks. */
+            if (osm_lock & m) {
+                osm_lock &= (uint8_t)~m;
+                osm_taps = 0;
+                action_hal_mods(m, false);
+                break;
+            }
+            if (!intr && action_config.osk_tap_toggle) {
+                osm_taps  = (osm_tap_m == m) ? (uint8_t)(osm_taps + 1u) : 1u;
+                osm_tap_m = m;
+                if (osm_taps >= action_config.osk_tap_toggle) {
+                    osm_lock |= m;
+                    osm_mods &= (uint8_t)~m;
+                    osm_taps = 0;
+                    break; /* stays down */
+                }
+            }
+#endif
             action_hal_mods(m, false);
             if (!intr) {
                 osm_mods |= m; /* tapped alone: arm for the next key */
@@ -606,6 +1000,26 @@ static void slot_release(uint8_t slot)
             }
             break;
         }
+
+#ifdef ACTION_EXTRAS
+        case ROLE_SC: {
+            /* Space Cadet: tapped alone within the tapping term -> tap mod +
+             * key; otherwise it was just the hold mod. */
+            const __code uint8_t *sc = sc_keys[(uint8_t)(kc - QK_SPACE_CADET_LEFT_CTRL_PARENTHESIS_OPEN)];
+            if (intr || elapsed(sc_time) >= action_config.tapping_term) {
+                action_hal_mods(sc[0], false);
+                break;
+            }
+            if (sc[0] != sc[1]) {
+                action_hal_mods(sc[0], false);
+                action_hal_mods(sc[1], true);
+            }
+            send(pos, sc[2], true);
+            send(pos, sc[2], false);
+            action_hal_mods(sc[1], false);
+            break;
+        }
+#endif
 
         case ROLE_OSL:
             if (intr) {
@@ -758,8 +1172,9 @@ static void decide_hold(void)
 static void decide_tap(void)
 {
     tapping = 0;
-    if (slot_add(tk_pos, tk_kc, ROLE_TAP) != 0xFFu) {
-        tap_press(tk_pos, tk_kc);
+    const uint8_t s = slot_add(tk_pos, tk_kc, ROLE_TAP);
+    if (s != 0xFFu) {
+        tap_press(s, tk_pos, tk_kc);
     }
     requeue_waiting();
 }
@@ -1037,7 +1452,12 @@ static void combo_input(uint8_t pos, uint8_t down, uint16_t time)
 void action_event(uint8_t row, uint8_t col, bool pressed)
 {
 #ifdef ACTION_COMBO
-    combo_input(POS(row, col), pressed ? 1u : 0u, action_hal_timer());
+#    ifdef ACTION_EXTRAS
+    if (combos_off && cb_n == 0 && combo_down == 0) {
+        q_push_back(POS(row, col), pressed ? 1u : 0u, action_hal_timer());
+    } else
+#    endif
+        combo_input(POS(row, col), pressed ? 1u : 0u, action_hal_timer());
 #else
     q_push_back(POS(row, col), pressed ? 1u : 0u, action_hal_timer());
 #endif
