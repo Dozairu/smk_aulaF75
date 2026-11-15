@@ -41,8 +41,16 @@ uint16_t action_hal_timer(void)
     return now_ms;
 }
 
+/* The host's view, as the report carries it: a press sets the keycode, a
+ * release clears it; the mods are a mask. Used by the stress test. */
+static bool    host_key[0x10000];
+static uint8_t host_mods;
+
 static void emit(const char *tok)
 {
+    if (strlen(out) + strlen(tok) + 2u >= sizeof out) {
+        return; /* long runs (stress test): keep only the start */
+    }
     if (out[0]) {
         strcat(out, " ");
     }
@@ -52,6 +60,19 @@ static void emit(const char *tok)
 void action_hal_send(uint16_t kc, bool pressed)
 {
     char tok[16];
+    /* As matrix.c send_keycode(): a modifier keycode and a modded keycode's
+     * mods live in the same mask as action_hal_mods(). */
+    if (IS_MODIFIER_KEYCODE(kc)) {
+        const uint8_t m = (uint8_t)(1u << (kc & 7u));
+        host_mods       = pressed ? (uint8_t)(host_mods | m) : (uint8_t)(host_mods & ~m);
+    } else if (IS_QK_MODS(kc)) {
+        const uint8_t m5 = (uint8_t)QK_MODS_GET_MODS(kc);
+        const uint8_t m  = (m5 & 0x10u) ? (uint8_t)((m5 & 0x0Fu) << 4) : m5;
+        host_mods        = pressed ? (uint8_t)(host_mods | m) : (uint8_t)(host_mods & ~m);
+        host_key[kc & 0xFFu] = pressed;
+    } else {
+        host_key[kc] = pressed;
+    }
     snprintf(tok, sizeof tok, "%c%02X", pressed ? '+' : '-', kc);
     emit(tok);
 }
@@ -59,6 +80,7 @@ void action_hal_send(uint16_t kc, bool pressed)
 void action_hal_mods(uint8_t mods, bool on)
 {
     char tok[16];
+    host_mods = on ? (uint8_t)(host_mods | mods) : (uint8_t)(host_mods & ~mods);
     snprintf(tok, sizeof tok, "m%c%02X", on ? '+' : '-', mods);
     emit(tok);
 }
@@ -120,6 +142,8 @@ static int checks;
 static void reset(uint8_t flags)
 {
     memset(keymap, 0, sizeof keymap); /* KC_NO everywhere */
+    memset(host_key, 0, sizeof host_key);
+    host_mods = 0;
     memset(tds, 0, sizeof tds);
     memset(combos, 0, sizeof combos);
     memset(kos, 0, sizeof kos);
@@ -960,6 +984,137 @@ static void t_mt_tap_takes_oneshot(void)
     expect_idle("mod-tap + one-shot");
 }
 
+/* ---------------------------------------------------------- stress test
+ *
+ * Random presses / releases at random speeds on a keymap that mixes nearly
+ * every feature, many seeds, each with its own tap-hold flags. After each
+ * run everything is released and the engine left alone for 10 s; then the
+ * host must see no key and no mod down, no layer may be left on, and the
+ * engine must be idle. Fed through ASan / UBSan by meson's host build too.
+ */
+static uint32_t rng;
+
+static uint32_t rnd(void)
+{
+    rng ^= rng << 13;
+    rng ^= rng >> 17;
+    rng ^= rng << 5;
+    return rng;
+}
+
+#define FUZZ_KEYS 19
+static const uint8_t fuzz_pos[FUZZ_KEYS][2] = {
+    {4, 0}, {4, 1}, {4, 2}, {4, 3}, {4, 4},  {4, 5},  {4, 6},  {4, 7},  {4, 8}, {4, 9},
+    {4, 10}, {4, 11}, {4, 12}, {4, 13}, {4, 14}, {5, 0}, {5, 1}, {5, 2}, {5, 3},
+};
+
+static void fuzz_setup(uint8_t flags)
+{
+    reset(flags);
+    const uint16_t base[FUZZ_KEYS] = {
+        KC_A, KC_B, MT(MOD_LSFT, KC_D), LT(1, KC_E), OSM(MOD_LCTL), TD(0), KC_J, KC_K,
+        QK_CAPS_WORD_TOGGLE, QK_REPEAT_KEY, QK_GRAVE_ESCAPE, QK_SPACE_CADET_LEFT_SHIFT_PARENTHESIS_OPEN,
+        MO(2), KC_LSFT, KC_BSPC, QK_ALT_REPEAT_KEY, OSL(1), LCTL(KC_V), KC_LEFT,
+    };
+    for (int i = 0; i < FUZZ_KEYS; i++) {
+        keymap[0][fuzz_pos[i][0]][fuzz_pos[i][1]] = base[i];
+    }
+    keymap[1][4][0] = KC_1;
+    keymap[1][4][6] = KC_2;
+    keymap[2][4][0] = MT(MOD_LALT, KC_3);
+    keymap[2][4][1] = KC_4;
+    tds[0][TD_ON_TAP]      = KC_X;
+    tds[0][TD_ON_HOLD]     = KC_LCTL;
+    tds[0][TD_ON_DOUBLE]   = KC_Y;
+    tds[0][TD_ON_TAP_HOLD] = MO(1);
+    combos[0][0]            = KC_J;
+    combos[0][1]            = KC_K;
+    combos[0][COMBO_OUTPUT] = KC_ESC;
+    combos[1][0]            = KC_A;
+    combos[1][1]            = KC_B;
+    combos[1][COMBO_OUTPUT] = LCTL(KC_C);
+    kos[0][KO_TRIGGER]     = KC_BSPC;
+    kos[0][KO_REPLACEMENT] = KC_DEL;
+    kos[0][KO_LAYERS]      = 0xFFFF;
+    kos[0][KO_MODS]        = 0x02;
+    kos[0][KO_SUPPRESS]    = 0x02 | (uint16_t)((KO_OPT_ENABLED | KO_OPT_ACT_TRIGGER_DOWN) << 8);
+}
+
+static bool fuzz_run(uint32_t seed, int steps)
+{
+    bool held[FUZZ_KEYS] = {false};
+    int  nheld           = 0;
+
+    rng = seed * 2654435761u + 1u;
+    fuzz_setup((uint8_t)(seed & 7u));
+    action_config.tapping_term   = (uint16_t)(120u + rnd() % 200u); /* timings vary too */
+    action_config.quick_tap_term = (uint16_t)(rnd() % 250u);
+    action_config.combo_term     = (uint16_t)(20u + rnd() % 80u);
+    for (int s = 0; s < steps; s++) {
+        int k = (int)(rnd() % FUZZ_KEYS);
+        if (nheld >= 6) { /* keep chords realistic: let go of something */
+            while (!held[k]) {
+                k = (int)(rnd() % FUZZ_KEYS);
+            }
+        }
+        held[k] = !held[k];
+        nheld += held[k] ? 1 : -1;
+        action_event(fuzz_pos[k][0], fuzz_pos[k][1], held[k]);
+        const uint32_t r = rnd();
+        wait_ms((uint16_t)((r & 7u) == 0 ? 150u + r % 250u : r % 40u));
+    }
+    for (int k = 0; k < FUZZ_KEYS; k++) {
+        if (held[k]) {
+            action_event(fuzz_pos[k][0], fuzz_pos[k][1], false);
+            wait_ms((uint16_t)(rnd() % 20u));
+        }
+    }
+    wait_ms(10000);
+
+    bool ok = true;
+    for (uint32_t kc = 0; kc < 0x10000u; kc++) {
+        if (host_key[kc]) {
+            printf("FAIL stress seed %u: keycode 0x%04X still down\n", (unsigned)seed, (unsigned)kc);
+            ok = false;
+        }
+    }
+    if (host_mods) {
+        printf("FAIL stress seed %u: mods 0x%02X still on\n", (unsigned)seed, host_mods);
+        ok = false;
+    }
+    if (action_layer_state() != 1u) {
+        printf("FAIL stress seed %u: layers 0x%02X still on\n", (unsigned)seed, action_layer_state());
+        ok = false;
+    }
+    if (!action_idle()) {
+        printf("FAIL stress seed %u: engine not idle\n", (unsigned)seed);
+        ok = false;
+    }
+    return ok;
+}
+
+#ifndef STRESS_RUNS
+#    define STRESS_RUNS 300
+#endif
+
+static void t_stress(void)
+{
+    int bad = 0;
+    for (uint32_t seed = 1; seed <= STRESS_RUNS; seed++) {
+        if (!fuzz_run(seed, 2000)) {
+            bad++;
+        }
+    }
+    checks++;
+    if (bad) {
+        failures++;
+        printf("FAIL stress: %d of %d runs left something behind\n", bad, STRESS_RUNS);
+    } else {
+        printf("ok   stress: %d random runs x 2000 events, nothing left behind\n", STRESS_RUNS);
+    }
+    out[0] = 0;
+}
+
 int main(void)
 {
     t_plain();
@@ -1003,6 +1158,7 @@ int main(void)
     t_combo_toggle();
     t_osm_tap_toggle();
     t_mt_tap_takes_oneshot();
+    t_stress();
 
     printf("\n%d/%d checks passed\n", checks - failures, checks);
     return failures ? 1 : 0;
