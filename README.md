@@ -43,7 +43,7 @@ SMK ships [its own ISP bootloader](docs/bootloader.md), which takes that failure
 | [sinodude](https://github.com/karstx/sinodude) + SinoLink | SinoWealth SinoLink dongle | ICP | Same as above, through the vendor's dongle. Select it with `-Dicp_programmer=sinolink`. |
 | ProWriter + SinoLink | SinoWealth SinoLink dongle | ICP | SinoWealth's own Windows tool. Write `<board>_<layout>_full.hex` with it. |
 
-Also: [ISP bootloader](docs/bootloader.md). Platform notes: [SH68F90 / SH68F90A](docs/platforms/sh68f90.md), [SH68F881](docs/platforms/sh68f881.md), [SH68F89](docs/platforms/sh68f89.md).
+Also: [ISP bootloader](docs/bootloader.md), [VIA](docs/via.md), [Vial](docs/vial.md). Platform notes: [SH68F90 / SH68F90A](docs/platforms/sh68f90.md), [SH68F881](docs/platforms/sh68f881.md), [SH68F89](docs/platforms/sh68f89.md).
 
 ## Developing
 

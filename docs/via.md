@@ -33,3 +33,5 @@ The dynamic keymap is stored in reserved flash sectors with built-in data integr
 - **Checksum validation**: Detects partial or corrupt sector state across all layers.
 - **Two-phase atomic commit**: Sector payload is written with commit byte erased (`0xFF`); the commit marker (`0xA5`) is programmed strictly last. If power is interrupted mid-write, the firmware detects an uncommitted state and restores cleanly from default compiled layout tables.
 - **Write-coalescing**: Changes received over VIA are debounced in RAM for 1 second before triggering a flash erase/write cycle, preventing unnecessary flash wear during rapid key configuration.
+
+Vial (tap dance, combos, key overrides, QMK settings, lighting) builds on top of this: see [vial.md](vial.md).
