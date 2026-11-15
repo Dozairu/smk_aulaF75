@@ -141,6 +141,9 @@ boot_check = files('utils/boot_check.py')
 # script's docstring). Run at configure time, like the LED geometry below.
 vial_definition_gen = join_paths(meson.current_source_dir(), 'utils/vial_definition.py')
 
+# Flash while keeping the saved keymap / settings sectors (see the script).
+flash_keep = join_paths(meson.current_source_dir(), 'utils/flash_keep.py')
+
 # Host-side generator that bakes per-device LED animation geometry into ROM tables
 # (see utils/led_geometry_gen.c). Compiled once with the host compiler at configure
 # time so the generated headers exist on disk before any firmware source is built.
@@ -187,15 +190,20 @@ foreach keyboard, board : keyboards
         '-DFREQ_SYS=@0@'.format(spec['freq_sys']),
     ]
 
+    # Saved data that a _flash_keep carries across a flash: [keep_start, marker_addr).
+    keep_start = -1
+
     if spec['settings_store'] == 'flash'
         settings_addr = marker_addr - spec['sector_size']
         code_limit = settings_addr
+        keep_start = settings_addr
 
         if get_option('via').enabled()
             dynamic_keymap_layers = options.get('dynamic_keymap_layers', '4').to_int()
             dynamic_keymap_sectors = options.get('dynamic_keymap_sectors', '4').to_int()
             dynamic_keymap_addr = settings_addr - dynamic_keymap_sectors * spec['sector_size']
             code_limit = dynamic_keymap_addr
+            keep_start = dynamic_keymap_addr
             platform_cc_args += [
                 '-DDYNAMIC_KEYMAP_LAYER_COUNT=@0@'.format(dynamic_keymap_layers),
                 '-DDYNAMIC_KEYMAP_BASE=@0@u'.format(dynamic_keymap_addr),
@@ -539,6 +547,17 @@ foreach keyboard, board : keyboards
             command : [sinowisp, 'write', '-d', keyboard, '--reboot', 'true', '--force', hex_smk.full_path()],  # TODO: try to remove the need for --force
             depends : hex_smk,
         )
+
+        # Same flash, but the keymap / Vial / lighting settings already on the
+        # keyboard survive it (utils/flash_keep.py). The plain target stays clean.
+        if keep_start >= 0
+            run_target(
+                flash_target_name + '_keep',
+                command : [py, flash_keep, '--sinowisp', sinowisp, '--device', keyboard,
+                           '--keep', '@0@'.format(keep_start), '@0@'.format(marker_addr), hex_smk.full_path()],
+                depends : hex_smk,
+            )
+        endif
 
         message('target available: @0@, flash: @1@'.format(hex_smk_target_name, flash_target_name))
     endforeach

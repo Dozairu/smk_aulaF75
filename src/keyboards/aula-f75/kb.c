@@ -12,6 +12,8 @@
 #include "aula_encoder.h"
 #include "aula_macro.h"
 #include "aula_status.h"
+#include "vial.h"
+#include "dynamic_keymap.h"
 #ifdef RF_EUART0
 #    include "aula_rf.h"
 #endif
@@ -271,6 +273,11 @@ void kb_update(void)
 #endif
 #ifdef VIA_MACRO_ENABLE
         dynamic_macro_reset();
+#endif
+#ifdef VIAL_ENABLE
+        vial_store_defaults(); /* QMK settings back to defaults too */
+        vial_store_apply();
+        dynamic_vial_mark_dirty();
 #endif
         tick_pause();
         indicators_init();
