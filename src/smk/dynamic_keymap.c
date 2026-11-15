@@ -13,8 +13,9 @@
 #    define DYNAMIC_KEYMAP_MAGIC1  0x49u
 #    ifndef DYNAMIC_KEYMAP_STORAGE_VERSION
 #        ifdef VIAL_ENABLE
-/* The store gained the Vial area: a different layout, never load the old one. */
-#            define DYNAMIC_KEYMAP_STORAGE_VERSION 0x02u
+/* The store gained the Vial area: a different layout, never load the old one.
+ * 0x02: QMK settings. 0x03: + tap dance entries. */
+#            define DYNAMIC_KEYMAP_STORAGE_VERSION 0x03u
 #        else
 #            define DYNAMIC_KEYMAP_STORAGE_VERSION 0x01u
 #        endif

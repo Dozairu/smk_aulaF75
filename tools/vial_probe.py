@@ -11,7 +11,7 @@ then runs the handshake Vial GUI does and checks each answer:
   - definition: size, every 32-byte page, LZMA-decompresses to JSON, and
     (if a vial.json is given) equals it
   - encoder 0 on layer 0, unlock status, QMK settings listed + readable,
-    dynamic entries empty
+    8 tap dance entries readable (no combos / key overrides yet)
 
 Nothing is written to the keyboard. Needs read/write access to the hidraw node
 (udev rule or ACL, as for VIA in the browser).
@@ -118,7 +118,15 @@ def main():
         good &= check(r[0] == 0, "  {} (qsid {}) = {}".format(names.get(q, "?"), q, v))
 
     r = d.xfer(0xFE, 0x0D, 0x00)
-    good &= check(r[:4] == b'\x00\x00\x00\x00', 'dynamic entries: TD/combo/KO/alt-repeat = {}'.format(list(r[:4])))
+    good &= check(r[0] == 8 and r[1:4] == b'\x00\x00\x00',
+                  'dynamic entries: TD/combo/KO/alt-repeat = {}'.format(list(r[:4])))
+    for i in range(r[0]):
+        t = d.xfer(0xFE, 0x0D, 0x01, i)
+        tap, hold, dbl, taphold, term = struct.unpack('<5H', bytes(t[1:11]))
+        good &= check(t[0] == 0, '  TD({}): tap {:04X} hold {:04X} double {:04X} tap+hold {:04X} term {}'.format(
+            i, tap, hold, dbl, taphold, term))
+    t = d.xfer(0xFE, 0x0D, 0x01, r[0])
+    good &= check(t[0] == 0xFF, '  TD({}) past the end refused'.format(r[0]))
 
     r = d.xfer(0x11)
     good &= check(r[1] == 4, 'layer count = {}'.format(r[1]))

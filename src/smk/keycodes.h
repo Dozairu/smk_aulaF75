@@ -1400,6 +1400,7 @@ enum keycode_aliases {
 #define TG(layer) (QK_TOGGLE_LAYER | ((layer)&0x1F))
 #define OSL(layer) (QK_ONE_SHOT_LAYER | ((layer)&0x1F))
 #define OSM(mod) (QK_ONE_SHOT_MOD | ((mod)&0x1F))
+#define TD(n) (QK_TAP_DANCE | ((n)&0xFF))
 #define TT(layer) (QK_LAYER_TAP_TOGGLE | ((layer)&0x1F))
 #define LM(layer, mod) (QK_LAYER_MOD | (((layer)&0xF) << 5) | ((mod)&0x1F))
 #define LT(layer, kc) (QK_LAYER_TAP | (((layer)&0xF) << 8) | ((kc)&0xFF))

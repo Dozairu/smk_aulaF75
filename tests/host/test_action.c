@@ -69,6 +69,18 @@ void action_hal_event_pos(uint8_t row, uint8_t col)
     (void)col;
 }
 
+#define TD_COUNT 2
+static uint16_t tds[TD_COUNT][TD_FIELDS];
+
+bool action_hal_tap_dance(uint8_t index, uint16_t *entry)
+{
+    if (index >= TD_COUNT) {
+        return false;
+    }
+    memcpy(entry, tds[index], sizeof tds[index]);
+    return true;
+}
+
 /* -------------------------------------------------------------- harness */
 
 static int failures;
@@ -77,6 +89,7 @@ static int checks;
 static void reset(uint8_t flags)
 {
     memset(keymap, 0, sizeof keymap); /* KC_NO everywhere */
+    memset(tds, 0, sizeof tds);
     for (int l = 1; l < LAYERS; l++) {
         for (int r = 0; r < ROWS; r++) {
             for (int c = 0; c < COLS; c++) {
@@ -414,6 +427,110 @@ static void t_slots_full(void)
     expect_idle("slots full");
 }
 
+/* ------------------------------------------------------------ tap dance */
+
+#define TDK 2, 0 /* the dancing key */
+
+/* TD(0): tap A, hold LCtrl, double tap B, tap + hold C, global term. */
+static void td_setup(void)
+{
+    reset(0);
+    keymap[0][2][0] = TD(0);
+    keymap[0][2][1] = TD(1);
+    keymap[0][0][1] = KC_X;
+    tds[0][TD_ON_TAP]      = KC_A;
+    tds[0][TD_ON_HOLD]     = KC_LCTL;
+    tds[0][TD_ON_DOUBLE]   = KC_B;
+    tds[0][TD_ON_TAP_HOLD] = KC_C;
+}
+
+static void t_td_basic(void)
+{
+    td_setup();
+    dn(TDK); up(TDK);
+    expect("TD tap: nothing before the term", "");
+    wait_ms(250);
+    expect("TD tap", "+04 -04");
+
+    dn(TDK); wait_ms(250);
+    expect("TD hold: on hold, held", "+E0");
+    up(TDK);
+    expect("TD hold: released with the key", "-E0");
+
+    dn(TDK); up(TDK); dn(TDK); up(TDK); wait_ms(250);
+    expect("TD double tap", "+05 -05");
+
+    dn(TDK); up(TDK); dn(TDK); wait_ms(250);
+    expect("TD tap + hold", "+06");
+    up(TDK);
+    expect("TD tap + hold released", "-06");
+
+    dn(TDK); up(TDK); dn(TDK); up(TDK); dn(TDK); up(TDK);
+    expect("TD triple tap: on tap x3 at the third press", "+04 -04 +04 -04 +04 -04");
+    dn(TDK); up(TDK); wait_ms(250);
+    expect("TD 4th tap: one more, nothing at the end", "+04 -04");
+    expect_idle("TD basic");
+}
+
+static void t_td_interrupt(void)
+{
+    td_setup();
+    dn(TDK); dn(B_); up(B_); up(TDK);
+    expect("TD interrupted while held: on tap, held with the key",
+           "+04 +1B -1B -04");
+
+    dn(TDK); up(TDK); dn(B_); up(B_);
+    expect("TD tapped, then another key", "+04 -04 +1B -1B");
+
+    dn(TDK); up(TDK); dn(TDK); up(TDK); dn(B_); up(B_);
+    expect("TD two taps interrupted: tap + tap", "+04 -04 +04 -04 +1B -1B");
+
+    dn(TDK); dn(2, 1); up(2, 1); up(TDK); wait_ms(250);
+    expect("TD interrupted by another TD (empty: nothing)", "+04 -04");
+    expect_idle("TD interrupt");
+}
+
+static void t_td_fallbacks(void)
+{
+    td_setup();
+    tds[0][TD_ON_HOLD]     = KC_NO;
+    tds[0][TD_ON_DOUBLE]   = KC_NO;
+    tds[0][TD_ON_TAP_HOLD] = KC_NO;
+    dn(TDK); wait_ms(250);
+    expect("TD no hold: hold gives tap", "+04");
+    up(TDK);
+    dn(TDK); up(TDK); dn(TDK); up(TDK); wait_ms(250);
+    expect("TD no double: tap twice", "-04 +04 -04 +04 -04");
+    dn(TDK); up(TDK); dn(TDK); wait_ms(250); up(TDK);
+    expect("TD no tap+hold: tap, then tap held", "+04 -04 +04 -04");
+    tds[0][TD_ON_HOLD] = KC_LCTL;
+    dn(TDK); up(TDK); dn(TDK); wait_ms(250); up(TDK);
+    expect("TD no tap+hold: tap, then hold", "+04 -04 +E0 -E0");
+    expect_idle("TD fallbacks");
+}
+
+static void t_td_term_and_layers(void)
+{
+    td_setup();
+    tds[0][TD_TERM] = 500;
+    dn(TDK); up(TDK); wait_ms(300);
+    expect("TD own term: still waiting at 300 ms", "");
+    wait_ms(250);
+    expect("TD own term: done at 500 ms", "+04 -04");
+
+    tds[0][TD_TERM]    = 0;
+    tds[0][TD_ON_HOLD] = MO(1);
+    keymap[0][0][0]    = KC_A;
+    keymap[1][0][0]    = KC_B;
+    dn(TDK); wait_ms(250); dn(A_); up(A_); up(TDK); dn(A_); up(A_);
+    expect("TD hold = MO(1)", "+05 -05 +04 -04");
+
+    keymap[0][2][2] = TD(9); /* no such entry: inert */
+    dn(2, 2); up(2, 2);
+    expect("TD past the entry count", "+5709 -5709");
+    expect_idle("TD term and layers");
+}
+
 int main(void)
 {
     t_plain();
@@ -437,6 +554,10 @@ int main(void)
     t_lm();
     t_two_duals();
     t_slots_full();
+    t_td_basic();
+    t_td_interrupt();
+    t_td_fallbacks();
+    t_td_term_and_layers();
 
     printf("\n%d/%d checks passed\n", checks - failures, checks);
     return failures ? 1 : 0;

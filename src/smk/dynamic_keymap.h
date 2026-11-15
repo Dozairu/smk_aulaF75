@@ -27,11 +27,17 @@
 #endif
 #define DYNAMIC_ENCODER_BYTES ((uint16_t)DYNAMIC_KEYMAP_LAYER_COUNT * DYNAMIC_ENCODER_COUNT * 4u)
 
-/* Vial-owned bytes at the end of the store (QMK settings, later the dynamic
- * entries). Laid out and interpreted by vial.c; this file only keeps them. */
+/* Vial-owned bytes at the end of the store: 16 bytes of QMK settings, then
+ * the tap dance entries (10 bytes each). Laid out and interpreted by vial.c;
+ * this file only keeps them. */
 #ifdef VIAL_ENABLE
+#    ifndef VIAL_TAP_DANCE_ENTRIES
+#        define VIAL_TAP_DANCE_ENTRIES 8u
+#    endif
+#    define VIAL_SETTINGS_BYTES 16u
+#    define VIAL_TD_BYTES       10u
 #    ifndef DYNAMIC_VIAL_BYTES
-#        define DYNAMIC_VIAL_BYTES 16u
+#        define DYNAMIC_VIAL_BYTES (VIAL_SETTINGS_BYTES + VIAL_TAP_DANCE_ENTRIES * VIAL_TD_BYTES)
 #    endif
 #else
 #    define DYNAMIC_VIAL_BYTES 0u

@@ -21,9 +21,9 @@
  * QMK settings (0x09..0x0C) expose the action engine's knobs; only settings
  * the engine implements are listed, and Vial GUI shows only listed ones.
  *
- * Not yet backed by firmware features, so reported as empty:
- *   - dynamic entries (0x0D: zero tap dances / combos / key overrides).
- * Vial GUI hides the corresponding tabs.
+ * Dynamic entries (0x0D): VIAL_TAP_DANCE_ENTRIES tap dances, run by the
+ * action engine. Combos and key overrides are reported as zero entries, so
+ * Vial GUI hides those tabs.
  */
 
 #    define VIAL_GET_KEYBOARD_ID       0x00u
@@ -42,6 +42,8 @@
 #    define VIAL_DYNAMIC_ENTRY_OP      0x0Du
 
 #    define DYNAMIC_VIAL_GET_NUMBER_OF_ENTRIES 0x00u
+#    define DYNAMIC_VIAL_TAP_DANCE_GET         0x01u
+#    define DYNAMIC_VIAL_TAP_DANCE_SET         0x02u
 
 /* VIAL_UNLOCK_ROWS / _COLS come from the generated header (board options
  * vial_unlock_rows / vial_unlock_cols); the generator refuses an empty list. */
@@ -179,15 +181,57 @@ static void qs_wr16(uint8_t off, uint16_t v)
     s[off + 1u] = (uint8_t)(v >> 8);
 }
 
-void vial_store_defaults(void)
+/* ------------------------------------------------------------- tap dance
+ *
+ * Entry n at VIAL_SETTINGS_BYTES + n * 10, five u16 LE: on tap, on hold, on
+ * double tap, on tap + hold, tapping term -- vial_tap_dance_entry_t, which
+ * is also the wire format of get/set.
+ */
+static __xdata uint8_t *td_entry(uint8_t index)
+{
+    return dynamic_vial_store() + VIAL_SETTINGS_BYTES + (uint16_t)index * VIAL_TD_BYTES;
+}
+
+bool action_hal_tap_dance(uint8_t index, __xdata uint16_t *entry)
+{
+    if (index >= VIAL_TAP_DANCE_ENTRIES) {
+        return false;
+    }
+    const __xdata uint8_t *p = td_entry(index);
+    for (uint8_t i = 0; i < TD_FIELDS; i++, p += 2) {
+        entry[i] = (uint16_t)p[0] | (uint16_t)((uint16_t)p[1] << 8);
+    }
+    return true;
+}
+
+static void td_defaults(void)
+{
+    /* vial-qmk: all KC_NO, tapping term TAPPING_TERM. */
+    for (uint8_t i = 0; i < VIAL_TAP_DANCE_ENTRIES; i++) {
+        __xdata uint8_t *p = td_entry(i);
+        memset(p, 0, VIAL_TD_BYTES);
+        p[8] = (uint8_t)ACTION_TAPPING_TERM_DEFAULT;
+        p[9] = (uint8_t)(ACTION_TAPPING_TERM_DEFAULT >> 8);
+    }
+}
+
+/* QMK settings only (the GUI's "Reset to defaults" button). */
+static void qs_defaults(void)
 {
     __xdata uint8_t *s = dynamic_vial_store();
-    memset(s, 0, DYNAMIC_VIAL_BYTES);
+    memset(s, 0, VIAL_SETTINGS_BYTES);
     qs_wr16(QS_TAPPING_TERM, ACTION_TAPPING_TERM_DEFAULT);
     qs_wr16(QS_QUICK_TAP_TERM, ACTION_TAPPING_TERM_DEFAULT);
     qs_wr16(QS_OSK_TIMEOUT, ACTION_OSK_TIMEOUT_DEFAULT);
     s[QS_FLAGS]  = 0;
     s[QS_MARKER] = QS_MARKER_VALUE;
+}
+
+/* Everything Vial keeps: new store, factory reset. */
+void vial_store_defaults(void)
+{
+    qs_defaults();
+    td_defaults();
 }
 
 void vial_store_apply(void)
@@ -275,6 +319,45 @@ static void qmk_settings_set(__xdata uint8_t *data)
     vial_store_apply();
     dynamic_vial_mark_dirty();
     data[0] = 0;
+}
+
+/* 0x0D, sub-command in data[2], entry index in data[3]. Replies: data[0] =
+ * 0 ok / 0xFF (-1) bad index; a get returns the entry from data[1], a set
+ * takes it from data[4]. */
+static void dynamic_entry_op(__xdata uint8_t *data)
+{
+    const uint8_t idx = data[3];
+    switch (data[2]) {
+        case DYNAMIC_VIAL_GET_NUMBER_OF_ENTRIES:
+            /* [0] tap dance, [1] combo, [2] key override, [3] alt repeat,
+             * [31] feature bits (Caps Word, Layer Lock). */
+            memset(data, 0, RAW_HID_REPORT_SIZE);
+            data[0] = VIAL_TAP_DANCE_ENTRIES;
+            break;
+
+        case DYNAMIC_VIAL_TAP_DANCE_GET:
+            memset(data, 0, RAW_HID_REPORT_SIZE);
+            if (idx >= VIAL_TAP_DANCE_ENTRIES) {
+                data[0] = 0xFFu;
+            } else {
+                memcpy(&data[1], td_entry(idx), VIAL_TD_BYTES);
+            }
+            break;
+
+        case DYNAMIC_VIAL_TAP_DANCE_SET:
+            if (idx >= VIAL_TAP_DANCE_ENTRIES) {
+                data[0] = 0xFFu;
+            } else {
+                memcpy(td_entry(idx), &data[4], VIAL_TD_BYTES);
+                dynamic_vial_mark_dirty();
+                data[0] = 0;
+            }
+            break;
+
+        default:
+            data[0] = 0xFFu;
+            break;
+    }
 }
 
 void vial_process(__xdata uint8_t *data)
@@ -369,17 +452,13 @@ void vial_process(__xdata uint8_t *data)
             break;
 
         case VIAL_QMK_SETTINGS_RESET:
-            vial_store_defaults();
+            qs_defaults();
             vial_store_apply();
             dynamic_vial_mark_dirty();
             break;
 
         case VIAL_DYNAMIC_ENTRY_OP:
-            if (data[2] == DYNAMIC_VIAL_GET_NUMBER_OF_ENTRIES) {
-                /* [0] tap dance, [1] combo, [2] key override, [3] alt repeat,
-                 * [31] feature bits (Caps Word, Layer Lock): all zero. */
-                memset(data, 0, RAW_HID_REPORT_SIZE);
-            }
+            dynamic_entry_op(data);
             break;
 
         default:

@@ -25,6 +25,11 @@
 #    define __code const
 #endif
 
+/* Tap dance (TD(n) keycodes) is compiled in with Vial, which configures it. */
+#if defined(VIAL_ENABLE) && !defined(ACTION_TAP_DANCE)
+#    define ACTION_TAP_DANCE
+#endif
+
 /* --------------------------------------------------------------- config */
 
 #define ACTION_PERMISSIVE_HOLD         0x01u
@@ -71,3 +76,15 @@ uint16_t action_hal_timer(void);                    /* free-running ms */
 void     action_hal_send(uint16_t keycode, bool pressed); /* a plain, resolved keycode */
 void     action_hal_mods(uint8_t mods, bool on);     /* 8-bit HID modifier mask */
 void     action_hal_event_pos(uint8_t row, uint8_t col);
+
+#ifdef ACTION_TAP_DANCE
+/* Tap dance entry n in Vial's layout: on tap, on hold, on double tap, on
+ * tap + hold, tapping term (ms, 0 = the global one). False: no entry n. */
+#    define TD_ON_TAP      0u
+#    define TD_ON_HOLD     1u
+#    define TD_ON_DOUBLE   2u
+#    define TD_ON_TAP_HOLD 3u
+#    define TD_TERM        4u
+#    define TD_FIELDS      5u
+bool action_hal_tap_dance(uint8_t index, __xdata uint16_t *entry);
+#endif

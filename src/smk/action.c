@@ -119,6 +119,15 @@ static __xdata uint16_t osm_time;
 static __xdata uint8_t  osl_layer = 0xFFu;
 static __xdata uint16_t osl_time;
 
+#ifdef ACTION_TAP_DANCE
+/* The one tap dance in progress (see "tap dance" below). */
+static __xdata uint16_t td_e[TD_FIELDS];
+static __xdata uint8_t  td_pos = POS_NONE; /* the dancing key; POS_NONE = none */
+static __xdata uint8_t  td_count;
+static __xdata uint8_t  td_held;
+static __xdata uint16_t td_time;
+#endif
+
 static uint16_t elapsed(uint16_t since)
 {
     return (uint16_t)(action_hal_timer() - since);
@@ -145,6 +154,9 @@ void action_init(void)
     qt_pos              = POS_NONE;
     osm_mods            = 0;
     osl_layer           = 0xFFu;
+#ifdef ACTION_TAP_DANCE
+    td_pos = POS_NONE;
+#endif
 }
 
 /* ----------------------------------------------------------------- layers */
@@ -348,6 +360,16 @@ static void do_press(uint8_t pos, uint16_t time)
         osl_layer = 0xFFu;
     }
 
+#ifdef ACTION_TAP_DANCE
+    if (IS_QK_TAP_DANCE(kc) && action_hal_tap_dance((uint8_t)kc, td_e)) {
+        td_pos   = pos;
+        td_count = 1;
+        td_held  = 1;
+        td_time  = time;
+        return;
+    }
+#endif
+
     if (is_dual(kc)) {
         if (qt_pos == pos && elapsed(qt_time) < action_config.quick_tap_term) {
             /* Quick tap: tapped and pressed again right away -> the tap
@@ -371,12 +393,9 @@ static void do_press(uint8_t pos, uint16_t time)
     press_plain(slot, pos, kc);
 }
 
-static void do_release(uint8_t pos)
+static void slot_release(uint8_t slot)
 {
-    const uint8_t slot = slot_find(pos);
-    if (slot == 0xFFu) {
-        return;
-    }
+    const uint8_t  pos  = s_pos[slot];
     const uint16_t kc   = s_kc[slot];
     const uint8_t  role = s_role[slot];
     const uint8_t  intr = s_intr[slot];
@@ -427,6 +446,112 @@ static void do_release(uint8_t pos)
     }
 }
 
+static void do_release(uint8_t pos)
+{
+    const uint8_t slot = slot_find(pos);
+    if (slot != 0xFFu) {
+        slot_release(slot);
+    }
+}
+
+/* -------------------------------------------------------------- tap dance
+ *
+ * Vial's tap dance (vial-qmk quantum/vial.c on top of QMK process_tap_dance):
+ * every press of the dancing key counts; the dance finishes when its tapping
+ * term passes after the last press, or at once when another key is pressed
+ * (interrupted). What it does then:
+ *
+ *   1 press, released or interrupted   on tap        (held while the key is)
+ *   1 press, still held                on hold, else on tap
+ *   2 presses, released                on double tap, else tap + on tap
+ *   2 presses, still held              on tap + hold, else tap + (on hold or on tap)
+ *   2 presses, interrupted             tap + on tap
+ *   3+ presses                         on tap, once per press (3 at the third)
+ *
+ * The output is a full keycode (layer keys, one-shots, modded keys), pressed
+ * through a slot at the dancing key, so the key's release releases it.
+ */
+#ifdef ACTION_TAP_DANCE
+static void td_press(uint8_t pos, uint16_t kc)
+{
+    if (kc == KC_NO) {
+        return;
+    }
+    const uint8_t slot = slot_add(pos, kc, ROLE_PLAIN);
+    if (slot != 0xFFu) {
+        press_plain(slot, pos, kc);
+    }
+}
+
+static void td_tap(uint8_t pos, uint16_t kc)
+{
+    if (kc == KC_NO) {
+        return;
+    }
+    const uint8_t slot = slot_add(pos, kc, ROLE_PLAIN);
+    if (slot != 0xFFu) {
+        press_plain(slot, pos, kc);
+        slot_release(slot);
+    }
+}
+
+static uint16_t td_term(void)
+{
+    return td_e[TD_TERM] ? td_e[TD_TERM] : action_config.tapping_term;
+}
+
+static void td_finish(bool interrupted)
+{
+    const uint8_t  pos  = td_pos;
+    const uint16_t tap  = td_e[TD_ON_TAP];
+    const uint16_t hold = td_e[TD_ON_HOLD];
+    uint16_t       kc   = KC_NO;
+    td_pos              = POS_NONE;
+
+    if (td_count == 1u) {
+        kc = (interrupted || !td_held || hold == KC_NO) ? tap : hold;
+    } else if (td_count == 2u) {
+        if (interrupted) {
+            td_tap(pos, tap);
+            kc = tap;
+        } else if (td_held) {
+            if (td_e[TD_ON_TAP_HOLD] != KC_NO) {
+                kc = td_e[TD_ON_TAP_HOLD];
+            } else {
+                td_tap(pos, tap);
+                kc = (hold != KC_NO) ? hold : tap;
+            }
+        } else if (td_e[TD_ON_DOUBLE] != KC_NO) {
+            kc = td_e[TD_ON_DOUBLE];
+        } else {
+            td_tap(pos, tap);
+            kc = tap;
+        }
+    }
+    /* Held: stays down until the key is released. Released: a tap. */
+    if (td_held) {
+        td_press(pos, kc);
+    } else {
+        td_tap(pos, kc);
+    }
+}
+
+static void td_again(uint16_t time)
+{
+    if (td_count < 0xFFu) {
+        td_count++;
+    }
+    td_held = 1;
+    td_time = time;
+    if (td_count >= 3u) {
+        const uint8_t n = (td_count == 3u) ? 3u : 1u;
+        for (uint8_t i = 0; i < n; i++) {
+            td_tap(td_pos, td_e[TD_ON_TAP]);
+        }
+    }
+}
+#endif
+
 /* ------------------------------------------------------- tap-hold decision */
 
 static void requeue_waiting(void)
@@ -476,6 +601,24 @@ static void wait_add(uint8_t pos, uint8_t down, uint16_t time)
 static void handle(uint8_t pos, uint8_t down, uint16_t time)
 {
     if (!tapping) {
+#ifdef ACTION_TAP_DANCE
+        /* (A dance and an undecided tap-hold key never overlap: a tap-hold
+         * press interrupts the dance, and a TD press during a tap-hold
+         * decision is buffered like any other key.) */
+        if (td_pos != POS_NONE) {
+            if (pos == td_pos) {
+                if (down) {
+                    td_again(time);
+                } else {
+                    td_held = 0;
+                }
+                return;
+            }
+            if (down) {
+                td_finish(true);
+            }
+        }
+#endif
         if (down) {
             do_press(pos, time);
         } else {
@@ -546,6 +689,11 @@ void action_task(void)
         decide_hold();
         process();
     }
+#ifdef ACTION_TAP_DANCE
+    if (td_pos != POS_NONE && elapsed(td_time) >= td_term()) {
+        td_finish(false);
+    }
+#endif
     if (action_config.osk_timeout != 0) {
         if (osm_mods && elapsed(osm_time) >= action_config.osk_timeout) {
             osm_mods = 0;
@@ -562,6 +710,11 @@ bool action_idle(void)
     if (tapping || wb_count || osm_mods || osl_layer != 0xFFu) {
         return false;
     }
+#ifdef ACTION_TAP_DANCE
+    if (td_pos != POS_NONE) {
+        return false;
+    }
+#endif
     for (uint8_t i = 0; i < SLOTS; i++) {
         if (s_pos[i] != POS_NONE) {
             return false;
