@@ -81,6 +81,18 @@ bool action_hal_tap_dance(uint8_t index, uint16_t *entry)
     return true;
 }
 
+#define KO_COUNT 4
+static uint16_t kos[KO_COUNT][KO_FIELDS];
+
+bool action_hal_key_override(uint8_t index, uint16_t *entry)
+{
+    if (index >= KO_COUNT) {
+        return false;
+    }
+    memcpy(entry, kos[index], sizeof kos[index]);
+    return true;
+}
+
 #define COMBO_COUNT 4
 static uint16_t combos[COMBO_COUNT][COMBO_FIELDS];
 
@@ -103,6 +115,7 @@ static void reset(uint8_t flags)
     memset(keymap, 0, sizeof keymap); /* KC_NO everywhere */
     memset(tds, 0, sizeof tds);
     memset(combos, 0, sizeof combos);
+    memset(kos, 0, sizeof kos);
     for (int l = 1; l < LAYERS; l++) {
         for (int r = 0; r < ROWS; r++) {
             for (int c = 0; c < COLS; c++) {
@@ -642,6 +655,92 @@ static void t_combo_outputs(void)
     expect_idle("combo outputs");
 }
 
+/* -------------------------------------------------------- key overrides */
+
+#define BSPC_ 0, 0
+#define SFT_  0, 1
+#define X0_   0, 2
+#define ESC_  0, 3
+#define CTL_  0, 4
+
+#define HID_LCTL 0x01u
+#define HID_LSFT 0x02u
+#define HID_RSFT 0x20u
+
+/* Shift + Backspace -> Delete, Shift taken off while it is down. */
+static void ko_setup(void)
+{
+    reset(0);
+    keymap[0][0][0] = KC_BSPC;
+    keymap[0][0][1] = KC_LSFT;
+    keymap[0][0][2] = KC_X;
+    keymap[0][0][3] = KC_ESC;
+    keymap[0][0][4] = KC_LCTL;
+    kos[0][KO_TRIGGER]     = KC_BSPC;
+    kos[0][KO_REPLACEMENT] = KC_DEL;
+    kos[0][KO_LAYERS]      = 0xFFFF;
+    kos[0][KO_MODS]        = HID_LSFT;
+    kos[0][KO_SUPPRESS]    = HID_LSFT | (uint16_t)((KO_OPT_ENABLED | KO_OPT_ACT_TRIGGER_DOWN) << 8);
+}
+
+static void t_ko_basic(void)
+{
+    ko_setup();
+    dn(SFT_); dn(BSPC_); up(BSPC_); up(SFT_);
+    expect("KO: shift+bspc -> del, shift lifted and put back", "+E1 m-02 +4C -4C m+02 -E1");
+
+    dn(BSPC_); up(BSPC_);
+    expect("KO: bspc alone", "+2A -2A");
+
+    dn(SFT_); dn(BSPC_); up(SFT_); wait_ms(1); up(BSPC_);
+    expect("KO: shift released first -> trigger again, shift stays up",
+           "+E1 m-02 +4C -E1 -4C +2A -2A");
+
+    dn(SFT_); dn(BSPC_); dn(X0_); up(X0_); up(BSPC_); up(SFT_);
+    expect("KO: another key ends it", "+E1 m-02 +4C -4C m+02 +1B -1B -2A -E1");
+
+    kos[1][KO_TRIGGER]     = KC_ESC;
+    kos[1][KO_REPLACEMENT] = LSFT(KC_GRV);
+    kos[1][KO_LAYERS]      = 0xFFFF;
+    kos[1][KO_MODS]        = HID_LSFT;
+    kos[1][KO_SUPPRESS]    = HID_LSFT | (uint16_t)((KO_OPT_ENABLED | KO_OPT_ACT_TRIGGER_DOWN) << 8);
+    dn(SFT_); dn(ESC_); up(ESC_); up(SFT_);
+    expect("KO: shift+esc -> ~ (modded replacement)", "+E1 m-02 +235 -235 m+02 -E1");
+    expect_idle("KO basic");
+}
+
+static void t_ko_conditions(void)
+{
+    ko_setup();
+    kos[0][KO_MODS] = HID_LSFT | (uint16_t)(HID_LCTL << 8); /* negative: ctrl */
+    dn(CTL_); dn(SFT_); dn(BSPC_); up(BSPC_); up(SFT_); up(CTL_);
+    expect("KO: negative mod blocks it", "+E0 +E1 +2A -2A -E1 -E0");
+
+    ko_setup();
+    kos[0][KO_LAYERS] = 0x0002; /* layer 1 only */
+    dn(SFT_); dn(BSPC_); up(BSPC_); up(SFT_);
+    expect("KO: not on this layer", "+E1 +2A -2A -E1");
+
+    ko_setup();
+    kos[0][KO_MODS] = HID_LSFT | HID_RSFT; /* both shifts needed */
+    dn(SFT_); dn(BSPC_); up(BSPC_); up(SFT_);
+    expect("KO: all trigger mods needed", "+E1 +2A -2A -E1");
+    kos[0][KO_SUPPRESS] |= (uint16_t)(KO_OPT_ONE_MOD << 8);
+    dn(SFT_); dn(BSPC_); up(BSPC_); up(SFT_);
+    expect("KO: one of the trigger mods (one-mod option)", "+E1 m-02 +4C -4C m+02 -E1");
+
+    ko_setup();
+    kos[0][KO_SUPPRESS] = HID_LSFT | (uint16_t)(KO_OPT_ACT_TRIGGER_DOWN << 8);
+    dn(SFT_); dn(BSPC_); up(BSPC_); up(SFT_);
+    expect("KO: disabled entry", "+E1 +2A -2A -E1");
+
+    ko_setup();
+    kos[0][KO_SUPPRESS] |= (uint16_t)(KO_OPT_NO_REREGISTER_TRIGGER << 8);
+    dn(SFT_); dn(BSPC_); up(SFT_); wait_ms(1); up(BSPC_);
+    expect("KO: no re-register option", "+E1 m-02 +4C -E1 -4C -2A");
+    expect_idle("KO conditions");
+}
+
 int main(void)
 {
     t_plain();
@@ -672,6 +771,8 @@ int main(void)
     t_combo_basic();
     t_combo_overlap();
     t_combo_outputs();
+    t_ko_basic();
+    t_ko_conditions();
 
     printf("\n%d/%d checks passed\n", checks - failures, checks);
     return failures ? 1 : 0;

@@ -66,6 +66,7 @@ static void q_push_front(uint8_t pos, uint8_t down, uint16_t time)
 #define ROLE_TAP   2u /* tap-hold key resolved as tap, still physically down */
 #define ROLE_OSM   3u /* one-shot mod, held                                  */
 #define ROLE_OSL   4u /* one-shot layer, held                                */
+#define ROLE_KO    5u /* key override active: s_kc is the replacement        */
 
 #define SLOTS 10u
 
@@ -137,6 +138,14 @@ static __xdata uint8_t  sw_idx[COMBO_SWLEN];
 static __xdata uint16_t combo_down; /* bit n: combo n's output is pressed */
 #endif
 
+#ifdef ACTION_KEY_OVERRIDE
+/* The one active key override (see "key overrides" below). */
+static __xdata uint16_t ko_e[KO_FIELDS]; /* its entry; scratch while searching */
+static __xdata uint16_t ko_trigger;      /* the keycode it replaced            */
+static __xdata uint8_t  ko_slot = 0xFFu; /* slot of the trigger key; 0xFF: none */
+static __xdata uint8_t  ko_lifted;       /* suppressed mods taken off the report */
+#endif
+
 #ifdef ACTION_TAP_DANCE
 /* The one tap dance in progress (see "tap dance" below). */
 static __xdata uint16_t td_e[TD_FIELDS];
@@ -175,6 +184,9 @@ void action_init(void)
     osl_layer           = 0xFFu;
 #ifdef ACTION_TAP_DANCE
     td_pos = POS_NONE;
+#endif
+#ifdef ACTION_KEY_OVERRIDE
+    ko_slot = 0xFFu;
 #endif
 #ifdef ACTION_COMBO
     cb_n       = 0;
@@ -322,6 +334,124 @@ static void hold_off(uint16_t kc)
     }
 }
 
+/* -------------------------------------------------------- key overrides
+ *
+ * vial-qmk / QMK key overrides, the common subset: when an output key is
+ * pressed whose keycode is an enabled override's trigger, with the trigger
+ * mods held (all of them, or any one with KO_OPT_ONE_MOD), none of the
+ * negative mods, and the highest active layer in the layer mask, the
+ * suppressed mods come off the report and the replacement is sent instead.
+ * It ends when the trigger key is released, when the mods stop matching (the
+ * trigger is then pressed again unless KO_OPT_NO_REREGISTER_TRIGGER), or when
+ * another key goes down (unless KO_OPT_NO_UNREGISTER_ON_OTHER).
+ * Not supported: activation by a mod press / negative mod release while the
+ * trigger is already held, and mods-only triggers (trigger KC_NO).
+ *
+ * "Mods held" is worked out from the engine's own held keys, not from the
+ * report, so a mod that is let go during the override is never put back.
+ */
+#ifdef ACTION_KEY_OVERRIDE
+static uint8_t held_mods(void)
+{
+    uint8_t m = osm_mods;
+    for (uint8_t i = 0; i < SLOTS; i++) {
+        if (s_pos[i] == POS_NONE) {
+            continue;
+        }
+        const uint16_t kc = s_kc[i];
+        m |= s_mods[i];
+        switch (s_role[i]) {
+            case ROLE_PLAIN:
+                if (IS_MODIFIER_KEYCODE(kc)) {
+                    m |= (uint8_t)MOD_BIT(kc);
+                } else if (IS_QK_MODS(kc)) {
+                    m |= mods8((uint8_t)QK_MODS_GET_MODS(kc));
+                } else if (IS_QK_LAYER_MOD(kc)) {
+                    m |= mods8((uint8_t)(kc & 0x1Fu));
+                }
+                break;
+            case ROLE_HOLD:
+                if (IS_QK_MOD_TAP(kc)) {
+                    m |= mods8((uint8_t)((kc >> 8) & 0x1Fu));
+                }
+                break;
+            case ROLE_OSM:
+                m |= mods8((uint8_t)(kc & 0x1Fu));
+                break;
+            default:
+                break;
+        }
+    }
+    return m;
+}
+
+/* ko_e's mod condition against the held mods. */
+static bool ko_mods_match(void)
+{
+    const uint8_t mods = held_mods();
+    const uint8_t trig = (uint8_t)ko_e[KO_MODS];
+    if (mods & (uint8_t)(ko_e[KO_MODS] >> 8)) {
+        return false;
+    }
+    if ((uint8_t)(ko_e[KO_SUPPRESS] >> 8) & KO_OPT_ONE_MOD) {
+        return trig == 0 || (mods & trig);
+    }
+    return (uint8_t)(mods & trig) == trig;
+}
+
+static bool ko_try(uint8_t slot, uint8_t pos, uint16_t kc)
+{
+    const uint16_t layer = (uint16_t)(1u << action_highest_layer());
+    if (ko_slot != 0xFFu) {
+        return false; /* one at a time; ko_e belongs to the active one */
+    }
+    for (uint8_t idx = 0; idx < KO_MAX; idx++) {
+        if (!action_hal_key_override(idx, ko_e)) {
+            break;
+        }
+        const uint8_t opt = (uint8_t)(ko_e[KO_SUPPRESS] >> 8);
+        if ((opt & (KO_OPT_ENABLED | KO_OPT_ACT_TRIGGER_DOWN)) != (KO_OPT_ENABLED | KO_OPT_ACT_TRIGGER_DOWN) ||
+            ko_e[KO_TRIGGER] != kc || !(ko_e[KO_LAYERS] & layer) || !ko_mods_match()) {
+            continue;
+        }
+        ko_trigger   = kc;
+        ko_slot      = slot;
+        ko_lifted    = (uint8_t)(held_mods() & (uint8_t)ko_e[KO_SUPPRESS]);
+        s_role[slot] = ROLE_KO;
+        s_kc[slot]   = ko_e[KO_REPLACEMENT];
+        if (ko_lifted) {
+            action_hal_mods(ko_lifted, false);
+        }
+        send(pos, s_kc[slot], true);
+        return true;
+    }
+    return false;
+}
+
+/* End the active override: replacement up, lifted mods that are still held
+ * back on, and the trigger down again if asked and its key is still held. */
+static void ko_end(uint8_t pos, bool reregister)
+{
+    const uint8_t slot = ko_slot;
+    ko_slot            = 0xFFu;
+    send(pos, s_kc[slot], false);
+    const uint8_t back = (uint8_t)(ko_lifted & held_mods());
+    if (back) {
+        action_hal_mods(back, true);
+    }
+    if (s_pos[slot] != POS_NONE) { /* key still down */
+        /* A plain key again; without re-registering its release just sends
+         * an extra key-up for the trigger, which the report ignores, and
+         * still lets go of any one-shot mods riding on it. */
+        s_role[slot] = ROLE_PLAIN;
+        s_kc[slot]   = ko_trigger;
+        if (reregister) {
+            send(pos, ko_trigger, true);
+        }
+    }
+}
+#endif
+
 static void press_plain(uint8_t slot, uint8_t pos, uint16_t kc)
 {
     if (kc == KC_NO || kc == KC_TRANSPARENT) {
@@ -358,6 +488,11 @@ static void press_plain(uint8_t slot, uint8_t pos, uint16_t kc)
             action_hal_mods(osm_mods, true);
             osm_mods = 0;
         }
+#ifdef ACTION_KEY_OVERRIDE
+        if (ko_try(slot, pos, kc)) {
+            return;
+        }
+#endif
         send(pos, kc, true);
     }
 }
@@ -383,6 +518,12 @@ static void release_plain(uint8_t slot, uint8_t pos, uint16_t kc)
 static void do_press(uint8_t pos, uint16_t time)
 {
     const uint16_t kc = resolve(pos);
+
+#ifdef ACTION_KEY_OVERRIDE
+    if (ko_slot != 0xFFu && !((uint8_t)(ko_e[KO_SUPPRESS] >> 8) & KO_OPT_NO_UNREGISTER_ON_OTHER)) {
+        ko_end(s_pos[ko_slot], false);
+    }
+#endif
 
     mark_interrupted(pos);
 
@@ -474,6 +615,15 @@ static void slot_release(uint8_t slot)
                 osl_time  = action_hal_timer();
             }
             break;
+
+#ifdef ACTION_KEY_OVERRIDE
+        case ROLE_KO:
+            ko_end(pos, false);
+            if (s_mods[slot]) {
+                action_hal_mods(s_mods[slot], false);
+            }
+            break;
+#endif
 
         default:
             break;
@@ -896,6 +1046,11 @@ void action_event(uint8_t row, uint8_t col, bool pressed)
 
 void action_task(void)
 {
+#ifdef ACTION_KEY_OVERRIDE
+    if (ko_slot != 0xFFu && !ko_mods_match()) {
+        ko_end(s_pos[ko_slot], !((uint8_t)(ko_e[KO_SUPPRESS] >> 8) & KO_OPT_NO_REREGISTER_TRIGGER));
+    }
+#endif
 #ifdef ACTION_COMBO
     if (cb_n && elapsed(cb_time[0]) >= action_config.combo_term) {
         combo_settle();
@@ -924,7 +1079,11 @@ void action_task(void)
 
 bool action_idle(void)
 {
-    if (tapping || wb_count || osm_mods || osl_layer != 0xFFu) {
+    if (tapping || wb_count || osm_mods || osl_layer != 0xFFu
+#ifdef ACTION_KEY_OVERRIDE
+        || ko_slot != 0xFFu
+#endif
+    ) {
         return false;
     }
 #ifdef ACTION_TAP_DANCE

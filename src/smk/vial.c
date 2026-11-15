@@ -21,8 +21,8 @@
  * QMK settings (0x09..0x0C) expose the action engine's knobs; only settings
  * the engine implements are listed, and Vial GUI shows only listed ones.
  *
- * Dynamic entries (0x0D): tap dances and combos, run by the action engine.
- * Key overrides are reported as zero entries, so Vial GUI hides that tab.
+ * Dynamic entries (0x0D): tap dances, combos and key overrides, run by the
+ * action engine.
  */
 
 #    define VIAL_GET_KEYBOARD_ID       0x00u
@@ -45,6 +45,8 @@
 #    define DYNAMIC_VIAL_TAP_DANCE_SET         0x02u
 #    define DYNAMIC_VIAL_COMBO_GET             0x03u
 #    define DYNAMIC_VIAL_COMBO_SET             0x04u
+#    define DYNAMIC_VIAL_KEY_OVERRIDE_GET      0x05u
+#    define DYNAMIC_VIAL_KEY_OVERRIDE_SET      0x06u
 
 /* VIAL_UNLOCK_ROWS / _COLS come from the generated header (board options
  * vial_unlock_rows / vial_unlock_cols); the generator refuses an empty list. */
@@ -185,13 +187,16 @@ static void qs_wr16(uint8_t off, uint16_t v)
     s[off + 1u] = (uint8_t)(v >> 8);
 }
 
-/* ------------------------------------------------- tap dances and combos
+/* ---------------------------------- tap dances, combos, key overrides
  *
- * Both are tables of 10-byte entries, five u16 LE, in the Vial area -- the
+ * All three are tables of 10-byte entries, five u16 LE, in the Vial area -- the
  * vial-qmk structs, which are also the wire format of get/set:
  *   tap dance (VIAL_TD_OFFSET):    on tap, on hold, on double tap,
  *                                  on tap + hold, tapping term
  *   combo     (VIAL_COMBO_OFFSET): input 1..4 (KC_NO = unused), output
+ *   key override (VIAL_KO_OFFSET):  trigger, replacement, layer mask,
+ *                                  trigger mods, negative mods, suppressed
+ *                                  mods, options (the last four are bytes)
  */
 static __xdata uint8_t *entry_ptr(uint8_t table, uint8_t index)
 {
@@ -224,19 +229,52 @@ bool action_hal_combo(uint8_t index, __xdata uint16_t *entry)
     return true;
 }
 
+bool action_hal_key_override(uint8_t index, __xdata uint16_t *entry)
+{
+    if (index >= VIAL_KEY_OVERRIDE_ENTRIES) {
+        return false;
+    }
+    entry_read(VIAL_KO_OFFSET, index, entry);
+    return true;
+}
+
 _Static_assert(TD_FIELDS * 2u == VIAL_ENTRY_BYTES && COMBO_FIELDS * 2u == VIAL_ENTRY_BYTES,
                "Vial entries are five u16");
 _Static_assert(VIAL_COMBO_ENTRIES <= COMBO_MAX, "the engine addresses at most COMBO_MAX combos");
+_Static_assert(VIAL_KEY_OVERRIDE_ENTRIES <= KO_MAX, "the engine addresses at most KO_MAX key overrides");
+
+/* Key override entries that are all zero (never written: storage version 4
+ * reserved them zeroed) get vial-qmk's defaults. True if any changed. */
+static bool ko_fill_defaults(void)
+{
+    bool changed = false;
+    for (uint8_t i = 0; i < VIAL_KEY_OVERRIDE_ENTRIES; i++) {
+        __xdata uint8_t *p   = entry_ptr(VIAL_KO_OFFSET, i);
+        uint8_t          any = 0;
+        for (uint8_t b = 0; b < VIAL_ENTRY_BYTES; b++) {
+            any |= p[b];
+        }
+        if (!any) {
+            p[4]    = 0xFFu; /* layers: all */
+            p[5]    = 0xFFu;
+            p[9]    = KO_OPT_ACT_TRIGGER_DOWN | KO_OPT_ACT_REQUIRED_MOD_DOWN | KO_OPT_ACT_NEGATIVE_MOD_UP;
+            changed = true;
+        }
+    }
+    return changed;
+}
 
 static void entries_defaults(void)
 {
-    /* vial-qmk: everything KC_NO; tap dances get tapping term TAPPING_TERM. */
+    /* vial-qmk: everything KC_NO; tap dances get tapping term TAPPING_TERM;
+     * key overrides all layers and the three activations, not enabled. */
     memset(entry_ptr(VIAL_TD_OFFSET, 0), 0, DYNAMIC_VIAL_BYTES - VIAL_TD_OFFSET);
     for (uint8_t i = 0; i < VIAL_TAP_DANCE_ENTRIES; i++) {
         __xdata uint8_t *p = entry_ptr(VIAL_TD_OFFSET, i);
         p[8] = (uint8_t)ACTION_TAPPING_TERM_DEFAULT;
         p[9] = (uint8_t)(ACTION_TAPPING_TERM_DEFAULT >> 8);
     }
+    ko_fill_defaults();
 }
 
 /* QMK settings only (the GUI's "Reset to defaults" button). */
@@ -263,6 +301,9 @@ void vial_store_apply(void)
 {
     if (dynamic_vial_store()[QS_MARKER] != QS_MARKER_VALUE) {
         vial_store_defaults();
+        dynamic_vial_mark_dirty();
+    }
+    if (ko_fill_defaults()) {
         dynamic_vial_mark_dirty();
     }
     action_config.tapping_term   = qs_rd16(QS_TAPPING_TERM);
@@ -362,6 +403,7 @@ static void dynamic_entry_op(__xdata uint8_t *data)
             memset(data, 0, RAW_HID_REPORT_SIZE);
             data[0] = VIAL_TAP_DANCE_ENTRIES;
             data[1] = VIAL_COMBO_ENTRIES;
+            data[2] = VIAL_KEY_OVERRIDE_ENTRIES;
             return;
         case DYNAMIC_VIAL_TAP_DANCE_GET:
         case DYNAMIC_VIAL_TAP_DANCE_SET:
@@ -372,6 +414,11 @@ static void dynamic_entry_op(__xdata uint8_t *data)
         case DYNAMIC_VIAL_COMBO_SET:
             table = VIAL_COMBO_OFFSET;
             count = VIAL_COMBO_ENTRIES;
+            break;
+        case DYNAMIC_VIAL_KEY_OVERRIDE_GET:
+        case DYNAMIC_VIAL_KEY_OVERRIDE_SET:
+            table = VIAL_KO_OFFSET;
+            count = VIAL_KEY_OVERRIDE_ENTRIES;
             break;
         default:
             data[0] = 0xFFu;

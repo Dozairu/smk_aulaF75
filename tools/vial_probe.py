@@ -11,7 +11,7 @@ then runs the handshake Vial GUI does and checks each answer:
   - definition: size, every 32-byte page, LZMA-decompresses to JSON, and
     (if a vial.json is given) equals it
   - encoder 0 on layer 0, unlock status, QMK settings listed + readable,
-    8 tap dances + 8 combos readable (no key overrides yet)
+    8 tap dances, 8 combos, 4 key overrides readable
 
 Nothing is written to the keyboard. Needs read/write access to the hidraw node
 (udev rule or ACL, as for VIA in the browser).
@@ -118,8 +118,9 @@ def main():
         good &= check(r[0] == 0, "  {} (qsid {}) = {}".format(names.get(q, "?"), q, v))
 
     r = d.xfer(0xFE, 0x0D, 0x00)
+    r_entries = r
     n_td, n_combo = r[0], r[1]
-    good &= check(n_td == 8 and n_combo == 8 and r[2:4] == b'\x00\x00',
+    good &= check(n_td == 8 and n_combo == 8 and r[2] == 4 and r[3] == 0,
                   'dynamic entries: TD/combo/KO/alt-repeat = {}'.format(list(r[:4])))
     for i in range(n_td):
         t = d.xfer(0xFE, 0x0D, 0x01, i)
@@ -135,6 +136,16 @@ def main():
             i, ' + '.join('{:04X}'.format(k) for k in keys if k) or '-', output))
     t = d.xfer(0xFE, 0x0D, 0x03, n_combo)
     good &= check(t[0] == 0xFF, '  combo {} past the end refused'.format(n_combo))
+    n_ko = r_entries[2]
+    for i in range(n_ko):
+        t = d.xfer(0xFE, 0x0D, 0x05, i)
+        trig, repl, layers = struct.unpack('<3H', bytes(t[1:7]))
+        tmods, neg, sup, opt = t[7], t[8], t[9], t[10]
+        good &= check(t[0] == 0, '  key override {}: {:04X} -> {:04X} layers {:04X} mods {:02X} neg {:02X} '
+                      'suppress {:02X} options {:02X}{}'.format(i, trig, repl, layers, tmods, neg, sup, opt,
+                                                              '' if opt & 0x80 else ' (off)'))
+    t = d.xfer(0xFE, 0x0D, 0x05, n_ko)
+    good &= check(t[0] == 0xFF, '  key override {} past the end refused'.format(n_ko))
 
     r = d.xfer(0x11)
     good &= check(r[1] == 4, 'layer count = {}'.format(r[1]))

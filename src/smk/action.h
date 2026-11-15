@@ -33,6 +33,9 @@
 #if defined(VIAL_ENABLE) && !defined(ACTION_COMBO)
 #    define ACTION_COMBO
 #endif
+#if defined(VIAL_ENABLE) && !defined(ACTION_KEY_OVERRIDE)
+#    define ACTION_KEY_OVERRIDE
+#endif
 
 /* --------------------------------------------------------------- config */
 
@@ -104,4 +107,28 @@ bool action_hal_tap_dance(uint8_t index, __xdata uint16_t *entry);
 #    define COMBO_FIELDS 5u
 #    define COMBO_MAX    16u /* entries the engine can address */
 bool action_hal_combo(uint8_t index, __xdata uint16_t *entry);
+#endif
+
+#ifdef ACTION_KEY_OVERRIDE
+/* Key override entry n, vial_key_override_entry_t read as five u16 LE:
+ *   [0] trigger keycode   [1] replacement keycode   [2] layer mask
+ *   [3] trigger mods | negative mods << 8
+ *   [4] suppressed mods | options << 8
+ * Mods are 8-bit HID masks. False: no entry n. */
+#    define KO_TRIGGER     0u
+#    define KO_REPLACEMENT 1u
+#    define KO_LAYERS      2u
+#    define KO_MODS        3u
+#    define KO_SUPPRESS    4u
+#    define KO_FIELDS      5u
+#    define KO_MAX         16u
+/* options (vial-qmk vial_ko_option_*) */
+#    define KO_OPT_ACT_TRIGGER_DOWN       0x01u
+#    define KO_OPT_ACT_REQUIRED_MOD_DOWN  0x02u /* not supported yet */
+#    define KO_OPT_ACT_NEGATIVE_MOD_UP    0x04u /* not supported yet */
+#    define KO_OPT_ONE_MOD                0x08u
+#    define KO_OPT_NO_REREGISTER_TRIGGER  0x10u
+#    define KO_OPT_NO_UNREGISTER_ON_OTHER 0x20u
+#    define KO_OPT_ENABLED                0x80u
+bool action_hal_key_override(uint8_t index, __xdata uint16_t *entry);
 #endif
