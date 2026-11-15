@@ -44,6 +44,7 @@ void kb_update_switches(void)
 
 extern void indicators_init(void);
 extern void indicators_apply_defaults(void);
+extern void indicators_confirm(uint8_t row, uint8_t col); /* row 0xFF = whole board */
 extern void indicators_next_effect(void);
 extern void indicators_next_color(void);
 extern void indicators_toggle_direction(void);
@@ -157,24 +158,28 @@ bool kb_process_record(uint16_t keycode, bool key_pressed)
             if (key_pressed) {
                 os_mode = 0;
                 aula_status_event(AULA_STATUS_LINKED);
+                indicators_confirm(matrix_event_row, matrix_event_col);
             }
             return false;
         case OS_ANDROID:
             if (key_pressed) {
                 os_mode = 1;
                 aula_status_event(AULA_STATUS_LINKED);
+                indicators_confirm(matrix_event_row, matrix_event_col);
             }
             return false;
         case OS_MAC:
             if (key_pressed) {
                 os_mode = 2;
                 aula_status_event(AULA_STATUS_LINKED);
+                indicators_confirm(matrix_event_row, matrix_event_col);
             }
             return false;
         case OS_IOS:
             if (key_pressed) {
                 os_mode = 3;
                 aula_status_event(AULA_STATUS_LINKED);
+                indicators_confirm(matrix_event_row, matrix_event_col);
             }
             return false;
         case FACTORY_RST:
@@ -272,6 +277,7 @@ void kb_update(void)
         tick_resume();
         settings_mark_dirty();
         aula_status_event(AULA_STATUS_LOST);
+        indicators_confirm(0xFFu, 0);
     }
     aula_encoder_task();
     aula_macro_task();

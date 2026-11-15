@@ -53,6 +53,48 @@
 
 #define FN MO(_FN)
 
+/*
+ * Function row. Default: F1..F12 on the plain keys, media behind Fn. With
+ * meson -Dfn_row_media=true the two swap (F3..F6 stay F-keys both ways).
+ * One macro per key: a preprocessor directive inside LAYOUT_75_ansi(...) would
+ * be undefined behaviour.
+ */
+#ifdef FN_ROW_MEDIA
+#    define B_F1  KC_BRID
+#    define B_F2  KC_BRIU
+#    define B_F7  KC_MPRV
+#    define B_F8  KC_MPLY
+#    define B_F9  KC_MNXT
+#    define B_F10 KC_MUTE
+#    define B_F11 KC_VOLD
+#    define B_F12 KC_VOLU
+#    define N_F1  KC_F1
+#    define N_F2  KC_F2
+#    define N_F7  KC_F7
+#    define N_F8  KC_F8
+#    define N_F9  KC_F9
+#    define N_F10 KC_F10
+#    define N_F11 KC_F11
+#    define N_F12 KC_F12
+#else
+#    define B_F1  KC_F1
+#    define B_F2  KC_F2
+#    define B_F7  KC_F7
+#    define B_F8  KC_F8
+#    define B_F9  KC_F9
+#    define B_F10 KC_F10
+#    define B_F11 KC_F11
+#    define B_F12 KC_F12
+#    define N_F1  KC_BRID
+#    define N_F2  KC_BRIU
+#    define N_F7  KC_MPRV
+#    define N_F8  KC_MPLY
+#    define N_F9  KC_MNXT
+#    define N_F10 KC_MUTE
+#    define N_F11 KC_VOLD
+#    define N_F12 KC_VOLU
+#endif
+
 const uint16_t keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
 
     /* _BASE
@@ -71,7 +113,7 @@ const uint16_t keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
      * `---------------------------------------------------------------'
      */
     [_BASE] = LAYOUT_75_ansi(
-        KC_ESC,           KC_F1,   KC_F2,   KC_F3,   KC_F4,   KC_F5,   KC_F6,   KC_F7,   KC_F8,   KC_F9,   KC_F10,  KC_F11,  KC_F12,  KC_MUTE,
+        KC_ESC,           B_F1,    B_F2,    KC_F3,   KC_F4,   KC_F5,   KC_F6,   B_F7,    B_F8,    B_F9,    B_F10,   B_F11,   B_F12,   KC_MUTE,
         KC_GRV,  KC_1,    KC_2,    KC_3,    KC_4,    KC_5,    KC_6,    KC_7,    KC_8,    KC_9,    KC_0,    KC_MINS, KC_EQL,  KC_BSPC, KC_DEL,
         KC_TAB,  KC_Q,    KC_W,    KC_E,    KC_R,    KC_T,    KC_Y,    KC_U,    KC_I,    KC_O,    KC_P,    KC_LBRC, KC_RBRC, KC_BSLS, KC_PGUP,
         KC_CAPS, KC_A,    KC_S,    KC_D,    KC_F,    KC_G,    KC_H,    KC_J,    KC_K,    KC_L,    KC_SCLN, KC_QUOT,          KC_ENT,  KC_PGDN,
@@ -81,7 +123,7 @@ const uint16_t keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
 
     /* _FN */
     [_FN] = LAYOUT_75_ansi(
-        FACTORY_RST,      KC_BRID, KC_BRIU, _______, _______, _______, _______, KC_MPRV, KC_MPLY, KC_MNXT, KC_MUTE, KC_VOLD, KC_VOLU, MACRO_TG,
+        FACTORY_RST,      N_F1,    N_F2,    _______, _______, _______, _______, N_F7,    N_F8,    N_F9,    N_F10,   N_F11,   N_F12,   MACRO_TG,
         RF_PAIR, LNK_BT1, LNK_BT2, LNK_BT3, _______, _______, _______, _______, _______, _______, _______, _______, _______, _______, KC_INS,
         _______, OS_ANDROID, OS_WIN, OS_MAC, RF_DIAG, WASD_SWAP, _______, KC_PSCR, KC_SCRL, KC_PAUS, _______, BRI_DN,  BRI_UP,  _______, _______,
         _______, _______, _______, _______, _______, _______, _______, _______, _______, _______, _______, _______,          _______, _______,

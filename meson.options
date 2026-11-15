@@ -1,5 +1,17 @@
 option('nkro', type : 'feature', value : 'enabled', description : 'NKRO support')
 option(
+    'vial',
+    type : 'feature',
+    value : 'disabled',
+    description : 'Vial protocol on top of VIA (needs -Dvia=enabled). Applies to boards that declare a vial_uid; the board then serves its own definition and reports VIA protocol 9, which is what Vial GUI accepts.',
+)
+option(
+    'fn_row_media',
+    type : 'boolean',
+    value : false,
+    description : 'Default keymap: media/brightness keys on the plain F-row and F1..F12 behind Fn (boards that support it). Only changes the defaults loaded after a flash or factory reset.',
+)
+option(
     'rgb_default_off',
     type : 'boolean',
     value : false,

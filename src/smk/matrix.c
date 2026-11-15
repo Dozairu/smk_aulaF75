@@ -35,6 +35,9 @@ uint8_t action_layer;
 
 uint8_t default_layer;
 
+uint8_t matrix_event_row;
+uint8_t matrix_event_col;
+
 void matrix_init()
 {
     action_layer    = 0;
@@ -138,6 +141,8 @@ static void process_key_state(uint8_t row, uint8_t col, bool pressed)
     }
 #endif
 
+    matrix_event_row = row;
+    matrix_event_col = col;
     if (!kb_process_record(qcode, pressed)) {
         return;
     }

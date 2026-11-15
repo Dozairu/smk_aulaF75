@@ -3,6 +3,7 @@
 #include "matrix.h"
 #include "dynamic_keymap.h"
 #include "via_macro.h"
+#include "vial.h"
 #include "indicators.h"
 #include "keyboard.h"
 #include "settings.h"
@@ -59,6 +60,9 @@ void tick_dispatch(void)
 #    ifdef VIA_MACRO_ENABLE
         via_macro_tick();
 #    endif
+#    ifdef VIAL_ENABLE
+        vial_tick();
+#    endif
         indicators_post_update();
     }
 
@@ -104,6 +108,9 @@ void tick_dispatch(void)
 #endif
 #ifdef VIA_MACRO_ENABLE
     via_macro_tick();
+#endif
+#ifdef VIAL_ENABLE
+    vial_tick();
 #endif
     if (scan_due) {
         scan_due             = false;

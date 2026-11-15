@@ -231,7 +231,14 @@ void via_macro_task(void)
         case SS_UP_CODE16: {
             const uint8_t  lo = dynamic_macro_byte(macro_pos++);
             const uint8_t  hi = dynamic_macro_byte(macro_pos++);
-            const uint16_t kc = (uint16_t)(((uint16_t)hi << 8) | lo);
+            uint16_t       kc = (uint16_t)(((uint16_t)hi << 8) | lo);
+#    ifdef VIAL_ENABLE
+            /* Vial cannot store a 0 byte inside a NUL-terminated macro, so a
+             * keycode with a zero low byte travels as 0xFF00 | high byte. */
+            if (kc > 0xFF00u) {
+                kc = (uint16_t)((kc & 0xFFu) << 8);
+            }
+#    endif
             if (action == SS_TAP_CODE16) {
                 macro_tap(kc);
             } else {
@@ -243,6 +250,19 @@ void via_macro_task(void)
 
         case SS_DELAY_CODE: {
             uint32_t ms = 0;
+#    ifdef VIAL_ENABLE
+            /* Vial: two non-zero bytes, ms = (d0 - 1) + (d1 - 1) * 255
+             * (vial-qmk dynamic_keymap.c), instead of ASCII digits + '|'. */
+            {
+                const uint8_t d0 = dynamic_macro_byte(macro_pos++);
+                const uint8_t d1 = dynamic_macro_byte(macro_pos++);
+                if (d0 == 0 || d1 == 0) {
+                    macro_finish();
+                    break;
+                }
+                ms = (uint32_t)(d0 - 1u) + (uint32_t)(d1 - 1u) * 255u;
+            }
+#    else
             for (;;) {
                 const uint8_t d = dynamic_macro_byte(macro_pos++);
                 if (d < '0' || d > '9') {
@@ -253,6 +273,7 @@ void via_macro_task(void)
                     ms = 10000ul;
                 }
             }
+#    endif
             macro_arm(MACRO_MS(ms));
             break;
         }

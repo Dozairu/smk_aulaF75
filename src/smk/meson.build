@@ -20,5 +20,6 @@ if get_option('via').enabled()
         'via_macro.c',
         'raw_hid.c',
         'via.c',
+        'vial.c',
     )
 endif

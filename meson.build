@@ -69,6 +69,14 @@ if get_option('rgb_default_off')
     cc_base_args += '-DRGB_DEFAULT_OFF=1'
 endif
 
+if get_option('fn_row_media')
+    cc_base_args += '-DFN_ROW_MEDIA=1'
+endif
+
+if get_option('vial').enabled() and not get_option('via').enabled()
+    error('-Dvial=enabled needs -Dvia=enabled: Vial is an extension of the VIA protocol')
+endif
+
 if get_option('via').enabled()
     cc_base_args += '-DVIA_ENABLE=1'
     cc_base_args += '-DDYNAMIC_KEYMAP_ENABLE=1'
@@ -128,6 +136,10 @@ boot_image_gen = files('utils/boot_image.py')
 # Fails the build if the linked bootloader does not start where reset lands or
 # put its entry stub where the application's isp_jump() goes.
 boot_check = files('utils/boot_check.py')
+
+# Compresses a board's vial.json into the CODE array Vial GUI downloads (see the
+# script's docstring). Run at configure time, like the LED geometry below.
+vial_definition_gen = join_paths(meson.current_source_dir(), 'utils/vial_definition.py')
 
 # Host-side generator that bakes per-device LED animation geometry into ROM tables
 # (see utils/led_geometry_gen.c). Compiled once with the host compiler at configure
@@ -404,6 +416,21 @@ foreach keyboard, board : keyboards
                 capture : true,
             )
             cc_args += '-DLED_GEOMETRY_HEADER="@0@led_geometry.h"'.format(prefix)
+            cc_args += '-I' + meson.current_build_dir()
+        endif
+
+        # Vial: per board, opted into by a `vial_uid` option (8 random bytes that
+        # identify this keyboard model to Vial GUI). Boards without one keep plain VIA.
+        if get_option('vial').enabled() and options.has_key('vial_uid')
+            configure_file(
+                input : board['dir'] / options.get('vial_json', 'vial.json'),
+                output : prefix + 'vial_definition.h',
+                command : [py, vial_definition_gen, '@INPUT@', options['vial_uid'],
+                          options.get('vial_unlock_rows', ''), options.get('vial_unlock_cols', '')],
+                capture : true,
+            )
+            cc_args += '-DVIAL_ENABLE=1'
+            cc_args += '-DVIAL_DEFINITION_HEADER="@0@vial_definition.h"'.format(prefix)
             cc_args += '-I' + meson.current_build_dir()
         endif
 

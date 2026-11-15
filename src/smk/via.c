@@ -9,6 +9,7 @@
 #    include "raw_hid.h"
 #    include "settings.h"
 #    include "tick.h"
+#    include "vial.h"
 #    include <string.h>
 
 #    define VIA_ID_GET_PROTOCOL_VERSION           0x01u
@@ -41,8 +42,28 @@
 #    define VIA_KEYBOARD_VALUE_DEVICE_INDICATION  0x05u
 #    define VIA_KEYBOARD_VALUE_KEYCODES_VERSION   0x06u
 
+/* Matrix tester payload start: protocol 9 (Vial) reads the rows from data[2],
+ * VIA 12+ from data[3] (data[2] is an offset there). */
+#    ifdef VIAL_ENABLE
+#        define MATRIX_STATE_BASE 2u
+#    else
+#        define MATRIX_STATE_BASE 3u
+#    endif
+
 bool via_process_packet(__xdata uint8_t *data)
 {
+#    ifdef VIAL_ENABLE
+    /* While the unlock dialog runs, only its own commands get through; the
+     * rest are echoed untouched (vial-qmk via.c). */
+    if (vial_unlock_in_progress() && !vial_allowed_during_unlock(data)) {
+        return true;
+    }
+    if (data[0] == VIAL_PREFIX) {
+        vial_process(data);
+        return true;
+    }
+#    endif
+
     switch (data[0]) {
         case VIA_ID_GET_PROTOCOL_VERSION:
             data[1] = (uint8_t)(VIA_PROTOCOL_VERSION >> 8);
@@ -56,13 +77,19 @@ bool via_process_packet(__xdata uint8_t *data)
                     memset(&data[2], 0, 4);
                     break;
                 case VIA_KEYBOARD_VALUE_SWITCH_MATRIX_STATE: {
+#    ifdef VIAL_ENABLE
+                    /* The key tester is a keylogger while locked: echo instead. */
+                    if (!vial_unlocked()) {
+                        break;
+                    }
+#    endif
                     /* One big-endian 16-bit mask per row, starting at data[3] (VIA reads the payload from there). */
                     memset(&data[2], 0, RAW_HID_REPORT_SIZE - 2u);
                     for (uint8_t col = 0; col < MATRIX_COLS; col++) {
                         const uint8_t pressed = matrix_get_col(col);
                         for (uint8_t row = 0; row < MATRIX_ROWS; row++) {
                             if (pressed & (uint8_t)(1u << row)) {
-                                const uint8_t idx = (uint8_t)(3u + row * 2u + (col < 8u ? 1u : 0u));
+                                const uint8_t idx = (uint8_t)(MATRIX_STATE_BASE + row * 2u + (col < 8u ? 1u : 0u));
                                 data[idx] |= (uint8_t)(1u << (col & 7u));
                             }
                         }
@@ -174,6 +201,11 @@ bool via_process_packet(__xdata uint8_t *data)
         }
 
         case VIA_ID_DYNAMIC_KEYMAP_MACRO_SET_BUFFER: {
+#    ifdef VIAL_ENABLE
+            if (!vial_unlocked()) {
+                break; /* macros can type anything: unlock first (vial-qmk) */
+            }
+#    endif
             uint16_t offset = (uint16_t)((uint16_t)data[1] << 8) | data[2];
             uint8_t  size   = data[3];
             if (size > RAW_HID_REPORT_SIZE - 4u) {

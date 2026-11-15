@@ -50,6 +50,12 @@ keyboards += {
             'led_cols' : '15',
             'led_cx2' : '14',
             'led_cy2' : '5',
+            # Vial (-Dvial=enabled). The UID is random and must stay fixed:
+            # Vial GUI uses it to recognise this keyboard model.
+            'vial_uid' : '83f6f3c6dbd75a01',
+            # Unlock chord: Esc + Enter, held ~5 s when Vial asks for it.
+            'vial_unlock_rows' : '0,3',
+            'vial_unlock_cols' : '0,13',
         },
     },
 }

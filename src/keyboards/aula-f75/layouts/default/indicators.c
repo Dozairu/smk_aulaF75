@@ -959,6 +959,42 @@ static __bit           macro_was_on;
 #define CAPS_LEVEL 255
 
 static __bit caps_on;
+
+/*
+ * Confirmation blink: one key (OS mode switched) or the whole board (factory
+ * reset) blinks white three times, ~0.3 s on / ~0.15 s off. Like the other
+ * overlays it bypasses user brightness and runs with effects OFF, so a mode
+ * switch is visible on a dark keyboard.
+ */
+#define CONFIRM_ALL    0xFFu
+#define CONFIRM_SWEEPS 24u /* 3 x (8 on + ... ) sweeps of ~37.9 ms */
+
+static volatile __xdata uint8_t confirm_step; /* sweeps left, 0 = idle */
+static __xdata uint8_t          confirm_row;
+static __xdata uint8_t          confirm_col;
+
+void indicators_confirm(uint8_t row, uint8_t col)
+{
+    ET2          = 0;
+    confirm_row  = row;
+    confirm_col  = col;
+    confirm_step = CONFIRM_SWEEPS;
+    ET2          = 1;
+}
+
+static bool confirm_paint(void)
+{
+    if (confirm_step == 0 ||
+        (confirm_row != CONFIRM_ALL && (regen_row != confirm_row || regen_col != confirm_col))) {
+        return false;
+    }
+    /* Counting down 24..1: lit while bit 2 of (step - 1) is set, i.e. three
+     * lit windows of 4 sweeps separated by 4 dark ones. */
+    const uint8_t v = (((uint8_t)(confirm_step - 1u)) & 0x04u) ? 255u : 0u;
+    aula_rgb_set(regen_row, regen_col, v, v, v);
+    return true;
+}
+
 #ifdef SIGNALRGB_ENABLE
 #    define DIRECT_RGB_TIMEOUT_FRAMES 480u /* ~3 s at ~6.2 ms/frame */
 static __xdata uint8_t direct_rgb[LED_ROWS][LED_COLS][3];
@@ -1006,6 +1042,10 @@ static void led_regen_one(void)
 
         aula_rgb_set(regen_row, regen_col, caps_on ? (uint8_t)CAPS_LEVEL : (uint8_t)0, st, st);
         goto advance;
+    }
+
+    if (confirm_paint()) {
+        goto advance; /* cell claimed by the confirmation blink */
     }
 
 #ifdef RF_EUART0
@@ -1247,6 +1287,9 @@ advance:
                 macro_beat = 0;
             }
             aula_status_tick();
+            if (confirm_step != 0) {
+                confirm_step--;
+            }
 #ifdef RF_EUART0
             if (bat_show_sweeps != 0) {
                 bat_show_sweeps--;
@@ -1398,7 +1441,7 @@ void indicators_render(void)
         }
         prev_link_fx = keyboard_state.rf_link;
     }
-    const bool active = aula_macro_active() || caps_on || aula_status_lit() ||
+    const bool active = aula_macro_active() || caps_on || aula_status_lit() || confirm_step != 0 ||
                         rf_diag_on || bat_show_sweeps || flourish_step != 0 ||
                         (rf_bt_pair_slot != 0 && user_settings.battery_indicator_on != 0) ||
                         user_settings.led_effect < AULA_FX_OFF
@@ -1407,7 +1450,7 @@ void indicators_render(void)
 #        endif
         ;
 #    else
-    const bool active = aula_macro_active() || caps_on || aula_status_lit() ||
+    const bool active = aula_macro_active() || caps_on || aula_status_lit() || confirm_step != 0 ||
                         user_settings.led_effect < AULA_FX_OFF
 #        ifdef SIGNALRGB_ENABLE
                         || direct_active
@@ -1454,7 +1497,7 @@ bool indicators_update_step(keyboard_state_t *keyboard, uint8_t current_step)
         }
         prev_link_fx = keyboard->rf_link;
     }
-    if (aula_macro_active() || caps_on || aula_status_lit() ||
+    if (aula_macro_active() || caps_on || aula_status_lit() || confirm_step != 0 ||
         rf_diag_on || bat_show_sweeps || flourish_step != 0 ||
         (rf_bt_pair_slot != 0 && user_settings.battery_indicator_on != 0) ||
         user_settings.led_effect < AULA_FX_OFF
@@ -1463,7 +1506,7 @@ bool indicators_update_step(keyboard_state_t *keyboard, uint8_t current_step)
 #    endif
     ) {
 #else
-    if (aula_macro_active() || caps_on || aula_status_lit() ||
+    if (aula_macro_active() || caps_on || aula_status_lit() || confirm_step != 0 ||
         user_settings.led_effect < AULA_FX_OFF
 #    ifdef SIGNALRGB_ENABLE
         || direct_active
