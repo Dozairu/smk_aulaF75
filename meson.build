@@ -69,6 +69,14 @@ if get_option('rgb_default_off')
     cc_base_args += '-DRGB_DEFAULT_OFF=1'
 endif
 
+if not get_option('autotype')
+    cc_base_args += '-DNO_AUTOTYPE=1'
+endif
+
+if not get_option('rf_diag')
+    cc_base_args += '-DNO_RF_DIAG=1'
+endif
+
 if get_option('fn_row_media')
     cc_base_args += '-DFN_ROW_MEDIA=1'
 endif

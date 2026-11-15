@@ -11,7 +11,8 @@ Currently ported board: **AULA F75** (`src/keyboards/aula-f75`).
 
 ```sh
 nix develop
-meson setup build-vial -Dvia=enabled -Dvial=enabled --buildtype=release
+meson setup build-vial -Dvia=enabled -Dvial=enabled --buildtype=release \
+      -Dautotype=false -Drf_diag=false   # optional: frees ~1.35 KB, see below
 meson compile -C build-vial aula-f75_default_smk.hex
 meson test -C build-vial action               # key engine unit tests (host gcc)
 ```
@@ -158,4 +159,6 @@ or `EE_CLR` clears everything, including the Vial area and the engine's live sta
 
 ## Budget (AULA F75, Vial build)
 
-Code 57,939 / 58,368 B, XRAM 3,828 / 4,096 B. Further features need code to be freed first.
+With `-Dautotype=false -Drf_diag=false`: code 56,585 / 58,368 B, XRAM 3,807 / 4,096 B. With both
+left on (the default): code 57,939 B. `autotype` is the Fn+Space anti-idle mode, `rf_diag` the Fn+R
+radio diagnostic overlay; turned off, their keys do nothing.

@@ -775,6 +775,7 @@ static void fx_color(uint8_t wheel_index, uint8_t out[3])
  */
 #ifdef RF_EUART0
 
+#ifndef NO_RF_DIAG
 static __bit rf_diag_on;
 
 void indicators_toggle_rf_diag(void)
@@ -815,6 +816,12 @@ static bool rf_diag_paint(void)
     }
     return true;
 }
+#else
+/* -Drf_diag=false. A flag that is never set rather than a literal 0: SDCC
+ * rejects the render gates below if a term is a compile-time constant
+ * (error 110, "conditional flow changed by optimizer"). */
+static __bit rf_diag_on;
+#endif
 
 /* --------------------------------------------------- battery level overlay
  *
@@ -887,6 +894,7 @@ static bool bat_show_paint(void)
  * the table bypasses user brightness: the indicator must remain visible even
  * with brightness at zero and effects turned off.
  */
+#ifndef NO_AUTOTYPE
 #define MACRO_HEART_STEPS 24
 
 static const __code uint8_t macro_heart[MACRO_HEART_STEPS] = {
@@ -898,6 +906,12 @@ static const __code uint8_t macro_heart[MACRO_HEART_STEPS] = {
 
 static __xdata uint8_t macro_beat;
 static __bit           macro_was_on;
+#else
+/* -Dautotype=false: as rf_diag_on above, a never-set flag, not a literal 0. */
+static __bit macro_never;
+#    undef aula_macro_active
+#    define aula_macro_active() macro_never
+#endif
 
 /* ------------------------------------------------------------------ Caps Lock
  *
@@ -1049,9 +1063,11 @@ static void led_regen_one(void)
     }
 
 #ifdef RF_EUART0
+#ifndef NO_RF_DIAG
     if (rf_diag_on && rf_diag_paint()) {
         goto advance; /* cell claimed by the diagnostic overlay */
     }
+#endif
     if (bat_show_sweeps && bat_show_paint()) {
         goto advance; /* cell claimed by the battery overlay */
     }
@@ -1074,6 +1090,7 @@ static void led_regen_one(void)
     }
 #endif
 
+#ifndef NO_AUTOTYPE
     if (aula_macro_active()) {
         /*
          * Auto-typing indicator: the entire keyboard pulses deep red, and the
@@ -1085,6 +1102,7 @@ static void led_regen_one(void)
         aula_rgb_set(regen_row, regen_col, macro_heart[macro_beat], 0, 0);
         goto advance;
     }
+#endif
 
 #ifdef SIGNALRGB_ENABLE
     if (direct_active) {
@@ -1283,9 +1301,11 @@ advance:
             regen_row = 0;
             /* The entire panel has just been repainted: the heartbeat can
              * advance by one step without tearing the frame in half. */
+#ifndef NO_AUTOTYPE
             if (++macro_beat >= MACRO_HEART_STEPS) {
                 macro_beat = 0;
             }
+#endif
             aula_status_tick();
             if (confirm_step != 0) {
                 confirm_step--;
@@ -1407,6 +1427,7 @@ void indicators_render(void)
     regen_steps_pending--;
     ET2 = 1;
 
+#ifndef NO_AUTOTYPE
     if (aula_macro_active()) {
         if (!macro_was_on) {
             macro_was_on = 1;
@@ -1415,6 +1436,7 @@ void indicators_render(void)
     } else {
         macro_was_on = 0;
     }
+#endif
 
     if (user_settings.led_effect == AULA_FX_REACTIVE ||
         user_settings.led_effect == AULA_FX_LAKE) {
@@ -1476,6 +1498,7 @@ bool indicators_update_step(keyboard_state_t *keyboard, uint8_t current_step)
     aula_encoder_sample();
     aula_macro_tick();
 
+#ifndef NO_AUTOTYPE
     if (aula_macro_active()) {
         if (!macro_was_on) {
             macro_was_on = 1;
@@ -1484,6 +1507,7 @@ bool indicators_update_step(keyboard_state_t *keyboard, uint8_t current_step)
     } else {
         macro_was_on = 0;
     }
+#endif
 
     if (user_settings.led_effect == AULA_FX_REACTIVE ||
         user_settings.led_effect == AULA_FX_LAKE) {

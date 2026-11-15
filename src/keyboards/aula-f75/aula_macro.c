@@ -1,4 +1,6 @@
 #include "aula_macro.h"
+
+#ifndef NO_AUTOTYPE
 #include "kbdef.h"
 #include "keycodes.h"
 #include "report.h"
@@ -308,3 +310,7 @@ void aula_macro_task(void)
             break;
     }
 }
+
+#else
+typedef int aula_macro_unused; /* -Dautotype=false; ISO C: no empty translation unit */
+#endif

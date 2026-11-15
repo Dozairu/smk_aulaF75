@@ -93,3 +93,15 @@ option(
     value : '/dev/ttyUSB0',
     description : 'Serial port of the sinodude-serial programmer, used by the *_full_flash targets that write the stitched bootloader-plus-application image over ICP. Ignored for sinolink. On macOS this is a /dev/cu.usbserial-* path.',
 )
+option(
+    'autotype',
+    type : 'boolean',
+    value : true,
+    description : 'AULA F75: the auto-type ("anti-idle") mode on MACRO_TG (Fn+Space). false: MACRO_TG does nothing, ~1 KB of code freed.',
+)
+option(
+    'rf_diag',
+    type : 'boolean',
+    value : true,
+    description : 'AULA F75: the radio diagnostic overlay on RF_DIAG (Fn+R). false: RF_DIAG does nothing, code freed. Debug builds keep the state for the console.',
+)

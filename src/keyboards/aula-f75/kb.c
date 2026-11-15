@@ -126,9 +126,11 @@ bool kb_process_record(uint16_t keycode, bool key_pressed)
     /* As long as auto-typing has not returned to idle, it swallows EVERYTHING:
      * this is what silences the key that stops it, and what prevents releasing
      * the activation combo from stopping it immediately. */
+#ifndef NO_AUTOTYPE
     if (aula_macro_intercept(key_pressed)) {
         return false;
     }
+#endif
 
     if (keycode >= QK_USER && keycode < QK_USER + (KB_SAFE_RANGE - SAFE_RANGE)) {
         keycode = (uint16_t)(SAFE_RANGE + (keycode - QK_USER));
@@ -217,11 +219,15 @@ bool kb_process_record(uint16_t keycode, bool key_pressed)
             if (key_pressed) indicators_toggle_direction();
             return false;
         case MACRO_TG:
+#ifndef NO_AUTOTYPE
             if (key_pressed) aula_macro_arm();
+#endif
             return false;
 #ifdef RF_EUART0
         case RF_DIAG:
+#ifndef NO_RF_DIAG
             if (key_pressed) indicators_toggle_rf_diag();
+#endif
             return false;
         case RF_PAIR:
             if (key_pressed) rf_request_pairing();

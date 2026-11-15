@@ -369,7 +369,9 @@ static __xdata uint16_t deb_bt;
  * the SDCC static overlay of main-loop functions -- which is exactly what
  * `utils/check_interrupts.py` fails the build to prevent.
  */
+#if !defined(NO_RF_DIAG) || DEBUG == 1 /* the Fn+R overlay, the debug console */
 __xdata uint8_t rf_diag_state[RF_DIAG_FIELDS];
+#endif
 
 /* --------------------------------------------------------------------- ISR */
 
@@ -1722,6 +1724,7 @@ void rf_task(void)
                      batt_low && !vbus_present, rf_charging,
                      vbus_present && charge_known && !rf_charging);
 
+#if !defined(NO_RF_DIAG) || DEBUG == 1
     rf_diag_state[RF_DIAG_P74]    = P7_4 ? 1 : 0;
     rf_diag_state[RF_DIAG_P45]    = P4_5 ? 1 : 0;
     rf_diag_state[RF_DIAG_P47]    = P4_7 ? 1 : 0;
@@ -1735,6 +1738,7 @@ void rf_task(void)
     rf_diag_state[RF_DIAG_RXTOT]  = rx_total;
     rf_diag_state[RF_DIAG_RXLAST] = rx_last;
     rf_diag_state[RF_DIAG_RXIDX]  = rx_idx;
+#endif
 
     rf_diag_trace();
     rf_cap_replay();

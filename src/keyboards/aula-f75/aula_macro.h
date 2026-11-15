@@ -16,6 +16,7 @@
  * prevent.
  */
 
+#ifndef NO_AUTOTYPE
 /* From `kb_process_record`: arms the mode (when MACRO_TG is pressed). */
 void aula_macro_arm(void);
 
@@ -34,3 +35,10 @@ void aula_macro_tick(void);
 
 /* From the main loop: sends reports and monitors for cancellation. */
 void aula_macro_task(void);
+#else
+/* Built with -Dautotype=false: MACRO_TG does nothing. Callers guard the code
+ * that would otherwise become unreachable (SDCC --Werror rejects it). */
+#    define aula_macro_active() 0
+#    define aula_macro_tick()
+#    define aula_macro_task()
+#endif
