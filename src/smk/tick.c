@@ -17,6 +17,34 @@
 #    define LED_SUBFRAMES_PER_SCAN 1
 #endif
 
+/*
+ * Millisecond clock for the key action engine (tapping term, one-shot timeout).
+ * timer_step() runs once per ~400 us tick slot (the cadence the macro player
+ * and settings already use), so it adds 2/5 ms per call: exact on the
+ * interleaved scan, which runs that slot every 400 us on the dot.
+ */
+static volatile __xdata uint16_t timer_ms;
+static __xdata uint8_t           timer_frac;
+
+static void timer_step(void)
+{
+    timer_frac += 2u;
+    if (timer_frac >= 5u) {
+        timer_frac -= 5u;
+        timer_ms++;
+    }
+}
+
+uint16_t timer_read(void)
+{
+    uint16_t t;
+    __critical
+    {
+        t = timer_ms;
+    }
+    return t;
+}
+
 #ifdef MATRIX_INTERLEAVED_SCAN
 /*
  * Interleaved column-by-column mode:
@@ -57,6 +85,7 @@ void tick_dispatch(void)
 #    ifdef DYNAMIC_KEYMAP_ENABLE
         dynamic_keymap_tick();
 #    endif
+        timer_step();
 #    ifdef VIA_MACRO_ENABLE
         via_macro_tick();
 #    endif
@@ -103,6 +132,7 @@ static void run_led_subframe(void)
 void tick_dispatch(void)
 {
     settings_tick();
+    timer_step();
 #ifdef DYNAMIC_KEYMAP_ENABLE
     dynamic_keymap_tick();
 #endif

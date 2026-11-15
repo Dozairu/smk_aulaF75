@@ -8,6 +8,7 @@
 #include "debug.h"
 #include "console.h"
 #include "matrix.h"
+#include "action.h"
 #include "dynamic_keymap.h"
 #include "via_macro.h"
 #include "utils.h"
@@ -104,6 +105,7 @@ void main(void)
         kb_update_switches();
         kb_update();
         matrix_task();
+        action_task();
 
         indicators_render();
 

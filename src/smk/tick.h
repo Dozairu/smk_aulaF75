@@ -13,3 +13,8 @@ void tick_dispatch(void);
 
 void tick_pause(void);
 void tick_resume(void);
+
+#include <stdint.h>
+
+/* Free-running millisecond counter (wraps every ~65 s; use differences). */
+uint16_t timer_read(void);

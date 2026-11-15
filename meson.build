@@ -613,3 +613,17 @@ if sim.found() and py.found()
         timeout : 300,
     )
 endif
+
+# Host unit tests for the portable key action engine (src/smk/action.c):
+# layers, tap-hold, one-shot. Pure logic against a faked HAL; no simulator.
+test(
+    'action',
+    executable(
+        'test_action',
+        ['src/smk/action.c', 'tests/host/test_action.c'],
+        include_directories : include_directories('src/smk'),
+        c_args : ['-std=gnu2x', '-Wall', '-Wextra', '-Werror'],
+        native : true,
+        build_by_default : false,
+    ),
+)

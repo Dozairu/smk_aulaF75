@@ -12,6 +12,8 @@
 #include "delay.h"
 #include "indicators.h"
 #include "sleep.h"
+#include "action.h"
+#include "tick.h"
 #include <stdlib.h>
 #include <stdbool.h>
 
@@ -31,17 +33,13 @@ volatile bool matrix_updated;
 static bool report_batching;
 static bool report_dirty;
 
-uint8_t action_layer;
-
-uint8_t default_layer;
-
 uint8_t matrix_event_row;
 uint8_t matrix_event_col;
 
 void matrix_init()
 {
-    action_layer    = 0;
-    default_layer   = 0;
+    action_init();
+    action_config_defaults();
     matrix_updated  = false;
     report_batching = false;
     report_dirty    = false;
@@ -67,21 +65,36 @@ static void emit_keyboard_report(void)
 
 void set_default_layer(uint8_t layer)
 {
-    default_layer = layer;
+    action_set_default_layer(layer);
 }
 
-static uint16_t resolve_keycode(uint16_t base, uint8_t row, uint8_t col)
-{
-    if (!action_layer) {
-        return base;
-    }
-
-    const uint16_t overlay = keymap_get_keycode(action_layer, row, col);
-    return (overlay == KC_TRANSPARENT) ? base : overlay;
-}
-
+/*
+ * Output stage: a plain, already-resolved keycode to the host. Handles basic
+ * keys, modifiers, system/consumer usages, and QMK "modded" keycodes such as
+ * LCTL(KC_C) (QK_MODS: 5-bit mod field in bits 8..12, right-hand flag bit 12).
+ */
 void send_keycode(uint16_t qcode, bool pressed)
 {
+    if (IS_QK_MODS(qcode)) {
+        const uint8_t m5   = (uint8_t)QK_MODS_GET_MODS(qcode);
+        uint8_t       mods = (uint8_t)(m5 & 0x0Fu);
+        if (m5 & 0x10u) {
+            mods = (uint8_t)(mods << 4);
+        }
+        /* Mods go down before the key and come up after it, in their own
+         * reports, so the host never sees the key without them. */
+        if (pressed) {
+            add_mods(mods);
+            emit_keyboard_report();
+            send_keycode(QK_MODS_GET_BASIC_KEYCODE(qcode), true);
+        } else {
+            send_keycode(QK_MODS_GET_BASIC_KEYCODE(qcode), false);
+            del_mods(mods);
+            emit_keyboard_report();
+        }
+        return;
+    }
+
     if (IS_MODIFIER_KEYCODE(qcode)) {
         if (pressed) {
             add_mods(MOD_BIT((uint8_t)(qcode & 0xFF)));
@@ -113,25 +126,53 @@ void send_keycode(uint16_t qcode, bool pressed)
     }
 }
 
-static void process_key_state(uint8_t row, uint8_t col, bool pressed)
+/* ------------------------------------------------ action engine HAL (action.h) */
+
+/* Without VIA the static keymap's depth is not known here; the engine only
+ * ever reads layers that a layer keycode in that keymap turned on. */
+#ifndef KEYMAP_LAYER_COUNT
+#    define KEYMAP_LAYER_COUNT 8u
+#endif
+
+uint16_t action_hal_keymap(uint8_t layer, uint8_t row, uint8_t col)
 {
-    const uint16_t base = keymap_get_keycode(default_layer, row, col);
+    return keymap_get_keycode(layer, row, col);
+}
 
-    if (IS_QK_MOMENTARY(base)) {
-        if (pressed) {
-            action_layer = QK_MOMENTARY_GET_LAYER(base);
-        } else {
-            clear_keys();
-            emit_keyboard_report();
-            host_consumer_send(0);
-            host_system_send(0);
-            action_layer = 0;
-        }
-        return;
+uint8_t action_hal_layer_count(void)
+{
+#ifdef DYNAMIC_KEYMAP_ENABLE
+    return dynamic_keymap_layer_count();
+#else
+    return KEYMAP_LAYER_COUNT;
+#endif
+}
+
+uint16_t action_hal_timer(void)
+{
+    return timer_read();
+}
+
+void action_hal_event_pos(uint8_t row, uint8_t col)
+{
+    matrix_event_row = row;
+    matrix_event_col = col;
+}
+
+void action_hal_mods(uint8_t mods, bool on)
+{
+    if (on) {
+        add_mods(mods);
+    } else {
+        del_mods(mods);
     }
+    emit_keyboard_report();
+}
 
-    const uint16_t qcode = resolve_keycode(base, row, col);
-
+/* A resolved key: macros, then the keyboard / layout hooks (custom keycodes,
+ * OS-mode remaps, ...), then the host. Same order as before the engine. */
+void action_hal_send(uint16_t qcode, bool pressed)
+{
 #ifdef VIA_MACRO_ENABLE
     if (IS_QK_MACRO(qcode)) {
         if (pressed && qcode - QK_MACRO < DYNAMIC_MACRO_COUNT) {
@@ -141,8 +182,6 @@ static void process_key_state(uint8_t row, uint8_t col, bool pressed)
     }
 #endif
 
-    matrix_event_row = row;
-    matrix_event_col = col;
     if (!kb_process_record(qcode, pressed)) {
         return;
     }
@@ -274,7 +313,7 @@ uint8_t matrix_task()
         for (uint8_t row = 0; row < MATRIX_ROWS; row++, row_mask <<= 1) {
             if (col_changes & row_mask) {
                 const bool key_pressed = current_col & row_mask;
-                process_key_state(row, col, key_pressed);
+                action_event(row, col, key_pressed);
             }
         }
 

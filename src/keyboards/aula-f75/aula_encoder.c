@@ -41,7 +41,7 @@
 #define ENC_GAP  4
 #define ENC_HOLD (ENC_GAP + 8)
 
-extern uint8_t action_layer;
+#include "action.h"
 
 static volatile __data uint8_t enc_hold;
 static volatile __data int8_t  enc_pending;
@@ -83,60 +83,27 @@ void aula_encoder_sample(void)
 
 static void enc_send(uint16_t kc, bool down)
 {
-    uint8_t basic;
-    uint8_t hi;
-
     if (kc == 0) {
         return;
     }
-#ifdef VIA_MACRO_ENABLE
-    if (IS_QK_MACRO(kc)) {
-        if (down && (kc - QK_MACRO) < DYNAMIC_MACRO_COUNT) {
-            via_macro_play((uint8_t)(kc - QK_MACRO));
-        }
-        return;
-    }
-#endif
-    if (!kb_process_record(kc, down)) {
-        return;
-    }
-
-    basic = (uint8_t)(kc & 0xFFu);
-    hi    = (uint8_t)(kc >> 8);
-    if (hi >= 0x01u && hi <= 0x1Fu) {
-        uint8_t mods = (uint8_t)(hi & 0x0Fu);
-        if (hi & 0x10u) {
-            mods = (uint8_t)(mods << 4);
-        }
-        if (down) add_mods(mods); else del_mods(mods);
-    } else if (hi != 0) {
-        return;
-    }
-
-    if (basic != 0) {
-        if (IS_MODIFIER_KEYCODE(basic)) {
-            if (down) add_mods(MOD_BIT(basic)); else del_mods(MOD_BIT(basic));
-        } else if (IS_BASIC_KEYCODE(basic)) {
-            if (down) add_key(basic); else del_key(basic);
-        } else if (IS_SYSTEM_KEYCODE(basic)) {
-            host_system_send(down ? keycode_to_system(basic) : 0);
-            return;
-        } else if (IS_CONSUMER_KEYCODE(basic)) {
-            host_consumer_send(down ? keycode_to_consumer(basic) : 0);
-            return;
-        }
-    }
-    send_keyboard_report();
+    /* Same output stage as a key (macros, kb hooks, modded keycodes). */
+    action_hal_send(kc, down);
 }
 
 static uint16_t enc_lookup(bool clockwise)
 {
-    uint16_t kc = dynamic_encoder_get_keycode(action_layer, 0, clockwise);
-
-    if (kc == KC_TRANSPARENT) {
-        kc = dynamic_encoder_get_keycode(0, 0, clockwise);
+    /* Same resolution as a key: highest active layer whose entry is not
+     * transparent (layer state from the action engine). */
+    const uint8_t st = action_layer_state();
+    for (uint8_t l = 8; l-- > 0;) {
+        if (st & (uint8_t)(1u << l)) {
+            const uint16_t kc = dynamic_encoder_get_keycode(l, 0, clockwise);
+            if (kc != KC_TRANSPARENT) {
+                return kc;
+            }
+        }
     }
-    return kc;
+    return KC_NO;
 }
 
 void aula_encoder_task(void)

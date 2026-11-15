@@ -1384,6 +1384,27 @@ enum keycode_aliases {
 #define MO(layer) (QK_MOMENTARY | ((layer)&0x1F))
 #define QK_MOMENTARY_GET_LAYER(kc) ((kc)&0x1F)
 
+// 5-bit mod field used by MT / OSM / LM (bit 4 = right-hand), as in QMK
+#define MOD_LCTL 0x01
+#define MOD_LSFT 0x02
+#define MOD_LALT 0x04
+#define MOD_LGUI 0x08
+#define MOD_RCTL 0x11
+#define MOD_RSFT 0x12
+#define MOD_RALT 0x14
+#define MOD_RGUI 0x18
+
+// Layer and dual-role keys, encoded exactly like QMK (keycodes v6)
+#define TO(layer) (QK_TO | ((layer)&0x1F))
+#define DF(layer) (QK_DEF_LAYER | ((layer)&0x1F))
+#define TG(layer) (QK_TOGGLE_LAYER | ((layer)&0x1F))
+#define OSL(layer) (QK_ONE_SHOT_LAYER | ((layer)&0x1F))
+#define OSM(mod) (QK_ONE_SHOT_MOD | ((mod)&0x1F))
+#define TT(layer) (QK_LAYER_TAP_TOGGLE | ((layer)&0x1F))
+#define LM(layer, mod) (QK_LAYER_MOD | (((layer)&0xF) << 5) | ((mod)&0x1F))
+#define LT(layer, kc) (QK_LAYER_TAP | (((layer)&0xF) << 8) | ((kc)&0xFF))
+#define MT(mod, kc) (QK_MOD_TAP | (((mod)&0x1F) << 8) | ((kc)&0xFF))
+
 // Range Helpers
 #define IS_QK_BASIC(code) ((code) >= QK_BASIC && (code) <= QK_BASIC_MAX)
 #define IS_QK_MODS(code) ((code) >= QK_MODS && (code) <= QK_MODS_MAX)
