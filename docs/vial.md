@@ -147,6 +147,8 @@ or `EE_CLR` clears everything, including the Vial area and the engine's live sta
 
 ## Known gaps
 
+What to do about them, with sizes and options: [vial-roadmap.md](vial-roadmap.md).
+
 - **Auto Shift** and Vial's **Alt Repeat table**: left out for code space.
 - **Key overrides**: no activation by pressing a required mod / releasing a negative mod after the
   trigger; no mods-only triggers.

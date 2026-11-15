@@ -1,18 +1,81 @@
+# Vial for the AULA F75, on SMK
+
+Open firmware for the **Epomaker × AULA F75** that speaks **[Vial](https://get.vial.today/)**: remap
+it, set up tap-hold, tap dance, combos, key overrides and lighting from Vial or
+[vial.rocks](https://vial.rocks) in a browser — on Linux, macOS and Windows — and move your layout to
+and from any other Vial keyboard. No vendor software, no JSON to load: the keyboard serves its own
+definition.
+
+![The AULA F75 in Vial (vial.rocks)](docs/images/vial-keymap.png)
+
+This project is a **Vial layer on top of [SMK](https://github.com/karstx/smk)** and its
+[AULA F75 port](https://github.com/Dozairu/smk_aulaF75). All the hard groundwork is theirs — see
+[Credits](#credits).
+
+## What it adds
+
+- **Vial protocol 6** with VialRGB: the keyboard serves its compressed definition, unlock with Esc +
+  Enter, keymap / layers / encoder / macros / matrix tester.
+- **A QMK-style key engine** ([`src/smk/action.c`](src/smk/action.c), portable C, host-tested):
+  layers (`MO TG TO DF TT LM OSL`), mod-tap / layer-tap with tapping term, permissive hold, hold on
+  other key, retro tapping, quick tap; one-shot mods and layers; modded keycodes.
+- **Tap dance** (8), **combos** (8), **key overrides** (4) — configured from Vial's tabs.
+- **QMK settings**: tap-hold, combo term, one-shot keys, Grave Escape, Magic (NKRO, Caps/Ctrl,
+  Alt/GUI, Ctrl/GUI swaps…).
+- **Quantum keycodes**: `QK_BOOT`, `EE_CLR`, Caps Word, Repeat / Alt Repeat, Layer Lock, tri-layer,
+  Grave Escape, Space Cadet, combo on/off, the RGB / RM lighting keys.
+- **Lighting from Vial**: every Aula effect (single colour and rainbow), speed, brightness, colour.
+- **Keep your setup across flashes** (`*_flash_keep`), or flash clean (`*_flash`).
+- **Wireless fixes**: 2.4 GHz / Bluetooth reports wait for the radio module's ACK and a lost frame is
+  healed — no dropped taps, no stuck auto-repeating keys.
+- Smaller things: a clearer charging / full / low-battery status LED, `-Drgb_default_off`, a
+  media-first F-row (`-Dfn_row_media`), indicator toggle keys.
+
+Details: [docs/vial.md](docs/vial.md) · what's next: [docs/vial-roadmap.md](docs/vial-roadmap.md) ·
+the keyboard port: [docs/keyboards/aula-f75.md](docs/keyboards/aula-f75.md).
+
+## Quick start (AULA F75)
+
+Keep a full backup of the stock firmware first (see the warning below), then:
+
+```sh
+nix develop
+meson setup build-vial -Dvia=enabled -Dvial=enabled --buildtype=release \
+      -Dautotype=false -Drf_diag=false
+meson compile -C build-vial aula-f75_default_flash        # clean flash
+meson compile -C build-vial aula-f75_default_flash_keep   # or: keep keymap and settings
+```
+
+Then open Vial (or [vial.rocks](https://vial.rocks) in a Chromium browser). Linux needs read/write
+access to the keyboard's hidraw node; [docs/vial.md](docs/vial.md) has the udev rule.
+
+It has been tested on one unit (classic F75). Hardware revisions may differ: proceed at your own risk.
+
+## Credits
+
+- **[SMK](https://github.com/karstx/smk)** by **Karolis Stasaitis ([karstx](https://github.com/karstx))**
+  and contributors — the firmware this is built on: the SinoWealth 8051 platform, USB stack, ISP
+  bootloader, build system and simulator tests, plus the
+  [sinowisp](https://github.com/karstx/sinowisp) and [sinodude](https://github.com/karstx/sinodude)
+  flashing tools. VIA / dynamic keymap support was started by aierm.
+- **[smk_aulaF75](https://github.com/Dozairu/smk_aulaF75)** by **[Dozairu](https://github.com/Dozairu)**
+  (with commits from james and Thaolia L.) — the AULA F75 port, reverse-engineered from a stock
+  firmware dump: wireless (2.4 GHz / Bluetooth), the RGB engine and effects, encoder, battery,
+  indicators, VIA menus.
+- **[Vial](https://get.vial.today/)** and **[QMK](https://qmk.fm/)** — the protocol, GUI and the key
+  behaviours this firmware follows, so layouts stay portable.
+
+---
+
 <div align="center">
   <img src="https://github.com/karstx/smk/assets/498906/30535a69-47a5-4229-8e08-fe2a840d8355" alt="SMK" />
 </div>
 
 # SMK - Small (device) Mechanical Keyboard Firmware
 
+*The rest of this README is SMK's own (as of the AULA F75 port), describing the upstream project.*
+
 [![Build](https://github.com/karstx/smk/actions/workflows/build.yml/badge.svg)](https://github.com/karstx/smk/actions/workflows/build.yml) [![](https://img.shields.io/badge/discord-SMK-blue)](https://discord.gg/SZFBDBuxrK)
-
-## About This Fork
-
-This fork adds a port for the **Epomaker × AULA F75** (classic model), reverse-engineered and built entirely from a stock firmware dump — see [docs/keyboards/aula-f75.md](docs/keyboards/aula-f75.md) for the full write-up (wireless protocol, RGB engine, encoder, macros).
-
-It has only been tested on the maintainer's own unit. Hardware revisions may differ, so proceed at your own risk and keep a full stock firmware backup before flashing (see the warning below).
-
-Everything else in this README describes the upstream SMK project this fork is based on.
 
 This is a keyboard firmware targeting SinoWealth 8051-based devices.
 
@@ -32,7 +95,7 @@ SMK ships [its own ISP bootloader](docs/bootloader.md), which takes that failure
 | E-YOOSO Z11 | SH68F90A / BYK901 | N/A | | [Details](docs/keyboards/eyooso-z11.md) |
 | Genesis Thor 300 | SH68F881 / BYK801 | N/A | | [Details](docs/keyboards/genesis-thor-300.md) |
 | CIY X77 | SH68F89 / BYK816 | N/A | External 24Cxx EEPROM | [Details](docs/keyboards/ciy-x77.md) |
-| Epomaker × AULA F75 | SH68F90A / BYK916 | 2.4G, BT (BDR+BLE) | Rotary encoder | [Details](docs/keyboards/aula-f75.md) |
+| Epomaker × AULA F75 | SH68F90A / BYK916 | 2.4G, BT (BDR+BLE) | Rotary encoder, [Vial](docs/vial.md) | [Details](docs/keyboards/aula-f75.md) |
 
 ## Programming Tools
 
