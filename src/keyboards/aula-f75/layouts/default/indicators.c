@@ -1081,8 +1081,15 @@ static void led_regen_one(void)
     if (flourish_step != 0) {
         const uint8_t head = (uint8_t)((flourish_step - 1u) >> 1);
         if (regen_col == head || (head > 0 && regen_col == (uint8_t)(head - 1u))) {
-            aula_fx_color((uint8_t)(regen_col * 16u + regen_row * 8u), rgb);
-            aula_rgb_set(regen_row, regen_col, rgb[0], rgb[1], rgb[2]);
+            /* The wipe takes the colour of the transport just selected:
+             * wired red, 2.4 GHz green, Bluetooth blue. (`prev_link_fx`
+             * already holds the new link; the old code asked the effect
+             * palette for a "mode" of col*16 + row*8, which is >= 7 for all
+             * but a few cells and so always fell back to red.) */
+            aula_rgb_set(regen_row, regen_col,
+                         (prev_link_fx == RF_LINK_WIRED) ? 255u : 0u,
+                         (prev_link_fx == RF_LINK_24G) ? 255u : 0u,
+                         (prev_link_fx == RF_LINK_BT) ? 255u : 0u);
         } else {
             aula_rgb_set(regen_row, regen_col, 0, 0, 0);
         }
