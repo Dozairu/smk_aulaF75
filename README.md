@@ -81,7 +81,15 @@ You don't need Nix or a compiler: download a ready-made image and flash it.
 
 **The short way.** [`tools/flash.py`](tools/flash.py) (Python 3.9+, nothing to install) downloads the
 latest release and the flasher, checks the image against `SHA256SUMS`, asks before it writes anything,
-and flashes. Download that one file, then, with the cable in and the mode switch on wired:
+and flashes. Download that one file:
+
+```sh
+curl -LO https://raw.githubusercontent.com/mathaimp/aula-f75-vial/main/tools/flash.py
+# or: wget https://raw.githubusercontent.com/mathaimp/aula-f75-vial/main/tools/flash.py
+```
+
+(Windows PowerShell: `curl.exe -LO https://raw.githubusercontent.com/mathaimp/aula-f75-vial/main/tools/flash.py`.)
+Read it if you like, it's one short file, then run it with the cable in and the mode switch on wired:
 
 ```sh
 python3 flash.py --backup-only   # first time only, while the keyboard still has its STOCK firmware
