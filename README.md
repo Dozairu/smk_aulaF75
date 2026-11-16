@@ -9,7 +9,7 @@ definition.
 ![The AULA F75 in Vial (vial.rocks)](docs/images/vial-keymap.png)
 
 This is a downstream of **[SMK](https://github.com/karstx/smk)** (Small Mechanical Keyboard firmware,
-for SinoWealth 8051 keyboards) and its [AULA F75 port](https://github.com/Dozairu/smk_aulaF75): it adds
+for SinoWealth 8051 keyboards) and its AULA F75 port ([Thaolia](https://github.com/Thaolia/smk_aulaF75), continued in [Dozairu's fork](https://github.com/Dozairu/smk_aulaF75)): it adds
 a Vial layer and a QMK-style key engine on top. All the groundwork is theirs — see [Credits](#credits).
 
 ## ⚠️ Read this before flashing
@@ -75,6 +75,46 @@ Everything about the Vial side — what works, settings, lighting names, storage
 
 ## Getting started (AULA F75)
 
+### Flash a release (no building)
+
+You don't need Nix or a compiler: download a ready-made image and flash it.
+
+1. **Back up the stock firmware** — see the warning above. Do this first; it is your way back.
+
+2. **Download the firmware** from the [latest release](https://github.com/mathaimp/aula-f75-vial/releases/latest):
+   `aula-f75-vial-<version>.hex` (recommended) and `SHA256SUMS`. The `-full.hex` image also has the
+   Fn+Space auto-type mode and Fn+R radio diagnostics, with much less code space to spare. Check the
+   download against `SHA256SUMS` (`sha256sum`, `shasum -a 256` or `certutil -hashfile <file> SHA256`).
+
+3. **Get the flasher.** `sinowisp` has downloads for Linux, macOS and Windows on its
+   [releases page](https://github.com/karstx/sinowisp/releases/latest). Unpack it somewhere.
+
+4. **Flash.** Cable in, mode switch on wired, then (use the file name you downloaded; on Linux add
+   `sudo` unless you set up the [udev rule](#linux-permissions)):
+
+   ```sh
+   sinowisp write -d aula-f75 --reboot true --force aula-f75-vial-v0.1.0.hex
+   ```
+
+   `--force` skips `sinowisp`'s firmware size check. This is a **clean flash**: keymap, macros, Vial
+   settings and lighting go back to defaults.
+
+   **Updating and keeping your settings:** [`utils/flash_keep.py`](utils/flash_keep.py) (needs Python 3)
+   reads the current flash first and carries the saved-data sectors into the new image. If the read
+   fails, nothing is written. Download it next to the `.hex` and run:
+
+   ```sh
+   python3 -I flash_keep.py --sinowisp ./sinowisp --device aula-f75 --keep 58368 60928 aula-f75-vial-v0.1.0.hex
+   ```
+
+   A release that changes the storage layout can't keep your settings (the keyboard then starts from
+   defaults, like a clean flash): save your layout in Vial first (File → Save current layout).
+
+5. **Open Vial** ([desktop](https://get.vial.today/) or [vial.rocks](https://vial.rocks) in a
+   Chromium-based browser). The keyboard shows up as "SMK Keyboard".
+
+### Build from source
+
 1. **Get the code and the tools.** The build environment comes from [Nix](https://nixos.org/) (with
    flakes enabled): `nix develop` gives SDCC, meson, `sinowisp` and the rest.
 
@@ -108,8 +148,18 @@ Everything about the Vial side — what works, settings, lighting names, storage
 5. **Open Vial** ([desktop](https://get.vial.today/) or [vial.rocks](https://vial.rocks) in a
    Chromium-based browser). The keyboard shows up as "SMK Keyboard".
 
-**Linux permissions.** Vial and `sinowisp` need read/write access to the keyboard's `hidraw` nodes, in
-normal mode (`258a:010c`) and in bootloader mode (`0603:1020`). On NixOS:
+### Linux permissions
+
+Vial and `sinowisp` need read/write access to the keyboard's `hidraw` nodes, in normal mode
+(`258a:010c`) and in bootloader mode (`0603:1020`). On most distributions, install the rule from
+[`utils/70-aula-f75-vial.rules`](utils/70-aula-f75-vial.rules), then unplug and replug the keyboard:
+
+```sh
+sudo cp utils/70-aula-f75-vial.rules /etc/udev/rules.d/
+sudo udevadm control --reload && sudo udevadm trigger
+```
+
+On NixOS:
 
 ```nix
 services.udev.extraRules = ''
@@ -178,9 +228,10 @@ for the [SH68F90 / SH68F90A](docs/platforms/sh68f90.md), [SH68F881](docs/platfor
   [sinowisp](https://github.com/karstx/sinowisp) and [sinodude](https://github.com/karstx/sinodude)
   flashing tools. VIA / dynamic keymap support was started by aierm.
   [SMK on Discord](https://discord.gg/SZFBDBuxrK).
-- **[smk_aulaF75](https://github.com/Dozairu/smk_aulaF75)** by **[Dozairu](https://github.com/Dozairu)**
-  (with commits from james and Thaolia L.) — the AULA F75 port, reverse-engineered from a stock
-  firmware dump: wireless (2.4 GHz / Bluetooth), the RGB engine and effects, encoder, battery,
-  indicators, VIA menus.
+- **[smk_aulaF75](https://github.com/Thaolia/smk_aulaF75)** by **[Thaolia](https://github.com/Thaolia)**,
+  continued in **[Dozairu](https://github.com/Dozairu)**'s
+  [fork](https://github.com/Dozairu/smk_aulaF75) (with commits from james and others) — the AULA F75
+  port, reverse-engineered from a stock firmware dump: wireless (2.4 GHz / Bluetooth), the RGB engine
+  and effects, encoder, battery, indicators, VIA menus. This repository is forked from Dozairu's.
 - **[Vial](https://get.vial.today/)** and **[QMK](https://qmk.fm/)** — the protocol, GUI and the key
   behaviours this firmware follows, so layouts stay portable.
