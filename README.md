@@ -79,8 +79,8 @@ Everything about the Vial side — what works, settings, lighting names, storage
    flakes enabled): `nix develop` gives SDCC, meson, `sinowisp` and the rest.
 
    ```sh
-   git clone -b vial https://github.com/mathaimp/smk_aulaF75.git
-   cd smk_aulaF75
+   git clone -b main https://github.com/mathaimp/aula-f75-vial.git
+   cd aula-f75-vial
    nix develop
    ```
 
