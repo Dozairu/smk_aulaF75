@@ -79,6 +79,23 @@ Everything about the Vial side — what works, settings, lighting names, storage
 
 You don't need Nix or a compiler: download a ready-made image and flash it.
 
+**The short way.** [`tools/flash.py`](tools/flash.py) (Python 3.9+, nothing to install) downloads the
+latest release and the flasher, checks the image against `SHA256SUMS`, asks before it writes anything,
+and flashes. Download that one file, then, with the cable in and the mode switch on wired:
+
+```sh
+python3 flash.py --backup-only   # first time only, while the keyboard still has its STOCK firmware
+python3 flash.py                 # flash the latest release (settings reset to defaults)
+python3 flash.py --keep          # ...or flash it and keep your keymap and settings
+python3 flash.py --dry-run       # download and check everything, touch no keyboard
+```
+
+On Linux add `sudo` unless you installed the [udev rule](#linux-permissions). Use `--full` for the image
+with auto-type and radio diagnostics. Windows: `py flash.py ...`. It has been tested on Linux only (up to
+the flashing step; run it with `--dry-run` first).
+
+**Or by hand:**
+
 1. **Back up the stock firmware** — see the warning above. Do this first; it is your way back.
 
 2. **Download the firmware** from the [latest release](https://github.com/mathaimp/aula-f75-vial/releases/latest):
