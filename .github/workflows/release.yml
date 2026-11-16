@@ -1,0 +1,93 @@
+name: Release
+
+# Push a tag like v0.1.0 to build the AULA F75 Vial firmware and publish it as a
+# GitHub Release. "Run workflow" (workflow_dispatch) builds the same files and
+# attaches them to the run as an artifact, without publishing anything.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  firmware:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v6
+      with:
+        fetch-depth: 0
+    - uses: cachix/install-nix-action@v31
+      with:
+        github_access_token: ${{ secrets.GITHUB_TOKEN }}
+    - uses: cachix/cachix-action@v17
+      with:
+        name: smk   # pull-only: no auth token, so nothing is pushed to the cache
+
+    - name: Configure lean build (auto-type and radio diagnostics off)
+      run: >
+        nix develop --command meson setup build-vial
+        -Dvia=enabled -Dvial=enabled --buildtype=release
+        -Dautotype=false -Drf_diag=false
+
+    - name: Configure full build (auto-type and radio diagnostics on)
+      run: >
+        nix develop --command meson setup build-vial-full
+        -Dvia=enabled -Dvial=enabled --buildtype=release
+
+    - name: Key engine unit tests
+      run: nix develop --command meson test -C build-vial action --print-errorlogs
+
+    - name: Build firmware (both variants)
+      run: |
+        nix develop --command meson compile -C build-vial aula-f75_default_smk.hex
+        nix develop --command meson compile -C build-vial-full aula-f75_default_smk.hex
+
+    - name: Package
+      id: pkg
+      run: |
+        if [ "${GITHUB_REF_TYPE}" = tag ]; then
+          version="${GITHUB_REF_NAME}"
+        else
+          version="dev-${GITHUB_SHA::7}"
+        fi
+        mkdir dist
+        cp build-vial/aula-f75_default_smk.hex "dist/aula-f75-vial-${version}.hex"
+        cp build-vial-full/aula-f75_default_smk.hex "dist/aula-f75-vial-${version}-full.hex"
+        (cd dist && sha256sum ./*.hex > SHA256SUMS)
+        cat dist/SHA256SUMS
+        echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+    - uses: actions/upload-artifact@v7
+      with:
+        name: aula-f75-vial-${{ steps.pkg.outputs.version }}
+        path: dist/*
+
+    - name: Publish release
+      if: github.ref_type == 'tag'
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        cat > notes.md <<'EOF'
+        Firmware for the **Epomaker x AULA F75** (SH68F90A) with Vial support.
+
+        **Read the [README](https://github.com/mathaimp/aula-f75-vial#readme) before flashing.**
+        Flashing replaces the keyboard's firmware: back up the stock firmware first, and keep
+        the backup. Tested only on the author's own board.
+
+        Two images, pick one:
+
+        - `aula-f75-vial-<version>.hex` is the **recommended** build. It leaves out the Fn+Space
+          auto-type (anti-idle) mode and the Fn+R radio diagnostics, which keeps about 1.3 KB of
+          code space free.
+        - `aula-f75-vial-<version>-full.hex` has both of those extras on. It fits, with very
+          little headroom.
+        - `SHA256SUMS` lets you check the downloads.
+        EOF
+        gh release create "${GITHUB_REF_NAME}" dist/* \
+          --title "${GITHUB_REF_NAME}" \
+          --notes-file notes.md \
+          --generate-notes \
+          --verify-tag
