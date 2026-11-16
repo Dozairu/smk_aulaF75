@@ -46,6 +46,9 @@ keyboards += {
         'options' : {
             'vendor_id' : '0x258a',
             'product_id' : '0x010c',
+            # USB strings (SMK's defaults are another person's contact e-mail and "SMK Keyboard").
+            'manufacturer' : 'SMK',
+            'product' : 'AULA F75',
             'wireless' : 'euart0',
             'led_rows' : '6',
             'led_cols' : '15',

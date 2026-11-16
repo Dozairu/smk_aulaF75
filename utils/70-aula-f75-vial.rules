@@ -1,12 +1,17 @@
-# AULA F75 running this firmware: let the logged-in user talk to the keyboard
-# over hidraw (Vial in the browser or desktop app, and sinowisp).
+# AULA F75 running this firmware: let the logged-in user talk to the keyboard.
+#
+#   - hidraw: Vial (desktop app and the browser's WebHID) and the host tools
+#   - usb:    sinowisp, the flasher, opens the raw USB device (libusb), not hidraw
 #
 # Install:
 #   sudo cp 70-aula-f75-vial.rules /etc/udev/rules.d/
 #   sudo udevadm control --reload && sudo udevadm trigger
 # then unplug and replug the keyboard.
 
-# Normal mode ("SMK Keyboard")
+# Normal mode ("AULA F75")
 KERNEL=="hidraw*", ATTRS{idVendor}=="258a", ATTRS{idProduct}=="010c", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTR{idVendor}=="258a", ATTR{idProduct}=="010c", TAG+="uaccess"
+
 # ISP bootloader mode (used while flashing)
 KERNEL=="hidraw*", ATTRS{idVendor}=="0603", ATTRS{idProduct}=="1020", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTR{idVendor}=="0603", ATTR{idProduct}=="1020", TAG+="uaccess"

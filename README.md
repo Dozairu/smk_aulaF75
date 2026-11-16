@@ -136,7 +136,7 @@ the flashing step; run it with `--dry-run` first).
    defaults, like a clean flash): save your layout in Vial first (File → Save current layout).
 
 5. **Open Vial** ([desktop](https://get.vial.today/) or [vial.rocks](https://vial.rocks) in a
-   Chromium-based browser). The keyboard shows up as "SMK Keyboard".
+   Chromium-based browser). The keyboard shows up as "AULA F75".
 
 ### Build from source
 
@@ -171,12 +171,13 @@ the flashing step; run it with `--dry-run` first).
    are in [docs/vial.md](docs/vial.md).
 
 5. **Open Vial** ([desktop](https://get.vial.today/) or [vial.rocks](https://vial.rocks) in a
-   Chromium-based browser). The keyboard shows up as "SMK Keyboard".
+   Chromium-based browser). The keyboard shows up as "AULA F75".
 
 ### Linux permissions
 
-Vial and `sinowisp` need read/write access to the keyboard's `hidraw` nodes, in normal mode
-(`258a:010c`) and in bootloader mode (`0603:1020`). On most distributions, install the rule from
+Vial needs read/write access to the keyboard's `hidraw` nodes, and `sinowisp` (the flasher) to its raw
+USB device, in normal mode (`258a:010c`) and in bootloader mode (`0603:1020`). Without that you get
+"permission denied". On most distributions, install the rules from
 [`utils/70-aula-f75-vial.rules`](utils/70-aula-f75-vial.rules), then unplug and replug the keyboard:
 
 ```sh
@@ -190,6 +191,8 @@ On NixOS:
 services.udev.extraRules = ''
   KERNEL=="hidraw*", ATTRS{idVendor}=="258a", ATTRS{idProduct}=="010c", MODE="0660", GROUP="users"
   KERNEL=="hidraw*", ATTRS{idVendor}=="0603", ATTRS{idProduct}=="1020", MODE="0660", GROUP="users"
+  SUBSYSTEM=="usb", ATTR{idVendor}=="258a", ATTR{idProduct}=="010c", MODE="0660", GROUP="users"
+  SUBSYSTEM=="usb", ATTR{idVendor}=="0603", ATTR{idProduct}=="1020", MODE="0660", GROUP="users"
 '';
 ```
 

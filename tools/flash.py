@@ -266,7 +266,7 @@ def main():
     if not args.dry_run:
         say()
         say('Done. Open https://vial.rocks (Chromium-based browser) or the Vial app; '
-            'the keyboard shows up as "SMK Keyboard".')
+            'the keyboard shows up as "AULA F75".')
     return 0
 
 

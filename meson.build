@@ -384,6 +384,11 @@ foreach keyboard, board : keyboards
             if value == ''
                 value = options.get(key, '')
             endif
+            # Vial GUI (the desktop app) lists only keyboards whose USB serial number
+            # contains "vial:f64c2b3c"; the browser version (WebHID) does not check.
+            if key == 'serial' and value == '' and get_option('vial').enabled() and options.has_key('vial_uid')
+                value = 'vial:f64c2b3c'
+            endif
             if value != ''
                 cc_args += '-D@0@="@1@"'.format(define, value)
             endif

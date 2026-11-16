@@ -7,6 +7,11 @@ Windows, and portable to and from any other Vial keyboard (File → Save / Load 
 
 Currently ported board: **AULA F75** (`src/keyboards/aula-f75`).
 
+The Vial build reports the USB serial number `vial:f64c2b3c`. The Vial desktop app only lists keyboards
+whose serial contains that string (the browser version, [vial.rocks](https://vial.rocks), finds the
+keyboard by its raw HID interface instead). An earlier build reported `0001` and so showed up in the
+browser only; override it with `-Dusb_serial=...` if you must, but then the desktop app won't see it.
+
 ## Building and flashing
 
 ```sh
@@ -35,6 +40,8 @@ Without root, `sinowisp` needs access to the keyboard in both modes; on NixOS (w
 services.udev.extraRules = ''
   KERNEL=="hidraw*", ATTRS{idVendor}=="258a", ATTRS{idProduct}=="010c", MODE="0660", GROUP="users"
   KERNEL=="hidraw*", ATTRS{idVendor}=="0603", ATTRS{idProduct}=="1020", MODE="0660", GROUP="users"
+  SUBSYSTEM=="usb", ATTR{idVendor}=="258a", ATTR{idProduct}=="010c", MODE="0660", GROUP="users"
+  SUBSYSTEM=="usb", ATTR{idVendor}=="0603", ATTR{idProduct}=="1020", MODE="0660", GROUP="users"
 '';
 ```
 
