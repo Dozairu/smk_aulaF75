@@ -12,44 +12,6 @@ This is a downstream of **[SMK](https://github.com/karstx/smk)** (Small Mechanic
 for SinoWealth 8051 keyboards) and its AULA F75 port ([Thaolia](https://github.com/Thaolia/smk_aulaF75), continued in [Dozairu's fork](https://github.com/Dozairu/smk_aulaF75)): it adds
 a Vial layer and a QMK-style key engine on top. All the groundwork is theirs — see [Credits](#credits).
 
-## ⚠️ Read this before flashing
-
-***The code here is tested only on my own aula-f75, I am not liable for any damage done to your keyboard.***
-
-Flashing replaces the keyboard's firmware. Done as below it is reversible, but only if you keep a
-backup and know the way back.
-
-**What you are risking.** `sinowisp` writes the new firmware *through the keyboard's own factory
-bootloader* (the last 4 KB of flash, `0xF000–0xFFFF`), which it ***should*** never touch. As long as that
-bootloader can be reached, the keyboard can always be flashed again — including back to stock.
-
-**Before the first flash, back up the stock firmware** and keep the files somewhere safe, outside
-this repository (they are AULA's, and they are your only copy):
-
-```sh
-sudo sinowisp read -d aula-f75 -s full     --format bin f75_stock_full.bin
-sudo sinowisp read -d aula-f75 -s firmware --format bin f75_stock_firmware.bin
-sha256sum f75_stock_*.bin > SHA256SUMS
-```
-
-**Going back to stock** at any time:
-
-```sh
-sudo sinowisp write -d aula-f75 --format bin --reboot true --force f75_stock_firmware.bin
-```
-
-**If a flash goes wrong:**
-
-| What you see | What to do |
-|---|---|
-| The keyboard works (types, shows up over USB) | Nothing special: flash again. `sinowisp` asks the running firmware to jump into the bootloader. |
-| Flash interrupted / keyboard dead, but it shows up as `0603:1020` when plugged in | The bootloader is waiting (it stays there when the firmware is incomplete). Flash again. |
-| Nothing at all over USB, ever (firmware hangs before USB starts) | Only hardware recovery: open the case and use the JTAG pads with [sinodude](https://github.com/karstx/sinodude) — verified on this board with an ESP32-S3; see [docs/keyboards/aula-f75.md](docs/keyboards/aula-f75.md) ("JTAG hardware recovery"). |
-
-**Don't:** unplug during a flash; flash a build made for another keyboard; flash on battery
-(use the cable, switch on wired). This has been tested on one unit (classic F75); other hardware
-revisions may differ. You do this at your own risk.
-
 ## What it adds
 
 - **Vial protocol 6** with VialRGB: the keyboard serves its compressed
@@ -66,6 +28,10 @@ revisions may differ. You do this at your own risk.
 - **Keep your setup across flashes** (`*_flash_keep`), or flash clean (`*_flash`).
 - **Wireless fixes**: 2.4 GHz / Bluetooth reports wait for the radio module's ACK and a lost frame is
   healed — no dropped taps, no stuck auto-repeating keys.
+- **Battery at a glance**: hold **Fn+B** and the number row (1–0) shows the charge as a bar (green
+  above 50 %, orange to 50 %, red to 20 %); let go and it disappears.
+- **Mode-switch feedback**: flipping the switch sweeps a colour across the board: red for wired,
+  green for 2.4 GHz, blue for Bluetooth.
 - Smaller things: a clearer charging / full / low-battery status LED, `-Drgb_default_off`, a
   media-first F-row (`-Dfn_row_media`), indicator toggle keys.
 
@@ -75,13 +41,24 @@ Everything about the Vial side — what works, settings, lighting names, storage
 
 ## Getting started (AULA F75)
 
+### ⚠️ Before you flash
+
+***The code here is tested only on my own AULA F75; I am not liable for any damage done to your keyboard.***
+
+Flashing replaces the keyboard's firmware. It is reversible, but only if you **back up the stock
+firmware first** and keep the copy somewhere safe, outside this repository (it is close-sourced, and it is
+your only copy). The script below does that in one command. The way back, and what to do if a flash
+goes wrong, are in [Backup, going back to stock, recovery](#backup-going-back-to-stock-recovery).
+
+**Don't:** unplug during a flash; flash a build made for another keyboard; flash on battery (use the
+cable, switch on wired). This has been tested on one unit (classic F75); other hardware revisions may
+differ. You do this at your own risk.
+
 ### Flash a release (no building)
 
-You don't need Nix or a compiler: download a ready-made image and flash it.
-
-**The short way.** [`tools/flash.py`](tools/flash.py) (Python 3.9+, nothing to install) downloads the
-latest release and the flasher, checks the image against `SHA256SUMS`, asks before it writes anything,
-and flashes. Download that one file:
+You don't need Nix or a compiler. [`tools/flash.py`](tools/flash.py) (Python 3.9+, nothing to
+install) downloads the latest release and the flasher, checks the image against `SHA256SUMS`, asks
+before it writes anything, and flashes. Download that one file:
 
 ```sh
 curl -LO https://raw.githubusercontent.com/mathaimp/aula-f75-vial/main/tools/flash.py
@@ -89,32 +66,71 @@ curl -LO https://raw.githubusercontent.com/mathaimp/aula-f75-vial/main/tools/fla
 ```
 
 (Windows PowerShell: `curl.exe -LO https://raw.githubusercontent.com/mathaimp/aula-f75-vial/main/tools/flash.py`.)
-Read it if you like, it's one short file, then run it with the cable in and the mode switch on wired:
+Read it, then run it with the cable in and the mode switch on wired:
 
 ```sh
-python3 flash.py --backup-only   # first time only, while the keyboard still has its STOCK firmware
+python3 flash.py --backup-only   # first time only, while the keyboard still has its STOCK firmware. DO NOT SKIP!
 python3 flash.py                 # flash the latest release (settings reset to defaults)
-python3 flash.py --keep          # ...or flash it and keep your keymap and settings
+python3 flash.py --keep          # ...or flash it and keep your keymap and settings, useful for reflashing.
 python3 flash.py --dry-run       # download and check everything, touch no keyboard
 ```
 
-On Linux add `sudo` unless you installed the [udev rule](#linux-permissions). Use `--full` for the image
-with auto-type and radio diagnostics. Windows: `py flash.py ...`. It has been tested on Linux only (up to
-the flashing step; run it with `--dry-run` first).
+`--backup-only` saves the stock firmware to `./f75_backup/` (with checksums). Copy that folder
+somewhere safe before you flash anything.
 
-**Or by hand:**
+On Linux add `sudo` unless you installed the [udev rule](#linux-permissions). Use `--full` for the
+image with auto-type and radio diagnostics. Windows: `py flash.py ...`. It has been tested on Linux
+only (up to the flashing step; run it with `--dry-run` first).
 
-1. **Back up the stock firmware** — see the warning above. Do this first; it is your way back.
+Then open Vial ([desktop](https://get.vial.today/) or [vial.rocks](https://vial.rocks) in a
+Chromium-based browser). The keyboard shows up as "AULA F75".
+
+A release that changes the storage layout can't keep your settings (the keyboard then starts from
+defaults, like a clean flash): save your layout in Vial first (File → Save current layout).
+
+### Backup, going back to stock, recovery
+
+These use `sinowisp`, the flasher `flash.py` downloads for you (it keeps a copy in
+`~/.aula-f75-vial/sinowisp-*/`; other builds on the
+[sinowisp releases page](https://github.com/karstx/sinowisp/releases/latest)).
+
+**Back up by hand** (what `flash.py --backup-only` does):
+
+```sh
+sudo sinowisp read -d aula-f75 -s full     --format bin f75_stock_full.bin
+sudo sinowisp read -d aula-f75 -s firmware --format bin f75_stock_firmware.bin
+sha256sum f75_stock_*.bin > SHA256SUMS
+```
+
+**Going back to stock** at any time. Write the **`firmware`** file (61,440 bytes), never the `full`
+one: that includes the bootloader, which `sinowisp` can't write and refuses ("Length Mismatch"):
+
+```sh
+sudo sinowisp write -d aula-f75 --format bin --reboot true --force f75_stock_firmware.bin
+```
+
+**What `sinowisp` touches.** It writes the new firmware *through the keyboard's own factory
+bootloader* (the last 4 KB of flash, `0xF000–0xFFFF`), which it ***should*** never touch. As long as
+that bootloader can be reached, the keyboard can always be flashed again, including back to stock.
+
+**If a flash goes wrong:**
+
+| What you see | What to do |
+|---|---|
+| The keyboard works (types, shows up over USB) | Nothing special: flash again. `sinowisp` asks the running firmware to jump into the bootloader. |
+| Flash interrupted / keyboard dead, but it shows up as `0603:1020` when plugged in | The bootloader is waiting (it stays there when the firmware is incomplete). Flash again. |
+| Nothing at all over USB, ever (firmware hangs before USB starts) | Only hardware recovery: open the case and use the JTAG pads with [sinodude](https://github.com/karstx/sinodude) — verified on this board with an ESP32-S3; see [docs/keyboards/aula-f75.md](docs/keyboards/aula-f75.md) ("JTAG hardware recovery"). |
+
+### Flash by hand (without the script)
+
+1. **Back up the stock firmware** (above). Do this first; it is your way back.
 
 2. **Download the firmware** from the [latest release](https://github.com/mathaimp/aula-f75-vial/releases/latest):
    `aula-f75-vial-<version>.hex` (recommended) and `SHA256SUMS`. The `-full.hex` image also has the
    Fn+Space auto-type mode and Fn+R radio diagnostics, with much less code space to spare. Check the
    download against `SHA256SUMS` (`sha256sum`, `shasum -a 256` or `certutil -hashfile <file> SHA256`).
 
-3. **Get the flasher.** `sinowisp` has downloads for Linux, macOS and Windows on its
-   [releases page](https://github.com/karstx/sinowisp/releases/latest). Unpack it somewhere.
-
-4. **Flash.** Cable in, mode switch on wired, then (use the file name you downloaded; on Linux add
+3. **Flash.** Cable in, mode switch on wired, then (use the file name you downloaded; on Linux add
    `sudo` unless you set up the [udev rule](#linux-permissions)):
 
    ```sh
@@ -132,11 +148,7 @@ the flashing step; run it with `--dry-run` first).
    python3 -I flash_keep.py --sinowisp ./sinowisp --device aula-f75 --keep 58368 60928 aula-f75-vial-v0.1.0.hex
    ```
 
-   A release that changes the storage layout can't keep your settings (the keyboard then starts from
-   defaults, like a clean flash): save your layout in Vial first (File → Save current layout).
-
-5. **Open Vial** ([desktop](https://get.vial.today/) or [vial.rocks](https://vial.rocks) in a
-   Chromium-based browser). The keyboard shows up as "AULA F75".
+4. **Open Vial** as above.
 
 ### Build from source
 
@@ -149,7 +161,7 @@ the flashing step; run it with `--dry-run` first).
    nix develop
    ```
 
-2. **Back up the stock firmware** — see the warning above.
+2. **Back up the stock firmware** — see [Backup](#backup-going-back-to-stock-recovery).
 
 3. **Build.** `autotype` (Fn+Space anti-idle mode) and `rf_diag` (Fn+R radio diagnostics) are
    optional extras; leaving them out frees code space.
@@ -198,19 +210,6 @@ services.udev.extraRules = ''
 
 **Wireless.** The mode switch selects wired / 2.4 GHz / Bluetooth. Bluetooth: Fn+1/2/3 picks a slot,
 the same key again (or Fn+`) starts pairing; the PC sees "AULA-F75 5.0 KB".
-
-## Supported keyboards
-
-Vial is enabled on the AULA F75 only. The other SMK boards still build here, with VIA where they
-support it:
-
-| Keyboard | MCU | Wireless | Extra | Details |
-| -------- | --- | -------- | ----- | ------- |
-| Epomaker × AULA F75 | SH68F90A / BYK916 | 2.4G, BT (BDR+BLE) | Rotary encoder, [Vial](docs/vial.md) | [Details](docs/keyboards/aula-f75.md) |
-| NuPhy Air60 v1 | SH68F90A / BYK916 | 2.4G, BT (BDR+BLE) | | [Details](docs/keyboards/nuphy-air60.md) |
-| E-YOOSO Z11 | SH68F90A / BYK901 | N/A | | [Details](docs/keyboards/eyooso-z11.md) |
-| Genesis Thor 300 | SH68F881 / BYK801 | N/A | | [Details](docs/keyboards/genesis-thor-300.md) |
-| CIY X77 | SH68F89 / BYK816 | N/A | External 24Cxx EEPROM | [Details](docs/keyboards/ciy-x77.md) |
 
 ## Programming tools
 

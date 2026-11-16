@@ -826,18 +826,19 @@ static __bit rf_diag_on;
 /* --------------------------------------------------- battery level overlay
  *
  * `Fn + B` (`BAT_SHOW`) paints the damped battery percentage (`rf_batt_pct`)
- * across keys `1` to `0` (row 1, columns 1 to 10) for ~3 seconds (80 sweeps
- * of ~37.9 ms), bypassing user brightness so it remains readable when RGB is
- * off or dimmed.
+ * across keys `1` to `0` (row 1, columns 1 to 10) for as long as the key is
+ * held, bypassing user brightness so it remains readable when RGB is off or
+ * dimmed. The sweep counter is only a safety net (~9.7 s at ~37.9 ms per
+ * sweep) in case the release event is lost, e.g. Fn let go first.
  */
-#define BAT_SHOW_SWEEPS 80u
+#define BAT_SHOW_SWEEPS 255u
 
 static volatile __xdata uint8_t bat_show_sweeps;
 
-void indicators_show_battery(void)
+void indicators_show_battery(bool held)
 {
     ET2             = 0;
-    bat_show_sweeps = (bat_show_sweeps != 0) ? 0 : (uint8_t)BAT_SHOW_SWEEPS;
+    bat_show_sweeps = held ? (uint8_t)BAT_SHOW_SWEEPS : 0u;
     ET2             = 1;
 }
 

@@ -100,7 +100,7 @@ static void rgb_power(uint8_t how)
 }
 #ifdef RF_EUART0
 extern void indicators_toggle_rf_diag(void);
-extern void indicators_show_battery(void);
+extern void indicators_show_battery(bool held);
 #endif
 
 static __bit           win_lock;
@@ -247,7 +247,7 @@ bool kb_process_record(uint16_t keycode, bool key_pressed)
             if (key_pressed) rf_request_pairing();
             return false;
         case BAT_SHOW:
-            if (key_pressed) indicators_show_battery();
+            indicators_show_battery(key_pressed); /* shown while held */
             return false;
 #else
         case BAT_SHOW:
