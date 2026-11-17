@@ -75,8 +75,12 @@ python3 flash.py --keep          # ...or flash it and keep your keymap and setti
 python3 flash.py --dry-run       # download and check everything, touch no keyboard
 ```
 
-`--backup-only` saves the stock firmware to `./f75_backup/` (with checksums). Copy that folder
-somewhere safe before you flash anything.
+> ### ⚠️ First, back up your stock firmware
+>
+> Flashing replaces your keyboard's firmware, and a bad flash can leave it unusable. **Run
+> `python3 flash.py --backup-only` before anything else**, with the keyboard still on its stock
+> firmware and the cable in. It saves the stock firmware to `./f75_backup/` (with checksums): copy
+> that folder somewhere safe, because it is your only way back to stock.
 
 On Linux add `sudo` unless you installed the [udev rule](#linux-permissions). Use `--full` for the
 image with auto-type and radio diagnostics. Windows: `py flash.py ...`. It has been tested on Linux
