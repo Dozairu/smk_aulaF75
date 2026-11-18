@@ -11,13 +11,27 @@ static __xdata uint8_t request[RAW_HID_REPORT_SIZE];
 /* Shared between the main loop and USB completion/RX interrupts. */
 static volatile bool   request_pending;
 static volatile bool   response_pending;
+#    ifdef ISP_ENABLE
+/* Set when VIA_ID_BOOTLOADER_JUMP is accepted; main loop waits for EP2 IN ACK. */
+static volatile bool   isp_after_response;
+#    endif
 
 void raw_hid_init(void)
 {
     request_pending  = false;
     response_pending = false;
+#    ifdef ISP_ENABLE
+    isp_after_response = false;
+#    endif
     SET_EP2_OUT_RDY;
 }
+
+#    ifdef ISP_ENABLE
+void raw_hid_request_isp(void)
+{
+    isp_after_response = true;
+}
+#    endif
 
 void raw_hid_receive_irq(void)
 {
@@ -36,6 +50,14 @@ void raw_hid_receive_irq(void)
 
 void raw_hid_task(void)
 {
+#    ifdef ISP_ENABLE
+    /* Wait until the host ACKs our 0x0B reply on EP2 IN before detaching. */
+    if (isp_after_response && !response_pending) {
+        isp_after_response = false;
+        usb_request_isp();
+        return;
+    }
+#    endif
     if (!request_pending || !usb_is_configured() || !usb_hw_ep2_in_free()) {
         return;
     }

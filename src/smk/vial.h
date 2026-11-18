@@ -35,7 +35,7 @@ void vial_store_apply(void);
  * firewall): it is stored as KC_NO instead. _be: a buffer of big-endian
  * keycodes (the VIA keymap buffer). */
 uint16_t vial_firewall(uint16_t keycode);
-void     vial_firewall_be(__xdata uint8_t *p, uint8_t size);
+void     vial_firewall_be(__xdata uint8_t *p, uint16_t size);
 
 #else
 #    define vial_firewall(kc)         (kc)

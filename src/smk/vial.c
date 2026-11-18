@@ -99,19 +99,19 @@ uint16_t vial_firewall(uint16_t keycode)
     return (keycode == QK_BOOT && !unlocked) ? KC_NO : keycode;
 }
 
-static void firewall_buf(__xdata uint8_t *p, uint8_t size, uint8_t hi)
+static void firewall_buf(__xdata uint8_t *p, uint16_t size, uint8_t hi)
 {
     if (unlocked) {
         return;
     }
-    for (uint8_t i = 0; i + 1u < size; i += 2u) {
+    for (uint16_t i = 0; i + 1u < size; i += 2u) {
         if (p[i + hi] == (uint8_t)(QK_BOOT >> 8) && p[i + 1u - hi] == (uint8_t)QK_BOOT) {
             p[i] = p[i + 1u] = 0;
         }
     }
 }
 
-void vial_firewall_be(__xdata uint8_t *p, uint8_t size)
+void vial_firewall_be(__xdata uint8_t *p, uint16_t size)
 {
     firewall_buf(p, size, 0);
 }
@@ -538,7 +538,7 @@ void vial_process(__xdata uint8_t *data)
 
         case VIAL_SET_ENCODER:
             dynamic_encoder_set_keycode(data[2], data[3], data[4] != 0,
-                                        (uint16_t)((uint16_t)data[5] << 8) | data[6]);
+                                        vial_firewall((uint16_t)((uint16_t)data[5] << 8) | data[6]));
             break;
 
         case VIAL_GET_UNLOCK_STATUS:

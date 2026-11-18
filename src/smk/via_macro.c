@@ -274,6 +274,9 @@ void via_macro_task(void)
                 }
             }
 #    endif
+            if (ms > 27306ul) {
+                ms = 27306ul; /* keep (ms * 12) / 5 within uint16_t */
+            }
             macro_arm(MACRO_MS(ms));
             break;
         }

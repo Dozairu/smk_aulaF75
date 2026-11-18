@@ -175,7 +175,6 @@ bool via_process_packet(__xdata uint8_t *data)
             if (size > RAW_HID_REPORT_SIZE - 4u) {
                 size = RAW_HID_REPORT_SIZE - 4u;
             }
-            vial_firewall_be(&data[4], size); /* keymap: big-endian keycodes */
             dynamic_keymap_set_buffer(offset, size, &data[4]);
             data[3] = requested;
             break;
@@ -340,8 +339,18 @@ bool via_process_packet(__xdata uint8_t *data)
             return false;
 #    endif
 
-        case VIA_ID_EEPROM_RESET:
         case VIA_ID_BOOTLOADER_JUMP:
+#    if defined(ISP_ENABLE) && defined(VIAL_ENABLE)
+            if (vial_unlocked()) {
+                raw_hid_request_isp();
+            }
+            break;
+#    else
+            data[0] = VIA_ID_UNHANDLED;
+            break;
+#    endif
+
+        case VIA_ID_EEPROM_RESET:
         default:
             data[0] = VIA_ID_UNHANDLED;
             break;

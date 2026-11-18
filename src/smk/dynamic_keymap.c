@@ -305,6 +305,13 @@ uint8_t dynamic_keymap_set_buffer(uint16_t offset, uint8_t size, const __xdata u
         size = (uint8_t)(DYNAMIC_KEYMAP_BYTES - offset);
     }
     memcpy(&dynamic_keymap[offset], data, size);
+#    ifdef VIAL_ENABLE
+    if (size != 0) {
+        const uint16_t aligned = offset & ~1u;
+        const uint16_t end     = (uint16_t)(offset + size + 1u) & ~1u;
+        vial_firewall_be(&dynamic_keymap[aligned], (uint16_t)(end - aligned));
+    }
+#    endif
     __critical
     {
         dirty      = true;

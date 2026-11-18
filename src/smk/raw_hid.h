@@ -11,5 +11,8 @@ void raw_hid_init(void);
 void raw_hid_task(void);
 void raw_hid_receive_irq(void);
 void raw_hid_in_complete(void);
+#    ifdef ISP_ENABLE
+void raw_hid_request_isp(void);
+#    endif
 
 #endif
