@@ -200,6 +200,9 @@ void vialrgb_set_value(__xdata uint8_t *data)
     if (data[1] != VIALRGB_SET_MODE) {
         return; /* direct fastset: not supported */
     }
+#    ifdef SIGNALRGB_ENABLE
+    indicators_direct_clear();
+#    endif
 
     const uint16_t id = (uint16_t)args[0] | (uint16_t)((uint16_t)args[1] << 8);
     const uint8_t  h  = args[3];

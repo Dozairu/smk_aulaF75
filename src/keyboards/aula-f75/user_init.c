@@ -23,6 +23,11 @@
 
 void user_gpio_init(void)
 {
+    /* Preload row LED sinks (active-high -> low) and columns (active-low -> high)
+     * before switching pins to outputs so nothing lights up during boot / USB wait. */
+    user_matrix_sinks_off();
+    user_matrix_cols_deselect_all();
+
     GPIO_DIR_WRITE(0, 0x9c);
     GPIO_DIR_WRITE(1, 0x3f);
     GPIO_DIR_WRITE(2, 0x3f);
@@ -42,9 +47,6 @@ void user_gpio_init(void)
     GPIO_PULLUP_WRITE(7, 0xdf);
 
     GPIO_WRITE(0, 0x1c);
-
-    /* Columns deselected (active-low) before the first scan */
-    user_matrix_cols_deselect_all();
 }
 
 #ifndef BOOT_CHORD_HEADER

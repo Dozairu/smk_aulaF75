@@ -12,6 +12,7 @@
 #include "aula_encoder.h"
 #include "aula_macro.h"
 #include "aula_status.h"
+#include "indicators.h"
 #include "vial.h"
 #include "dynamic_keymap.h"
 #include "vialrgb.h"
@@ -81,6 +82,9 @@ static __xdata uint8_t rgb_saved = FX_LAKE_ID;
 
 static void rgb_power(uint8_t how)
 {
+#ifdef SIGNALRGB_ENABLE
+    indicators_direct_clear();
+#endif
     const uint8_t on = user_settings.led_effect != FX_OFF_ID;
     if (how == 2u) {
         how = on ? 0u : 1u;
@@ -103,11 +107,11 @@ extern void indicators_toggle_rf_diag(void);
 extern void indicators_show_battery(bool held);
 #endif
 
-static __bit           win_lock;
-static __bit           wasd_swap;
-static __xdata uint8_t os_mode; /* 0=Win, 1=Android, 2=Mac, 3=iOS */
-static __bit           factory_rst_held;
-static __xdata uint16_t factory_rst_cnt;
+static __bit            win_lock;
+static __bit            wasd_swap;
+static __xdata uint8_t  os_mode; /* 0=Win, 1=Android, 2=Mac, 3=iOS */
+static __bit            factory_rst_held;
+static __xdata uint16_t factory_rst_start;
 
 /*
  * The LNK_BT1..3 keycodes only select the Bluetooth slot: the transport itself
@@ -211,8 +215,8 @@ bool kb_process_record(uint16_t keycode, bool key_pressed)
             return false;
         case QK_CLEAR_EEPROM:
             if (key_pressed) { /* factory reset, as holding Fn+Esc: next kb_update */
-                factory_rst_held = 1;
-                factory_rst_cnt  = 2999u;
+                factory_rst_held  = 1;
+                factory_rst_start = (uint16_t)(timer_read() - 3000u);
             }
             return false;
         case DIR_TOG:
@@ -298,12 +302,11 @@ bool kb_process_record(uint16_t keycode, bool key_pressed)
         case FACTORY_RST:
             if (key_pressed) {
                 if (!factory_rst_held) {
-                    factory_rst_held = 1;
-                    factory_rst_cnt  = 0;
+                    factory_rst_held  = 1;
+                    factory_rst_start = timer_read();
                 }
             } else {
                 factory_rst_held = 0;
-                factory_rst_cnt  = 0;
             }
             return false;
 
@@ -372,9 +375,8 @@ bool kb_process_record(uint16_t keycode, bool key_pressed)
 
 void kb_update(void)
 {
-    if (factory_rst_held && ++factory_rst_cnt >= 3000u) {
+    if (factory_rst_held && (uint16_t)(timer_read() - factory_rst_start) >= 3000u) {
         factory_rst_held = 0;
-        factory_rst_cnt  = 0;
         win_lock         = 0;
         wasd_swap        = 0;
         os_mode          = 0;
@@ -383,16 +385,15 @@ void kb_update(void)
         clear_keys();  /* and whatever it had down, so nothing stays stuck */
         set_mods(0);
         send_keyboard_report();
+#ifdef VIAL_ENABLE
+        vial_store_defaults(); /* QMK settings back to defaults too */
+        vial_store_apply();
+#endif
 #ifdef VIA_ENABLE
         dynamic_keymap_reset();
 #endif
 #ifdef VIA_MACRO_ENABLE
         dynamic_macro_reset();
-#endif
-#ifdef VIAL_ENABLE
-        vial_store_defaults(); /* QMK settings back to defaults too */
-        vial_store_apply();
-        dynamic_vial_mark_dirty();
 #endif
         tick_pause();
         indicators_init();

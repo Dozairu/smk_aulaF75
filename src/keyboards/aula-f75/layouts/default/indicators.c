@@ -442,9 +442,10 @@ static void fx_reset(void)
     led_phase = 0;
     fx_phase192 = 0;
 #ifdef MATRIX_INTERLEAVED_SCAN
+    const bool et2      = ET2;
     ET2                 = 0;
     regen_steps_pending = (uint8_t)(LED_ROWS * LED_COLS);
-    ET2                 = 1;
+    ET2                 = et2;
 #endif
 }
 
@@ -837,9 +838,10 @@ static volatile __xdata uint8_t bat_show_sweeps;
 
 void indicators_show_battery(bool held)
 {
+    const bool et2  = ET2;
     ET2             = 0;
     bat_show_sweeps = held ? (uint8_t)BAT_SHOW_SWEEPS : 0u;
-    ET2             = 1;
+    ET2             = et2;
 }
 
 static bool bat_show_paint(void)
@@ -990,11 +992,12 @@ static __xdata uint8_t          confirm_col;
 
 void indicators_confirm(uint8_t row, uint8_t col)
 {
-    ET2          = 0;
-    confirm_row  = row;
-    confirm_col  = col;
-    confirm_step = CONFIRM_SWEEPS;
-    ET2          = 1;
+    const bool et2 = ET2;
+    ET2            = 0;
+    confirm_row    = row;
+    confirm_col    = col;
+    confirm_step   = CONFIRM_SWEEPS;
+    ET2            = et2;
 }
 
 static bool confirm_paint(void)
@@ -1720,6 +1723,9 @@ void indicators_direct_set(uint8_t start_idx, uint8_t count, const __xdata uint8
 
 void indicators_direct_clear(void)
 {
+    if (!direct_active) {
+        return;
+    }
     direct_active  = false;
     direct_timeout = 0u;
     aula_rgb_clear();

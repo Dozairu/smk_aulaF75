@@ -345,7 +345,6 @@ static volatile __xdata uint8_t ack_wait;
 static volatile __xdata uint8_t heal_ticks;
 static volatile __bit           heal_due;
 static __bit                    heal_valid;
-static __bit                    heal_sending;
 
 /*
  * Selector debounce counters, one per position (0x08BD/0x02DF/0x0960).
@@ -648,23 +647,19 @@ static void rf_queue_flush(void)
         }
         ack_wait = RF_ACK_WAIT_TICKS; /* next report waits for this one's ACK */
         if (slot[0] == RF_CMD_REPORT_L) {
-            if (heal_sending) {
-                heal_sending = 0; /* the heal frame itself: no new heal */
-            } else {
-                memcpy(heal_frame, slot, RF_Q_SIZE);
-                heal_valid = 1;
-                heal_due   = 0;
-                heal_ticks = RF_HEAL_TICKS;
+            const bool et2 = ET2;
+            memcpy(heal_frame, slot, RF_Q_SIZE);
+            heal_valid = 1;
+            ET2        = 0;
+            heal_due   = 0;
+            heal_ticks = RF_HEAL_TICKS;
+            if (followup_arm_pending) {
+                followup_arm_pending = 0;
+                followup_ticks       = RF_FOLLOWUP_TICKS;
+                followup_due         = 0;
+                followup_left        = RF_FOLLOWUP_COUNT;
             }
-        }
-        if (slot[0] == RF_CMD_REPORT_L && followup_arm_pending) {
-            const bool et2       = ET2;
-            followup_arm_pending = 0;
-            ET2                  = 0;
-            followup_ticks       = RF_FOLLOWUP_TICKS;
-            followup_due         = 0;
-            followup_left        = RF_FOLLOWUP_COUNT;
-            ET2                  = et2;
+            ET2 = et2;
         }
         q_tail = (uint8_t)((q_tail + 1u) % RF_Q_SLOTS);
         q_count--;
@@ -1233,7 +1228,6 @@ static void rf_probe_reset(void)
     probe_misses         = 0;
     probe_answered       = 0;
     heal_valid           = 0; /* never replay a report to another host */
-    heal_sending         = 0;
 }
 
 static void rf_enter_24g(void)
@@ -1661,12 +1655,17 @@ void rf_task(void)
                 name_stage++;
             }
         }
-        if (heal_due && q_count == 0u && heal_valid) { /* see "Report pacing" */
-            heal_due     = 0;
-            heal_sending = 1;
-            rf_queue_report(heal_frame[0], &heal_frame[1], (uint8_t)(RF_Q_SIZE - 1u));
-        }
         rf_queue_flush();
+        if (heal_due && q_count == 0u && heal_valid && ack_wait == 0u && rf_can_send(RF_GATE_REPORT)) {
+            heal_due  = 0;
+            tx_buf[0] = RF_HDR;
+            for (uint8_t i = 0; i < (uint8_t)(RF_LEN_REPORT_L - 2); i++) {
+                tx_buf[1 + i] = heal_frame[i];
+            }
+            if (rf_send_frame(RF_LEN_REPORT_L, RF_GATE_REPORT)) {
+                ack_wait = RF_ACK_WAIT_TICKS;
+            }
+        }
         rf_probe_task();
     }
 
@@ -1776,6 +1775,7 @@ void rf_set_bt_slot(uint8_t slot)
 
     if (link_state == RF_LINK_BT) {
         link_connected = 0;
+        rf_probe_reset();
         rf_queue_link(RF_LINK_SELECT);
     }
 }

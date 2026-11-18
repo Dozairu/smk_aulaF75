@@ -1,6 +1,7 @@
 #include "aula_status.h"
 #include "sh68f90.h"
 #include "settings.h"
+#include <stdbool.h>
 #include <stdint.h>
 
 /*
@@ -101,10 +102,11 @@ void aula_status_event(uint8_t event)
 {
     /* `st_pat` and `st_pos` are read by the ISR on every sub-frame: writing
      * them non-atomically would sample a step from the wrong pattern. */
-    ET2    = 0;
-    st_pat = event;
-    st_pos = 0;
-    ET2    = 1;
+    const bool et2 = ET2;
+    ET2            = 0;
+    st_pat         = event;
+    st_pos         = 0;
+    ET2            = et2;
 }
 
 /* What remains displayed when no one-shot pattern is playing. Priority is
@@ -178,11 +180,12 @@ void aula_status_poll(uint8_t link, bool connected, bool low, bool charging, boo
         chg_active = charging;
         prev_full  = full;
         chg_full   = full;
-        ET2        = 0;
+        const bool et2 = ET2;
+        ET2            = 0;
         if (st_pat == AULA_STATUS_NONE || PAT_RESTING(st_pat)) {
             status_rest();
         }
-        ET2 = 1;
+        ET2 = et2;
     }
 
     if (link != prev_link) {
