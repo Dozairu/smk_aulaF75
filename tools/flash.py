@@ -26,6 +26,7 @@ import stat
 import subprocess
 import sys
 import tarfile
+import tempfile
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -152,17 +153,92 @@ def get_firmware(args, workdir):
     return reldir / name, tag
 
 
-def get_flash_keep(tag, workdir):
-    """flash_keep.py: from this checkout if we are in one, else from the release tag."""
-    local = Path(__file__).resolve().parent.parent / 'utils' / 'flash_keep.py'
-    if local.is_file():
-        return local
-    dest = workdir / 'flash_keep-{}.py'.format(tag or 'main')
-    if not dest.exists():
-        say('Downloading flash_keep.py ...')
-        ref = tag or 'main'
-        fetch('https://raw.githubusercontent.com/{}/{}/utils/flash_keep.py'.format(REPO, ref), dest)
-    return dest
+def parse_ihex(path):
+    """Returns {address: byte} for the data records of an Intel HEX file."""
+    mem = {}
+    base = 0
+    with open(path) as f:
+        for n, line in enumerate(f, 1):
+            line = line.strip()
+            if not line:
+                continue
+            if not line.startswith(':'):
+                die('{}:{}: not an Intel HEX record'.format(path, n))
+            rec = bytes.fromhex(line[1:])
+            if sum(rec) & 0xFF:
+                die('{}:{}: bad checksum'.format(path, n))
+            count, addr, rtype = rec[0], (rec[1] << 8) | rec[2], rec[3]
+            data = rec[4:4 + count]
+            if rtype == 0x00:
+                for i, b in enumerate(data):
+                    mem[base + addr + i] = b
+            elif rtype == 0x01:
+                break
+            elif rtype == 0x02:
+                base = ((data[0] << 8) | data[1]) << 4
+            elif rtype == 0x04:
+                base = ((data[0] << 8) | data[1]) << 16
+    return mem
+
+
+def write_ihex(path, mem):
+    """Writes {address: byte} as 16-byte data records (addresses < 64 KiB)."""
+    addrs = sorted(mem)
+    lines = []
+    i = 0
+    while i < len(addrs):
+        start = addrs[i]
+        chunk = [mem[start]]
+        i += 1
+        while i < len(addrs) and addrs[i] == start + len(chunk) and len(chunk) < 16 \
+                and (start + len(chunk)) & 0xFFFF:
+            chunk.append(mem[addrs[i]])
+            i += 1
+        rec = bytes([len(chunk), (start >> 8) & 0xFF, start & 0xFF, 0x00]) + bytes(chunk)
+        lines.append(':' + (rec + bytes([(-sum(rec)) & 0xFF])).hex().upper())
+    lines.append(':00000001FF')
+    with open(path, 'w') as f:
+        f.write('\n'.join(lines) + '\n')
+
+
+def flash_keep(sinowisp, hex_path, dry):
+    """Read current flash over ISP and carry [KEEP_START, KEEP_END) into hex_path."""
+    image = parse_ihex(hex_path)
+    overlap = [a for a in image if KEEP_START <= a < KEEP_END]
+    if overlap:
+        die('the new firmware has code at 0x{:04X}, inside the kept range '
+            '0x{:04X}-0x{:04X}; refusing'.format(min(overlap), KEEP_START, KEEP_END - 1))
+
+    with tempfile.TemporaryDirectory(prefix='smk-flash-keep-') as tmp:
+        dump = Path(tmp) / 'current.bin'
+        merged = Path(tmp) / 'merged.hex'
+        say('Reading the current flash to keep 0x{:04X}-0x{:04X}'.format(KEEP_START, KEEP_END - 1))
+        rc = run([sinowisp, 'read', '-d', DEVICE, '-s', 'firmware', '--format', 'bin', dump], dry)
+        if dry:
+            run([sinowisp, 'write', '-d', DEVICE, '--format', 'ihex', '--reboot', 'true', '--force', merged], dry)
+            return 0
+        if rc != 0 or not dump.exists():
+            say('error: read failed -- nothing was written')
+            return rc or 1
+        current = dump.read_bytes()
+        if len(current) < KEEP_END:
+            say('error: read returned {} bytes, need {} -- nothing was written'.format(len(current), KEEP_END))
+            return 1
+
+        kept = current[KEEP_START:KEEP_END]
+        if all(b == 0xFF for b in kept):
+            say('Nothing saved on the keyboard (area erased); flashing as-is')
+        else:
+            for i, b in enumerate(kept):
+                image[KEEP_START + i] = b
+        write_ihex(merged, image)
+
+        say('Writing new firmware + kept data')
+        rc = run([sinowisp, 'write', '-d', DEVICE, '--format', 'ihex', '--reboot', 'true', '--force', merged], dry)
+        if rc != 0:
+            say('error: write failed (exit {}). The keyboard stays in ISP mode; '
+                'flash again to recover'.format(rc))
+        return rc
 
 
 def confirm(question, yes):
@@ -236,11 +312,7 @@ def main():
             say('Saved. Copy {}/ somewhere safe; it is your only way back.'.format(out))
         return 0
 
-    hex_path, tag = get_firmware(args, HOME)
-
-    keep_script = None
-    if args.keep:
-        keep_script = get_flash_keep(tag, HOME)
+    hex_path, _tag = get_firmware(args, HOME)
 
     say()
     say('About to flash {} to the AULA F75 ({}).'.format(hex_path.name, 'settings kept' if args.keep
@@ -255,11 +327,9 @@ def main():
         return 1
 
     if args.keep:
-        cmd = [sys.executable, '-I', keep_script, '--sinowisp', sinowisp, '--device', DEVICE,
-               '--keep', KEEP_START, KEEP_END, hex_path]
+        rc = flash_keep(sinowisp, hex_path, args.dry_run)
     else:
-        cmd = [sinowisp, 'write', '-d', DEVICE, '--reboot', 'true', '--force', hex_path]
-    rc = run(cmd, args.dry_run)
+        rc = run([sinowisp, 'write', '-d', DEVICE, '--reboot', 'true', '--force', hex_path], args.dry_run)
     if rc:
         permission_hint()
         return rc
