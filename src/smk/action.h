@@ -96,6 +96,9 @@ void action_config_defaults(void);
 
 void action_init(void);
 
+/* Virtual row for off-matrix rotary encoder detents (col 0 = CCW, col 1 = CW). */
+#define ACTION_ENC_ROW 0x0Du
+
 /* One physical key transition, in scan order. */
 void action_event(uint8_t row, uint8_t col, bool pressed);
 

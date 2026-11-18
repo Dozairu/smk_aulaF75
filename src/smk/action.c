@@ -144,6 +144,7 @@ static __xdata uint16_t ko_e[KO_FIELDS]; /* its entry; scratch while searching *
 static __xdata uint16_t ko_trigger;      /* the keycode it replaced            */
 static __xdata uint8_t  ko_slot = 0xFFu; /* slot of the trigger key; 0xFF: none */
 static __xdata uint8_t  ko_lifted;       /* suppressed mods taken off the report */
+static __xdata uint8_t  ko_prev_role;    /* original slot role before override */
 #endif
 
 #ifdef ACTION_EXTRAS
@@ -336,10 +337,9 @@ static uint16_t dual_tap_kc(uint16_t kc)
 
 static void send(uint8_t pos, uint16_t kc, bool down)
 {
-#ifdef ACTION_COMBO
-    if (!IS_VPOS(pos)) /* a combo has no matrix position: keep the last one */
-#endif
+    if (POS_ROW(pos) < ACTION_ENC_ROW) { /* virtual positions (encoder, combo) keep last matrix pos */
         action_hal_event_pos(POS_ROW(pos), POS_COL(pos));
+    }
     action_hal_send(kc, down);
 }
 
@@ -373,6 +373,9 @@ static void tap_press(uint8_t slot, uint8_t pos, uint16_t kc)
 #endif
         layer_state ^= (uint8_t)(1u << dual_layer(kc));
         layer_state &= (uint8_t)((1u << layer_count()) - 1u);
+#ifdef ACTION_EXTRAS
+        llock &= layer_state;
+#endif
     } else if (dual_tap_kc(kc) != KC_NO) {
         press_output(slot, pos, dual_tap_kc(kc));
     }
@@ -489,6 +492,7 @@ static bool ko_try(uint8_t slot, uint8_t pos, uint16_t kc)
         ko_trigger   = kc;
         ko_slot      = slot;
         ko_lifted    = (uint8_t)(held_mods() & (uint8_t)ko_e[KO_SUPPRESS]);
+        ko_prev_role = s_role[slot];
         s_role[slot] = ROLE_KO;
         s_kc[slot]   = ko_e[KO_REPLACEMENT];
         if (ko_lifted) {
@@ -512,10 +516,10 @@ static void ko_end(uint8_t pos, bool reregister)
         action_hal_mods(back, true);
     }
     if (s_pos[slot] != POS_NONE) { /* key still down */
-        /* A plain key again; without re-registering its release just sends
-         * an extra key-up for the trigger, which the report ignores, and
-         * still lets go of any one-shot mods riding on it. */
-        s_role[slot] = ROLE_PLAIN;
+        /* Restore original role (ROLE_PLAIN or ROLE_TAP); without
+         * re-registering, release sends an extra key-up for the trigger (which
+         * the report ignores) and still frees any one-shot mods riding on it. */
+        s_role[slot] = ko_prev_role;
         s_kc[slot]   = ko_trigger;
         if (reregister) {
             send(pos, ko_trigger, true);
@@ -823,11 +827,17 @@ static void press_plain(uint8_t slot, uint8_t pos, uint16_t kc)
         const uint8_t l = (uint8_t)(kc & 0x1Fu);
         if (l < layer_count()) {
             layer_state ^= (uint8_t)(1u << l);
+#ifdef ACTION_EXTRAS
+            llock &= layer_state;
+#endif
         }
     } else if (IS_QK_TO(kc)) {
         const uint8_t l = (uint8_t)(kc & 0x1Fu);
         if (l < layer_count()) {
             layer_state = (uint8_t)(1u << l);
+#ifdef ACTION_EXTRAS
+            llock &= layer_state;
+#endif
         }
     } else if (IS_QK_DEF_LAYER(kc)) {
         action_set_default_layer((uint8_t)(kc & 0x1Fu));
@@ -949,24 +959,41 @@ static void slot_release(uint8_t slot)
             release_plain(slot, pos, kc);
             break;
 
-        case ROLE_HOLD:
+        case ROLE_HOLD: {
             hold_off(kc);
-            if ((action_config.flags & ACTION_RETRO_TAPPING) && !intr && dual_tap_kc(kc) != KC_NO) {
-                send(pos, dual_tap_kc(kc), true);
-                send(pos, dual_tap_kc(kc), false);
+            const uint16_t tap = dual_tap_kc(kc);
+            if ((action_config.flags & ACTION_RETRO_TAPPING) && !intr && tap != KC_NO) {
+                s_pos[slot]  = pos;
+                s_role[slot] = ROLE_PLAIN;
+                s_intr[slot] = 0;
+                s_mods[slot] = 0;
+                press_output(slot, pos, tap);
+                s_pos[slot] = POS_NONE;
+#ifdef ACTION_KEY_OVERRIDE
+                if (s_role[slot] == ROLE_KO) {
+                    ko_end(pos, false);
+                    if (s_mods[slot]) {
+                        action_hal_mods(s_mods[slot], false);
+                    }
+                } else
+#endif
+                {
+                    release_plain(slot, pos, s_kc[slot]);
+                }
             }
             break;
+        }
 
         case ROLE_TAP:
             /* s_kc is the tap's output keycode (press_output), or the TT key. */
             if (dual_tap_kc(kc) != KC_NO) {
                 send(pos, dual_tap_kc(kc), false);
+                qt_pos  = pos;
+                qt_time = action_hal_timer();
             }
             if (s_mods[slot]) {
                 action_hal_mods(s_mods[slot], false);
             }
-            qt_pos  = pos;
-            qt_time = action_hal_timer();
             break;
 
         case ROLE_OSM: {
@@ -1033,6 +1060,10 @@ static void slot_release(uint8_t slot)
             ko_end(pos, false);
             if (s_mods[slot]) {
                 action_hal_mods(s_mods[slot], false);
+            }
+            if (ko_prev_role == ROLE_TAP && dual_tap_kc(ko_trigger) != KC_NO) {
+                qt_pos  = pos;
+                qt_time = action_hal_timer();
             }
             break;
 #endif
@@ -1173,6 +1204,17 @@ static void decide_tap(void)
     const uint8_t s = slot_add(tk_pos, tk_kc, ROLE_TAP);
     if (s != 0xFFu) {
         tap_press(s, tk_pos, tk_kc);
+        if (wb_count && s_mods[s]) {
+#ifdef ACTION_KEY_OVERRIDE
+            const uint8_t drop = (s_role[s] == ROLE_KO) ? (uint8_t)(s_mods[s] & ~ko_lifted) : s_mods[s];
+#else
+            const uint8_t drop = s_mods[s];
+#endif
+            if (drop) {
+                action_hal_mods(drop, false);
+            }
+            s_mods[s] = 0;
+        }
     }
     requeue_waiting();
 }
@@ -1290,7 +1332,7 @@ static void process(void)
 /* Number of inputs of combo idx (loaded into ce), 0 if unused. */
 static uint8_t combo_load(uint8_t idx)
 {
-    if (!action_hal_combo(idx, ce)) {
+    if (!action_hal_combo(idx, ce) || ce[COMBO_OUTPUT] == KC_NO) {
         return 0;
     }
     uint8_t n = 0;
@@ -1299,7 +1341,7 @@ static uint8_t combo_load(uint8_t idx)
             n++;
         }
     }
-    return n;
+    return n < 2u ? 0 : n;
 }
 
 static bool ce_has(uint16_t kc)
@@ -1420,7 +1462,7 @@ static void combo_input(uint8_t pos, uint8_t down, uint16_t time)
         return;
     }
 
-    const uint16_t kc = resolve(pos);
+    uint16_t kc = resolve(pos);
     if (cb_n) {
         bool dup = false;
         for (uint8_t i = 0; i < cb_n; i++) {
@@ -1428,9 +1470,15 @@ static void combo_input(uint8_t pos, uint8_t down, uint16_t time)
         }
         if (dup || kc == KC_NO || cb_n >= COMBO_BUF || !combo_any_fits(kc)) {
             combo_settle(); /* this press starts afresh below */
+            process();
+            kc = resolve(pos);
         }
     }
-    if (cb_n == 0 && (kc == KC_NO || !combo_any_fits(kc))) {
+    if (cb_n == 0 && (
+#    ifdef ACTION_EXTRAS
+                         combos_off ||
+#    endif
+                         kc == KC_NO || !combo_any_fits(kc))) {
         q_push_back(pos, 1u, time);
         return;
     }

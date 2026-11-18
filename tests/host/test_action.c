@@ -21,6 +21,7 @@
 #define LAYERS 4
 
 static uint16_t keymap[LAYERS][ROWS][COLS];
+static uint16_t enc_keymap[LAYERS][2];
 static uint16_t now_ms;
 static char     out[1024];
 
@@ -28,6 +29,9 @@ static char     out[1024];
 
 uint16_t action_hal_keymap(uint8_t layer, uint8_t row, uint8_t col)
 {
+    if (row == ACTION_ENC_ROW) {
+        return (layer < LAYERS && col < 2u) ? enc_keymap[layer][col] : KC_NO;
+    }
     return (layer < LAYERS && row < ROWS && col < COLS) ? keymap[layer][row][col] : KC_NO;
 }
 
@@ -154,7 +158,11 @@ static void reset(uint8_t flags)
                 keymap[l][r][c] = KC_TRNS;
             }
         }
+        enc_keymap[l][0] = KC_TRNS;
+        enc_keymap[l][1] = KC_TRNS;
     }
+    enc_keymap[0][0] = KC_NO;
+    enc_keymap[0][1] = KC_NO;
     now_ms = 1000;
     out[0] = 0;
     action_init();
@@ -984,6 +992,175 @@ static void t_mt_tap_takes_oneshot(void)
     expect_idle("mod-tap + one-shot");
 }
 
+static void t_combo_incomplete_ignored(void)
+{
+    combo_setup();
+    combos[0][1] = KC_NO; /* 1-input combo while editing */
+    dn(J_); up(J_);
+    expect("combo with <2 inputs ignored", "+0D -0D");
+
+    combos[0][1]            = KC_K;
+    combos[0][COMBO_OUTPUT] = KC_NO; /* unfinished combo with KC_NO output */
+    dn(J_); dn(K_); up(K_); up(J_);
+    expect("combo with KC_NO output ignored", "+0D +0E -0E -0D");
+    expect_idle("combo incomplete");
+}
+
+static void t_osm_roll_mt_no_bleed(void)
+{
+    reset(0);
+    keymap[0][0][0] = OSM(MOD_LSFT);
+    keymap[0][3][0] = MT(MOD_LCTL, KC_A);
+    keymap[0][0][1] = KC_B;
+    keymap[0][0][2] = KC_1;
+    dn(A_); up(A_);
+    dn(DUAL); wait_ms(10); dn(B_); wait_ms(10); up(DUAL); up(B_);
+    expect("OSM does not bleed into rolled key after MT", "m+02 m-02 m+02 +04 m-02 +05 -04 -05");
+
+    reset(0);
+    keymap[0][0][0] = QK_CAPS_WORD_TOGGLE;
+    keymap[0][3][0] = MT(MOD_LCTL, KC_A);
+    keymap[0][0][2] = KC_1;
+    dn(A_); up(A_);
+    dn(DUAL); wait_ms(10); dn(C_); wait_ms(10); up(DUAL); up(C_);
+    expect("Caps Word shift does not bleed into rolled digit", "m+02 +04 m-02 +1E -04 -1E");
+
+    ko_setup();
+    keymap[0][0][0] = OSM(MOD_LSFT);
+    keymap[0][3][0] = MT(MOD_LCTL, KC_BSPC);
+    keymap[0][0][1] = KC_B;
+    dn(A_); up(A_);
+    dn(DUAL); wait_ms(10); dn(B_); wait_ms(10); up(DUAL); up(B_);
+    expect("OSM + KO on rolled MT does not re-arm Shift", "m+02 m-02 m+02 m-02 +4C -4C +05 -2A -05");
+    expect_idle("OSM roll MT");
+}
+
+static void t_retro_tapping_output_stage(void)
+{
+    reset(ACTION_RETRO_TAPPING);
+    keymap[0][0][0] = OSM(MOD_LSFT);
+    keymap[0][3][0] = MT(MOD_LCTL, KC_A);
+    dn(A_); up(A_); dn(DUAL); wait_ms(300); up(DUAL);
+    expect("retro tap applies armed OSM", "m+02 m-02 m+01 m-01 m+02 +04 -04 m-02");
+
+    reset(ACTION_RETRO_TAPPING);
+    keymap[0][0][0] = QK_CAPS_WORD_TOGGLE;
+    keymap[0][0][1] = QK_REPEAT_KEY;
+    keymap[0][3][0] = MT(MOD_LCTL, KC_A);
+    dn(A_); up(A_); dn(DUAL); wait_ms(300); up(DUAL);
+    expect("retro tap goes through Caps Word", "m+01 m-01 m+02 +04 -04 m-02");
+    dn(B_); up(B_);
+    expect("retro tap recorded for Repeat", "m+02 +04 -04 m-02");
+    dn(A_); up(A_); /* turn Caps Word off */
+    expect_idle("retro tap output stage");
+}
+
+static void t_layer_lock_cleared_on_tg_to(void)
+{
+    reset(0);
+    keymap[0][5][8] = MO(1);
+    keymap[1][0][1] = QK_LAYER_LOCK;
+    keymap[1][0][2] = TG(1);
+    keymap[0][0][0] = KC_A;
+    keymap[1][0][0] = KC_B;
+    dn(FN_); dn(B_); up(B_); up(FN_);
+    dn(C_); up(C_);
+    dn(FN_); dn(A_); up(A_); up(FN_);
+    dn(A_); up(A_);
+    expect("TG off clears Layer Lock so next MO releases cleanly", "+05 -05 +04 -04");
+
+    keymap[1][0][2] = TO(0);
+    dn(FN_); dn(B_); up(B_); up(FN_);
+    dn(C_); up(C_);
+    dn(FN_); dn(A_); up(A_); up(FN_);
+    dn(A_); up(A_);
+    expect("TO clears Layer Lock", "+05 -05 +04 -04");
+    expect_idle("layer lock cleared");
+}
+
+static void t_tt_hold_after_tap(void)
+{
+    reset(0);
+    keymap[0][0][2] = TT(1);
+    keymap[1][0][2] = TT(1);
+    keymap[0][0][0] = KC_A;
+    keymap[1][0][0] = KC_B;
+    dn(C_); up(C_); wait_ms(50); /* inside quick_tap_term (200 ms) */
+    dn(C_); wait_ms(250); dn(A_); up(A_); up(C_);
+    expect("TT tap then immediate hold enters layer momentarily", "+05 -05");
+    dn(A_); up(A_);
+    expect("TT hold released back to base", "+04 -04");
+    expect_idle("TT hold after tap");
+}
+
+static void t_encoder_action_engine(void)
+{
+    reset(0);
+    keymap[0][0][0]    = KC_A;
+    keymap[0][3][0]    = LT(1, KC_SPC);
+    enc_keymap[0][0]   = TG(1);
+    enc_keymap[0][1]   = KC_VOLU;
+    enc_keymap[1][0]   = TG(1);
+    enc_keymap[1][1]   = QK_CAPS_WORD_TOGGLE;
+    action_event(ACTION_ENC_ROW, 0, true);
+    wait_ms(4);
+    action_event(ACTION_ENC_ROW, 0, false);
+    action_event(ACTION_ENC_ROW, 1, true);
+    wait_ms(4);
+    action_event(ACTION_ENC_ROW, 1, false);
+    dn(A_); up(A_);
+    expect("encoder runs TG and Caps Word via action engine", "m+02 +04 -04 m-02");
+    action_event(ACTION_ENC_ROW, 1, true);
+    wait_ms(4);
+    action_event(ACTION_ENC_ROW, 1, false); /* Caps Word off */
+    action_event(ACTION_ENC_ROW, 0, true);
+    wait_ms(4);
+    action_event(ACTION_ENC_ROW, 0, false); /* TG(1) off */
+
+    enc_keymap[1][1] = KC_MNXT;
+    dn(DUAL); wait_ms(10);
+    action_event(ACTION_ENC_ROW, 1, true);
+    wait_ms(4);
+    action_event(ACTION_ENC_ROW, 1, false);
+    wait_ms(250);
+    up(DUAL);
+    expect("encoder detent buffered during LT resolves on hold layer", "+AB -AB");
+    expect_idle("encoder engine");
+}
+
+static void t_combo_layer_reresolve(void)
+{
+    combo_setup();
+    combos[0][COMBO_OUTPUT] = MO(1);
+    combos[1][0]            = KC_J;
+    combos[1][1]            = KC_K;
+    combos[1][2]            = KC_L;
+    combos[1][COMBO_OUTPUT] = KC_B;
+    combos[2][0]            = KC_2;
+    combos[2][1]            = KC_3;
+    combos[2][COMBO_OUTPUT] = KC_Z;
+    keymap[1][1][3]         = KC_2;
+    keymap[1][0][0]         = KC_3;
+
+    dn(J_); dn(K_);
+    dn(X_); /* settles MO(1), then X_ re-resolves as KC_2 on layer 1 */
+    dn(0, 0); /* KC_3 completes combo 2 */
+    up(0, 0); up(X_); up(K_); up(J_);
+    expect("interrupting key re-resolves on layer activated by settled combo", "+1D -1D");
+    expect_idle("combo layer re-resolve");
+}
+
+static void t_ko_preserves_tap_quick_tap(void)
+{
+    ko_setup();
+    keymap[0][3][0] = MT(MOD_LCTL, KC_BSPC);
+    dn(SFT_); dn(DUAL); wait_ms(20); up(DUAL); up(SFT_);
+    wait_ms(50);
+    dn(DUAL); wait_ms(300); up(DUAL);
+    expect("KO on tap-hold tap still records quick-tap", "+E1 m-02 +4C -4C m+02 -E1 +2A -2A");
+    expect_idle("KO quick-tap");
+}
+
 /* ---------------------------------------------------------- stress test
  *
  * Random presses / releases at random speeds on a keymap that mixes nearly
@@ -1158,6 +1335,14 @@ int main(void)
     t_combo_toggle();
     t_osm_tap_toggle();
     t_mt_tap_takes_oneshot();
+    t_combo_incomplete_ignored();
+    t_osm_roll_mt_no_bleed();
+    t_retro_tapping_output_stage();
+    t_layer_lock_cleared_on_tg_to();
+    t_tt_hold_after_tap();
+    t_encoder_action_engine();
+    t_combo_layer_reresolve();
+    t_ko_preserves_tap_quick_tap();
     t_stress();
 
     printf("\n%d/%d checks passed\n", checks - failures, checks);

@@ -156,6 +156,13 @@ void send_keycode(uint16_t qcode, bool pressed)
 
 uint16_t action_hal_keymap(uint8_t layer, uint8_t row, uint8_t col)
 {
+    if (row == ACTION_ENC_ROW) {
+#ifdef DYNAMIC_KEYMAP_ENABLE
+        return dynamic_encoder_get_keycode(layer, 0, col != 0);
+#else
+        return (layer == 0) ? (col ? KC_VOLU : KC_VOLD) : KC_TRANSPARENT;
+#endif
+    }
     return keymap_get_keycode(layer, row, col);
 }
 
