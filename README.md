@@ -24,7 +24,10 @@ a Vial layer and a QMK-style key engine on top. All the groundwork is theirs —
   Alt/GUI, Ctrl/GUI swaps…).
 - **Quantum keycodes**: `QK_BOOT`, `EE_CLR`, Caps Word, Repeat / Alt Repeat, Layer Lock, tri-layer,
   Grave Escape, Space Cadet, combo on/off, the RGB / RM lighting keys.
-- **Lighting from Vial**: every Aula effect (single colour and rainbow), speed, brightness, colour.
+- **Lighting from Vial, SignalRGB & OpenRGB**: every Aula effect (single colour and rainbow),
+  speed, brightness, colour, plus per-key direct RGB streaming from both
+  **SignalRGB** (`0xF0`/`0xF1`) and **OpenRGB** (**VialRGB Direct Mode**, 80 physical keys) at full
+  `333.3 Hz` PWM refresh.
 - **Keep your setup across flashes** (`*_flash_keep`), or flash clean (`*_flash`).
 - **Wireless fixes**: 2.4 GHz / Bluetooth reports wait for the radio module's ACK and a lost frame is
   healed — no dropped taps, no stuck auto-repeating keys.

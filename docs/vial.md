@@ -64,7 +64,7 @@ Boards without `vial_uid` stay plain VIA.
 |---|---|
 | Keymap, Layers | 4 layers, every key + the encoder (ccw / press / cw) |
 | Macros | VIA macros incl. Vial's delays and extended keycodes |
-| Lighting (VialRGB) | effect, speed, brightness, colour picker — see below |
+| Lighting (VialRGB) | effect, speed, brightness, colour picker, Direct mode (80 LEDs, OpenRGB) — see below |
 | Tap Dance | 8 entries: tap, hold, double tap, tap + hold, own tapping term |
 | Combos | 8 entries, up to 4 keys each, any keycode as output |
 | Key Overrides | 4 entries (trigger-down activation, see gaps) |
@@ -128,6 +128,18 @@ Vial cannot show it, and the VIA app does not talk to a Vial board. Its indicato
 instead, in Vial's User tab: `IND_STATUS` (Esc/F1 status LED), `IND_CAPS` (Caps Lock LED),
 `IND_CHARGE` (charging / low battery); scroll direction is `DIR_TOG`.
 
+**Direct mode (OpenRGB / SignalRGB coexistence):** Effect ID `1` (`VIALRGB_EFFECT_DIRECT`, `FX_DIRECT`)
+enables per-LED HSV control from **OpenRGB** over VialRGB (`VIALRGB_GET_NUMBER_LEDS` = `80`,
+`VIALRGB_GET_LED_INFO` `0x08 0x44`, `VIALRGB_DIRECT_FASTSET` `0x07 0x42`). An 80-entry `__code` ROM
+table (`vialrgb_leds[80]`) maps indices `0..79` to the exact 80 physical backlit keys on the ANSI
+AULA F75 (9 packets per frame, excluding keyless grid holes and unused ISO slots `(3,12)`, `(4,12)`,
+`(5,10)`). OpenRGB shares the existing `270 B` `direct_rgb[6][15][3]` XRAM frame buffer with
+**SignalRGB** (`0xF0`/`0xF1`), using a 1-bit `direct_vialrgb` flag so static OpenRGB colours stay
+active indefinitely while SignalRGB retains its ~3 s timeout watchdog. Incoming direct packets write
+immediately to `duty_cache` via `aula_rgb_set()` for full `333.3 Hz` (`3.0 ms`) PWM updates. In
+OpenRGB, add the keyboard under *Settings → QMK (VialRGB Protocol)* with USB VID:PID `258A:010C` (and
+stop any background OpenRGB service holding the local server port if devices are not listed).
+
 ## Storage
 
 The VIA store (4 × 512 B flash sectors at `0xE400`, mirrored in XRAM) gains a Vial area after the
@@ -159,10 +171,9 @@ What to do about them, with sizes and options: [vial-roadmap.md](vial-roadmap.md
 - **Auto Shift** and Vial's **Alt Repeat table**: left out for code space.
 - **Key overrides**: no activation by pressing a required mod / releasing a negative mod after the
   trigger; no mods-only triggers.
-- **VialRGB direct mode** (per-LED colour from the host): its frame buffer does not fit in XRAM.
 - **Mouse keys, MIDI, joystick, steno, Unicode, leader, swap hands, dynamic macros, `QK_REBOOT`**:
   not implemented.
-- **More than 4 layers**: each layer costs 192 B of XRAM; ~270 B are left.
+- **More than 4 layers**: each layer costs 192 B of XRAM; 304 B are left.
 - **Stale raw HID reply**: if a host tool sends a request and exits without reading the reply, the
   next tool reads that old reply first and stays one behind. `vial_probe.py` drains it on open; for
   Vial / VIA, replug the keyboard. (A firmware fix needs a way to withdraw a queued EP2 IN packet on
@@ -170,6 +181,6 @@ What to do about them, with sizes and options: [vial-roadmap.md](vial-roadmap.md
 
 ## Budget (AULA F75, Vial build)
 
-With `-Dautotype=false -Drf_diag=false`: code 56,331 / 58,368 B, XRAM 3,807 / 4,096 B. With both
-left on (the default): code 57,685 B. `autotype` is the Fn+Space anti-idle mode, `rf_diag` the Fn+R
-radio diagnostic overlay; turned off, their keys do nothing.
+With `-Dautotype=false -Drf_diag=false`: code 56,074 / 58,368 B (2,294 B free), XRAM 3,792 / 4,096 B
+(304 B free). `autotype` is the Fn+Space anti-idle mode, `rf_diag` the Fn+R radio diagnostic
+overlay; turned off, their keys do nothing.
