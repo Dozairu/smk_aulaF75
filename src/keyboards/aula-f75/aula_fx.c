@@ -123,19 +123,6 @@ uint8_t aula_fx_ring(uint8_t ring, uint8_t slot)
 }
 
 /*
- * Presence map, derived from CODE 0xC500: a row bit is 1 when the grid position
- * carries a key. Six slots out of ninety have none.
- *
- * The stock table holds the full ID of each key; we only care about 0xFF here,
- * hence the reduction to fifteen bytes. Its row 4 permutes the columns,
- * matching row 4 of table 0x2EED -- two independent findings that cross-check
- * on the same row quirk.
- */
-static const __code uint8_t present[AULA_FX_COLS] = {
-    0x3f, 0x3e, 0x3f, 0x1f, 0x1f, 0x3f, 0x1f, 0x1f, 0x3f, 0x3f, 0x3f, 0x1f, 0x3f, 0x3f, 0x3f,
-};
-
-/*
  * THE STOCK KEY MAP -- CODE 0xC500, copied verbatim.
  *
  * Indexed as `col * 6 + row`, it returns the stock key ID, `col * 8 + row`,

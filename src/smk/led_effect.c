@@ -1,4 +1,5 @@
 #include "led_effect.h"
+#include "kbdef.h"
 #include "user_led.h"
 
 uint8_t led_effect_index(led_effect_t fx, uint8_t row, uint8_t col, uint8_t phase)
@@ -14,6 +15,7 @@ uint8_t led_effect_index(led_effect_t fx, uint8_t row, uint8_t col, uint8_t phas
     }
 }
 
+#ifndef LED_CUSTOM_COLOR_WHEEL
 void led_color_wheel(uint8_t index, uint8_t out[3])
 {
     if (index < 85) {
@@ -62,3 +64,4 @@ bool led_effect_mono(led_effect_t fx, uint8_t row, uint8_t col, uint8_t phase, u
     *out      = (x < 128) ? (uint8_t)(x << 1) : (uint8_t)((uint8_t)(255 - x) << 1);
     return true;
 }
+#endif

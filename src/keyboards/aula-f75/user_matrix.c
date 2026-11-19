@@ -28,6 +28,7 @@ void user_matrix_scan_pre(void)
     GPIO_OUTPUT(6, KB_C_P6_MASK);
 }
 
+#if defined(BOOT_CHORD_HEADER) || !defined(MATRIX_INTERLEAVED_SCAN)
 void user_matrix_scan_post(void)
 {
     GPIO_PULLUP_OFF(4, KB_C_P4_MASK);
@@ -37,7 +38,9 @@ void user_matrix_scan_post(void)
     GPIO_PULLUP_OFF(6, KB_C_P6_MASK);
     GPIO_INPUT(6, KB_C_P6_MASK);
 }
+#endif
 
+#if !defined(BOOT_CHORD_HEADER) && (!defined(MATRIX_INTERLEAVED_SCAN) || !defined(NO_AUTOTYPE))
 /*
  * Snapshot of key states, for reactive backlighting.
  *
@@ -60,10 +63,13 @@ uint8_t user_matrix_pressed(uint8_t col)
 {
     return (col < MATRIX_COLS) ? scan_pressed[col] : 0;
 }
+#endif
 
 void user_matrix_col_select(uint8_t col) // active-low: drive to 0
 {
+#if !defined(BOOT_CHORD_HEADER) && (!defined(MATRIX_INTERLEAVED_SCAN) || !defined(NO_AUTOTYPE))
     scan_col = col;
+#endif
 
     switch (col) {
         case 0:  KB_C0  = 0; break;
@@ -113,6 +119,7 @@ void user_matrix_col_deselect(uint8_t col)
  */
 uint8_t user_matrix_read_rows(void)
 {
+#if !defined(BOOT_CHORD_HEADER) && (!defined(MATRIX_INTERLEAVED_SCAN) || !defined(NO_AUTOTYPE))
     const uint8_t raw = (uint8_t)((P7 & 0x0f) | ((P5 << 1) & 0x30) | 0xc0);
 
     /* Active-low rows: a 1 bit in the snapshot means a pressed key.
@@ -121,6 +128,9 @@ uint8_t user_matrix_read_rows(void)
         scan_pressed[scan_col] = (uint8_t)(~raw) & 0x3f;
     }
     return raw;
+#else
+    return (uint8_t)((P7 & 0x0f) | ((P5 << 1) & 0x30) | 0xc0);
+#endif
 }
 
 void user_matrix_sinks_off(void)

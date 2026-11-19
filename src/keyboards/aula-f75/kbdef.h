@@ -37,6 +37,7 @@
 #define MATRIX_ROWS 6
 #define MATRIX_COLS 15
 #define SIGNALRGB_ENABLE 1
+#define LED_CUSTOM_COLOR_WHEEL 1
 
 /* -------------------------------------------------------------------------
  * Pinout -- ESTABLISHED BY DISASSEMBLY, TRIPLE-CHECKED
@@ -147,7 +148,9 @@
  * `matrix.c` keeps its array private and its hooks do not pass the position,
  * whereas our own hooks do see it.
  */
+#if !defined(MATRIX_INTERLEAVED_SCAN) || !defined(NO_AUTOTYPE)
 uint8_t user_matrix_pressed(uint8_t col);
+#endif
 
 /* Ten brightness steps: the factory gain table at CODE 0x2937 has ten entries
  * (00 08 10 18 20 28 32 3c 46 50), bounded by CODE[0xA8D5+effect] = 9. */

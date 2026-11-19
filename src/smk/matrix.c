@@ -80,10 +80,12 @@ static void flush_pending_press(void)
     }
 }
 
+#ifndef VIAL_ENABLE
 void set_default_layer(uint8_t layer)
 {
     action_set_default_layer(layer);
 }
+#endif
 
 /*
  * Output stage: a plain, already-resolved keycode to the host. Handles basic

@@ -76,8 +76,6 @@ void add_key_to_report(report_keyboard_t *keyboard_report, uint8_t key);
 void del_key_from_report(report_keyboard_t *keyboard_report, uint8_t key);
 void clear_keys_from_report(report_keyboard_t *keyboard_report);
 
-bool is_key_pressed(report_keyboard_t *keyboard_report, uint8_t key);
-
 /* key */
 inline void add_key(uint8_t key)
 {
@@ -95,14 +93,13 @@ inline void clear_keys(void)
 }
 
 /* modifiers */
+#ifndef VIAL_ENABLE
 uint8_t get_mods(void);
+void    clear_mods(void);
+#endif
 void    add_mods(uint8_t mods);
 void    del_mods(uint8_t mods);
 void    set_mods(uint8_t mods);
-void    clear_mods(void);
-uint8_t get_weak_mods(void);
-void    set_weak_mods(uint8_t mods);
-void    set_mods_mask(uint8_t mask);
 
 /* Consumer Page (0x0C)
  *

@@ -7,21 +7,12 @@
 #include "debug.h"
 
 static uint8_t real_mods = 0;
-static uint8_t weak_mods = 0;
-
-/* AND mask applied to `real_mods` only, never `weak_mods`: used to strip a
- * physically held modifier from the outgoing report while a translation layer
- * injects another via `weak_mods` (e.g., to suppress or add Shift
- * independently of the physical keys). Neutral at 0xFF when unused. */
-static uint8_t mods_mask = 0xFF;
 
 report_keyboard_t keyboard_report;
 report_keyboard_t last_report;
 
 report_nkro_t nkro_report;
 report_nkro_t last_nkro_report;
-
-uint8_t biton(uint8_t bits);
 
 void send_6kro_report();
 #ifdef NKRO_ENABLE
@@ -43,8 +34,7 @@ void send_keyboard_report()
 
 void send_6kro_report()
 {
-    keyboard_report.mods = real_mods & mods_mask;
-    keyboard_report.mods |= weak_mods;
+    keyboard_report.mods = real_mods;
 
     if (memcmp(&keyboard_report, &last_report, sizeof(report_keyboard_t)) != 0) {
         for (uint8_t i = 0; i < KEYBOARD_REPORT_SIZE; i++) {
@@ -58,8 +48,7 @@ void send_6kro_report()
 void send_nkro_report()
 {
     nkro_report.report_id = REPORT_ID_NKRO; // TODO: set this more permanently
-    nkro_report.mods      = real_mods & mods_mask;
-    nkro_report.mods |= weak_mods;
+    nkro_report.mods      = real_mods;
 
     if (memcmp(&nkro_report, &last_nkro_report, sizeof(report_nkro_t)) != 0) {
         for (uint8_t i = 0; i < NKRO_REPORT_SIZE; i++) {
@@ -69,66 +58,6 @@ void send_nkro_report()
     }
 }
 #endif
-
-uint8_t has_anykey(report_keyboard_t *keyboard_report)
-{
-    uint8_t  cnt = 0;
-    uint8_t *p   = keyboard_report->keys;
-    uint8_t  lp  = sizeof(keyboard_report->keys);
-
-#ifdef NKRO_ENABLE
-    if (host_nkro_active()) {
-        p  = nkro_report.bits;
-        lp = sizeof(nkro_report.bits);
-    }
-#endif
-
-    while (lp--) {
-        if (*p++) {
-            cnt++;
-        }
-    }
-
-    return cnt;
-}
-
-uint8_t get_first_key(report_keyboard_t *keyboard_report)
-{
-#ifdef NKRO_ENABLE
-    if (host_nkro_active()) {
-        uint8_t i = 0;
-        for (; i < NKRO_REPORT_BITS && !nkro_report.bits[i]; i++)
-            ;
-        return i << 3 | biton(nkro_report.bits[i]);
-    }
-#endif
-    return keyboard_report->keys[0];
-}
-
-bool is_key_pressed(report_keyboard_t *keyboard_report, uint8_t key)
-{
-    if (key == KC_NO) {
-        return false;
-    }
-
-#ifdef NKRO_ENABLE
-    if (host_nkro_active()) {
-        if ((key >> 3) < NKRO_REPORT_BITS) {
-            return nkro_report.bits[key >> 3] & 1 << (key & 7);
-        } else {
-            return false;
-        }
-    }
-#endif
-
-    for (int i = 0; i < KEYBOARD_REPORT_KEYS; i++) {
-        if (keyboard_report->keys[i] == key) {
-            return true;
-        }
-    }
-
-    return false;
-}
 
 void add_key_byte(report_keyboard_t *keyboard_report, uint8_t code)
 {
@@ -214,10 +143,16 @@ void clear_keys_from_report(report_keyboard_t *keyboard_report)
     memset(keyboard_report->keys, 0, sizeof(keyboard_report->keys));
 }
 
+#ifndef VIAL_ENABLE
 uint8_t get_mods(void)
 {
     return real_mods;
 }
+void clear_mods(void)
+{
+    real_mods = 0;
+}
+#endif
 void add_mods(uint8_t mods)
 {
     real_mods |= mods;
@@ -229,41 +164,6 @@ void del_mods(uint8_t mods)
 void set_mods(uint8_t mods)
 {
     real_mods = mods;
-}
-void clear_mods(void)
-{
-    real_mods = 0;
-}
-
-uint8_t get_weak_mods(void)
-{
-    return weak_mods;
-}
-void set_weak_mods(uint8_t mods)
-{
-    weak_mods = mods;
-}
-void set_mods_mask(uint8_t mask)
-{
-    mods_mask = mask;
-}
-
-uint8_t biton(uint8_t bits)
-{
-    uint8_t n = 0;
-    if (bits >> 4) {
-        bits >>= 4;
-        n += 4;
-    }
-    if (bits >> 2) {
-        bits >>= 2;
-        n += 2;
-    }
-    if (bits >> 1) {
-        bits >>= 1;
-        n += 1;
-    }
-    return n;
 }
 
 uint16_t keycode_to_system(uint8_t key)

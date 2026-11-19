@@ -1543,6 +1543,7 @@ void action_task(void)
     }
 }
 
+#ifndef __SDCC
 bool action_idle(void)
 {
     if (tapping || wb_count || osm_mods || osl_layer != 0xFFu
@@ -1574,3 +1575,4 @@ bool action_idle(void)
     }
     return true;
 }
+#endif
