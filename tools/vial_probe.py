@@ -161,8 +161,11 @@ def main():
             ids += page
             cur = page[-1]
         # Off (0) is never listed (vial-qmk pages ids > 0; the GUI adds Off itself).
-        good &= check(len(ids) == 28 and ids == sorted(ids) and 0 not in ids,
+        good &= check(len(ids) == 29 and 1 in ids and ids == sorted(ids) and 0 not in ids,
                       'VialRGB effects ({}): {}'.format(len(ids), ids))
+        r = d.xfer(0x08, 0x43)
+        nleds = r[2] | (r[3] << 8)
+        good &= check(nleds == 80, 'VialRGB LEDs = {}'.format(nleds))
         r = d.xfer(0x08, 0x41)
         mode, speed, h, s, v = r[2] | r[3] << 8, r[4], r[5], r[6], r[7]
         good &= check(mode == 0 or mode in ids, 'VialRGB mode = {}, speed {}, hsv ({}, {}, {})'.format(mode, speed, h, s, v))

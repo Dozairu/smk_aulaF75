@@ -19,5 +19,8 @@ void indicators_validate_settings();
 
 #ifdef SIGNALRGB_ENABLE
 void indicators_direct_set(uint8_t start_idx, uint8_t count, const __xdata uint8_t *rgb);
+void indicators_direct_vialrgb_enter(void);
+void indicators_direct_vialrgb_set(uint8_t row, uint8_t col, uint8_t r, uint8_t g, uint8_t b);
+bool indicators_direct_is_vialrgb(void);
 void indicators_direct_clear(void);
 #endif

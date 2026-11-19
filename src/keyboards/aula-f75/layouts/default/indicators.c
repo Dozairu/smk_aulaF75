@@ -817,12 +817,7 @@ static bool rf_diag_paint(void)
     }
     return true;
 }
-#else
-/* -Drf_diag=false. A flag that is never set rather than a literal 0: SDCC
- * rejects the render gates below if a term is a compile-time constant
- * (error 110, "conditional flow changed by optimizer"). */
-static __bit rf_diag_on;
-#endif
+#endif /* !NO_RF_DIAG */
 
 /* --------------------------------------------------- battery level overlay
  *
@@ -909,11 +904,6 @@ static const __code uint8_t macro_heart[MACRO_HEART_STEPS] = {
 
 static __xdata uint8_t macro_beat;
 static __bit           macro_was_on;
-#else
-/* -Dautotype=false: as rf_diag_on above, a never-set flag, not a literal 0. */
-static __bit macro_never;
-#    undef aula_macro_active
-#    define aula_macro_active() macro_never
 #endif
 
 /* ------------------------------------------------------------------ Caps Lock
@@ -1015,9 +1005,10 @@ static bool confirm_paint(void)
 
 #ifdef SIGNALRGB_ENABLE
 #    define DIRECT_RGB_TIMEOUT_FRAMES 480u /* ~3 s at ~6.2 ms/frame */
-static __xdata uint8_t direct_rgb[LED_ROWS][LED_COLS][3];
-static volatile bool   direct_active;
+static __xdata uint8_t   direct_rgb[LED_ROWS][LED_COLS][3];
+static volatile bool     direct_active;
 static volatile uint16_t direct_timeout;
+static __bit             direct_vialrgb;
 #endif
 #ifdef RF_EUART0
 static __xdata uint8_t pair_blink_cnt;
@@ -1415,7 +1406,9 @@ void indicators_post_update(void)
 {
     /* Called at the 400 us Bresenham sub-tick from tick_dispatch(). */
     aula_encoder_sample();
+#ifndef NO_AUTOTYPE
     aula_macro_tick();
+#endif
 #ifdef RF_EUART0
     rf_tick();
 #endif
@@ -1456,7 +1449,7 @@ void indicators_render(void)
     if (++react_col >= LED_COLS) {
         react_col = 0;
 #    ifdef SIGNALRGB_ENABLE
-        if (direct_active) {
+        if (direct_active && !direct_vialrgb) {
             if (direct_timeout != 0u) {
                 direct_timeout--;
             }
@@ -1474,17 +1467,26 @@ void indicators_render(void)
         }
         prev_link_fx = keyboard_state.rf_link;
     }
-    const bool active = aula_macro_active() || caps_on || aula_status_lit() || confirm_step != 0 ||
-                        rf_diag_on || bat_show_sweeps || flourish_step != 0 ||
+    const bool active = caps_on || aula_status_lit() || confirm_step != 0 ||
+                        bat_show_sweeps || flourish_step != 0 ||
                         (rf_bt_pair_slot != 0 && user_settings.battery_indicator_on != 0) ||
                         user_settings.led_effect < AULA_FX_OFF
+#        ifndef NO_AUTOTYPE
+                        || aula_macro_active()
+#        endif
+#        ifndef NO_RF_DIAG
+                        || rf_diag_on
+#        endif
 #        ifdef SIGNALRGB_ENABLE
                         || direct_active
 #        endif
         ;
 #    else
-    const bool active = aula_macro_active() || caps_on || aula_status_lit() || confirm_step != 0 ||
+    const bool active = caps_on || aula_status_lit() || confirm_step != 0 ||
                         user_settings.led_effect < AULA_FX_OFF
+#        ifndef NO_AUTOTYPE
+                        || aula_macro_active()
+#        endif
 #        ifdef SIGNALRGB_ENABLE
                         || direct_active
 #        endif
@@ -1507,7 +1509,9 @@ bool indicators_update_step(keyboard_state_t *keyboard, uint8_t current_step)
      * ~400 us -- and that is the same rate at which the factory firmware
      * samples its encoder from its PWM ISR. */
     aula_encoder_sample();
+#ifndef NO_AUTOTYPE
     aula_macro_tick();
+#endif
 
 #ifndef NO_AUTOTYPE
     if (aula_macro_active()) {
@@ -1532,17 +1536,26 @@ bool indicators_update_step(keyboard_state_t *keyboard, uint8_t current_step)
         }
         prev_link_fx = keyboard->rf_link;
     }
-    if (aula_macro_active() || caps_on || aula_status_lit() || confirm_step != 0 ||
-        rf_diag_on || bat_show_sweeps || flourish_step != 0 ||
+    if (caps_on || aula_status_lit() || confirm_step != 0 ||
+        bat_show_sweeps || flourish_step != 0 ||
         (rf_bt_pair_slot != 0 && user_settings.battery_indicator_on != 0) ||
         user_settings.led_effect < AULA_FX_OFF
+#    ifndef NO_AUTOTYPE
+        || aula_macro_active()
+#    endif
+#    ifndef NO_RF_DIAG
+        || rf_diag_on
+#    endif
 #    ifdef SIGNALRGB_ENABLE
         || direct_active
 #    endif
     ) {
 #else
-    if (aula_macro_active() || caps_on || aula_status_lit() || confirm_step != 0 ||
+    if (caps_on || aula_status_lit() || confirm_step != 0 ||
         user_settings.led_effect < AULA_FX_OFF
+#    ifndef NO_AUTOTYPE
+        || aula_macro_active()
+#    endif
 #    ifdef SIGNALRGB_ENABLE
         || direct_active
 #    endif
@@ -1560,7 +1573,7 @@ bool indicators_update_step(keyboard_state_t *keyboard, uint8_t current_step)
     if (++led_col >= LED_COLS) {
         led_col = 0;
 #ifdef SIGNALRGB_ENABLE
-        if (direct_active) {
+        if (direct_active && !direct_vialrgb) {
             if (direct_timeout != 0u) {
                 direct_timeout--;
             }
@@ -1675,7 +1688,8 @@ void indicators_next_color(void)
 void indicators_next_effect(void)
 {
 #ifdef SIGNALRGB_ENABLE
-    direct_active = false;
+    direct_vialrgb = 0;
+    direct_active  = false;
 #endif
     if (++user_settings.led_effect > AULA_FX_OFF) {
         user_settings.led_effect = 0;
@@ -1688,7 +1702,8 @@ void indicators_next_effect(void)
 void indicators_prev_effect(void)
 {
 #ifdef SIGNALRGB_ENABLE
-    direct_active = false;
+    direct_vialrgb = 0;
+    direct_active  = false;
 #endif
     if (user_settings.led_effect == 0) {
         user_settings.led_effect = AULA_FX_OFF;
@@ -1701,31 +1716,88 @@ void indicators_prev_effect(void)
 }
 
 #ifdef SIGNALRGB_ENABLE
+static void direct_write_cell(uint8_t row, uint8_t col, uint8_t r, uint8_t g, uint8_t b)
+{
+    if (row >= LED_ROWS || col >= LED_COLS) {
+        return;
+    }
+    if (aula_fx_key_id(col, row) == AULA_FX_NO_KEY ||
+        (row == CAPS_ROW && col == CAPS_COL) ||
+        (row == 3u && col == 12u) || (row == 4u && col == 12u) || (row == 5u && col == 10u)) {
+        return;
+    }
+    direct_rgb[row][col][0] = r;
+    direct_rgb[row][col][1] = g;
+    direct_rgb[row][col][2] = b;
+    /* Update duty_cache immediately so direct RGB runs at full 333 Hz PWM
+     * refresh instead of waiting 36 ms for led_regen_one(). */
+    if (confirm_step == 0u
+#    ifndef NO_AUTOTYPE
+        && !aula_macro_active()
+#    endif
+#    ifdef RF_EUART0
+        && flourish_step == 0u
+#        ifndef NO_RF_DIAG
+        && !(rf_diag_on && row == 1u && col >= 1u && col <= RF_DIAG_FIELDS)
+#        endif
+        && !(bat_show_sweeps && row == 1u && col >= 1u && col <= 10u)
+#    endif
+    ) {
+        aula_rgb_set(row, col, r, g, b);
+    }
+}
+
 void indicators_direct_set(uint8_t start_idx, uint8_t count, const __xdata uint8_t *rgb)
 {
-    uint8_t i;
-
-    for (i = 0u; i < count; i++) {
+    for (uint8_t i = 0u; i < count; i++) {
         const uint8_t idx = (uint8_t)(start_idx + i);
         if (idx >= (uint8_t)(LED_ROWS * LED_COLS)) {
             break;
         }
-        const uint8_t col = (uint8_t)(idx / LED_ROWS);
-        const uint8_t row = (uint8_t)(idx % LED_ROWS);
-        direct_rgb[row][col][0] = rgb[0];
-        direct_rgb[row][col][1] = rgb[1];
-        direct_rgb[row][col][2] = rgb[2];
+        direct_write_cell((uint8_t)(idx % LED_ROWS), (uint8_t)(idx / LED_ROWS), rgb[0], rgb[1], rgb[2]);
         rgb += 3;
     }
+    direct_vialrgb = 0;
     direct_timeout = DIRECT_RGB_TIMEOUT_FRAMES;
     direct_active  = true;
 }
 
+void indicators_direct_vialrgb_enter(void)
+{
+    if (!direct_vialrgb) {
+        for (uint8_t r = 0u; r < LED_ROWS; r++) {
+            for (uint8_t c = 0u; c < LED_COLS; c++) {
+                direct_rgb[r][c][0] = 0u;
+                direct_rgb[r][c][1] = 0u;
+                direct_rgb[r][c][2] = 0u;
+            }
+        }
+        aula_rgb_clear();
+    }
+    direct_vialrgb = 1;
+    direct_timeout = 0u;
+    direct_active  = true;
+}
+
+void indicators_direct_vialrgb_set(uint8_t row, uint8_t col, uint8_t r, uint8_t g, uint8_t b)
+{
+    direct_write_cell(row, col, r, g, b);
+    direct_vialrgb = 1;
+    direct_timeout = 0u;
+    direct_active  = true;
+}
+
+bool indicators_direct_is_vialrgb(void)
+{
+    return direct_active && direct_vialrgb;
+}
+
 void indicators_direct_clear(void)
 {
-    if (!direct_active) {
+    if (!direct_active && !direct_vialrgb) {
         return;
     }
+    direct_vialrgb = 0;
     direct_active  = false;
     direct_timeout = 0u;
     aula_rgb_clear();
