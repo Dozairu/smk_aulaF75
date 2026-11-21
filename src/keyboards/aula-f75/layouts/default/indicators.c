@@ -47,8 +47,7 @@
 #define LED_COLS MATRIX_COLS
 
 #include LED_GEOMETRY_HEADER
-_Static_assert(LED_GEOMETRY_ROWS == LED_ROWS && LED_GEOMETRY_COLS == LED_COLS,
-               "generated LED geometry size does not match the key matrix");
+_Static_assert(LED_GEOMETRY_ROWS == LED_ROWS && LED_GEOMETRY_COLS == LED_COLS, "generated LED geometry size does not match the key matrix");
 
 /*
  * PWM clock divider: the low three bits of `PWM00CON`, which the factory
@@ -85,17 +84,17 @@ static const __code uint8_t led_speeds[] = {1, 2, 4, 8, 16};
  * and intensity, and intensity decays from frame to frame. It is the F75's
  * signature effect, and the only one that needs to know WHICH key was pressed.
  */
-#define AULA_FX_REACTIVE  ((uint8_t)(FX_COUNT + 0)) /*  4  0x64F1 */
-#define AULA_FX_RAIN      ((uint8_t)(FX_COUNT + 1)) /*  5  0x9B2B */
-#define AULA_FX_TWINKLE   ((uint8_t)(FX_COUNT + 2)) /*  6  0xAC1C -> 0x4EA9 */
-#define AULA_FX_SNAKE     ((uint8_t)(FX_COUNT + 3)) /*  7  0x8DDF */
-#define AULA_FX_RIPPLE    ((uint8_t)(FX_COUNT + 4)) /*  8  0x746A / 0x1D8D */
-#define AULA_FX_LAKE      ((uint8_t)(FX_COUNT + 5)) /*  9  ORIGINAL, no factory equivalent */
-#define AULA_FX_KEYWAVE   ((uint8_t)(FX_COUNT + 6)) /* 10  0x82A5 */
-#define AULA_FX_VRAINBOW  ((uint8_t)(FX_COUNT + 7)) /* 11  0x9659 */
-#define AULA_FX_GAMING    ((uint8_t)(FX_COUNT + 8)) /* 12  0x1DAB -> 0x95A4 */
-#define AULA_FX_SHIMMER   ((uint8_t)(FX_COUNT + 9)) /* 13  0x60C9, factory effect 6 */
-#define AULA_FX_OFF       ((uint8_t)(FX_COUNT + 10))/* 14 */
+#define AULA_FX_REACTIVE ((uint8_t)(FX_COUNT + 0))  /*  4  0x64F1 */
+#define AULA_FX_RAIN     ((uint8_t)(FX_COUNT + 1))  /*  5  0x9B2B */
+#define AULA_FX_TWINKLE  ((uint8_t)(FX_COUNT + 2))  /*  6  0xAC1C -> 0x4EA9 */
+#define AULA_FX_SNAKE    ((uint8_t)(FX_COUNT + 3))  /*  7  0x8DDF */
+#define AULA_FX_RIPPLE   ((uint8_t)(FX_COUNT + 4))  /*  8  0x746A / 0x1D8D */
+#define AULA_FX_LAKE     ((uint8_t)(FX_COUNT + 5))  /*  9  ORIGINAL, no factory equivalent */
+#define AULA_FX_KEYWAVE  ((uint8_t)(FX_COUNT + 6))  /* 10  0x82A5 */
+#define AULA_FX_VRAINBOW ((uint8_t)(FX_COUNT + 7))  /* 11  0x9659 */
+#define AULA_FX_GAMING   ((uint8_t)(FX_COUNT + 8))  /* 12  0x1DAB -> 0x95A4 */
+#define AULA_FX_SHIMMER  ((uint8_t)(FX_COUNT + 9))  /* 13  0x60C9, factory effect 6 */
+#define AULA_FX_OFF      ((uint8_t)(FX_COUNT + 10)) /* 14 */
 
 /*
  * The first five in this list (REACTIVE through RIPPLE) share the SAME
@@ -139,11 +138,11 @@ static const __code uint8_t led_speeds[] = {1, 2, 4, 8, 16};
 #define SPARK_DECAY ((uint8_t)8)
 
 /* Fade step per frame by Effect Speed. The frame gate cannot go faster than one sweep (38 ms) and the reactive periods are all below that, so speed must act on the decay step. Index 2 = previous fixed value. */
-static const __code uint8_t spark_decay_react[5] = { 3, 5, 8, 14, 24 };
-static const __code uint8_t spark_decay_lake[5]  = { 8, 14, 24, 36, 48 };
-static __xdata uint8_t spark_hue[LED_COLS][LED_ROWS];
-static __xdata uint8_t spark_val[LED_COLS][LED_ROWS];
-static __xdata uint8_t spark_prev[LED_COLS];
+static const __code uint8_t spark_decay_react[5] = {3, 5, 8, 14, 24};
+static const __code uint8_t spark_decay_lake[5]  = {8, 14, 24, 36, 48};
+static __xdata uint8_t      spark_hue[LED_COLS][LED_ROWS];
+static __xdata uint8_t      spark_val[LED_COLS][LED_ROWS];
+static __xdata uint8_t      spark_prev[LED_COLS];
 
 /*
  * Must be cleared along with the framebuffer on an effect change: otherwise
@@ -237,8 +236,8 @@ static __xdata uint8_t drop_row[LAKE_DROPS];
 static __xdata uint8_t drop_age[LAKE_DROPS]; /* 0 = free slot */
 static __xdata uint8_t drop_hue[LAKE_DROPS];
 
-static uint8_t         fx_ms_acc;    /* milliseconds accumulated since the last frame */
-static __bit           spark_decay_due; /* elapsed frame authorizes decay */
+static uint8_t fx_ms_acc;       /* milliseconds accumulated since the last frame */
+static __bit   spark_decay_due; /* elapsed frame authorizes decay */
 
 /* Lights a key at full brightness, if the grid has a key at that position. */
 static void spark_seed(uint8_t col, uint8_t row, uint8_t hue)
@@ -363,8 +362,7 @@ static void ripple_step(void)
         if (id == AULA_FX_NO_KEY) {
             continue;
         }
-        spark_seed((uint8_t)(id >> 3), (uint8_t)(id & 7u),
-                   (uint8_t)(fx_phase192 + (uint8_t)(ripple_ring * 13u)));
+        spark_seed((uint8_t)(id >> 3), (uint8_t)(id & 7u), (uint8_t)(fx_phase192 + (uint8_t)(ripple_ring * 13u)));
     }
     if (++ripple_ring >= AULA_FX_RINGS) {
         ripple_ring = 0;
@@ -421,12 +419,12 @@ static void fx_reset(void)
     for (col = 0; col < LED_COLS; col++) {
         rain_row[col] = 0xff;
     }
-    snake_col    = 0;
-    snake_row    = 0;
-    snake_right  = 1;
-    snake_down   = 1;
-    ripple_ring     = 0;
-    fx_ms_acc       = 0;
+    snake_col   = 0;
+    snake_row   = 0;
+    snake_right = 1;
+    snake_down  = 1;
+    ripple_ring = 0;
+    fx_ms_acc   = 0;
     for (col = 0; col < LAKE_DROPS; col++) {
         drop_age[col] = 0;
     }
@@ -439,7 +437,7 @@ static void fx_reset(void)
      * line, returning to the wave would resume wherever another effect left
      * the shared counter, instead of starting from the factory phase field.
      */
-    led_phase = 0;
+    led_phase   = 0;
     fx_phase192 = 0;
 #ifdef MATRIX_INTERLEAVED_SCAN
     const bool et2      = ET2;
@@ -482,20 +480,20 @@ static void fx_reset(void)
  * marked as such. The remaining ten are exact bytes from the dump.
  */
 static const __code uint8_t fx_period_ms[AULA_FX_OFF][LED_SPEED_LEVELS] = {
-    { 10,  10,  10,  10,  10}, /* FX_RADIAL     -- fixed period from 0x1B61    */
-    { 45,  35,  25,  15,   5}, /* FX_HORIZONTAL -- CODE 0x2FF3                 */
-    { 30,  24,  18,  12,   6}, /* FX_VERTICAL   -- CODE 0x3016                 */
-    { 45,  35,  25,  15,   6}, /* FX_SOLID      -- CODE 0x2FF8                 */
-    { 32,  24,  18,  16,   6}, /* REACTIVE      -- CODE 0x301B                 */
-    {120, 100,  80,  50,  20}, /* RAIN          -- CODE 0x2FE9                 */
-    { 20,  15,  10,   5,   1}, /* TWINKLE       -- CODE 0x3002, choice         */
-    {120,  90,  70,  45,   1}, /* SNAKE         -- CODE 0x3011                 */
-    { 50,  40,  30,  20,   8}, /* RIPPLE        -- CODE 0x302F                 */
-    { 50,  40,  30,  20,   8}, /* LAKE          -- original: ripple table      */
-    { 32,  24,  16,   8,   1}, /* KEYWAVE       -- CODE 0x3025                 */
-    { 46,  36,  26,  16,   6}, /* VRAINBOW      -- CODE 0x302A                 */
-    { 45,  35,  25,  15,   6}, /* GAMING        -- static image, choice        */
-    { 20,  15,  10,   5,   1}, /* SHIMMER       -- CODE 0x3002                 */
+    {10, 10, 10, 10, 10},   /* FX_RADIAL     -- fixed period from 0x1B61    */
+    {45, 35, 25, 15, 5},    /* FX_HORIZONTAL -- CODE 0x2FF3                 */
+    {30, 24, 18, 12, 6},    /* FX_VERTICAL   -- CODE 0x3016                 */
+    {45, 35, 25, 15, 6},    /* FX_SOLID      -- CODE 0x2FF8                 */
+    {32, 24, 18, 16, 6},    /* REACTIVE      -- CODE 0x301B                 */
+    {120, 100, 80, 50, 20}, /* RAIN          -- CODE 0x2FE9                 */
+    {20, 15, 10, 5, 1},     /* TWINKLE       -- CODE 0x3002, choice         */
+    {120, 90, 70, 45, 1},   /* SNAKE         -- CODE 0x3011                 */
+    {50, 40, 30, 20, 8},    /* RIPPLE        -- CODE 0x302F                 */
+    {50, 40, 30, 20, 8},    /* LAKE          -- original: ripple table      */
+    {32, 24, 16, 8, 1},     /* KEYWAVE       -- CODE 0x3025                 */
+    {46, 36, 26, 16, 6},    /* VRAINBOW      -- CODE 0x302A                 */
+    {45, 35, 25, 15, 6},    /* GAMING        -- static image, choice        */
+    {20, 15, 10, 5, 1},     /* SHIMMER       -- CODE 0x3002                 */
 };
 
 /*
@@ -564,10 +562,18 @@ static bool fx_frame_advance(void)
     }
 
     switch (user_settings.led_effect) {
-        case AULA_FX_RAIN:      rain_step();     break;
-        case AULA_FX_TWINKLE:   twinkle_step();  break;
-        case AULA_FX_SNAKE:     snake_step();    break;
-        case AULA_FX_RIPPLE:    ripple_step();   break;
+        case AULA_FX_RAIN:
+            rain_step();
+            break;
+        case AULA_FX_TWINKLE:
+            twinkle_step();
+            break;
+        case AULA_FX_SNAKE:
+            snake_step();
+            break;
+        case AULA_FX_RIPPLE:
+            ripple_step();
+            break;
         case AULA_FX_LAKE: {
             uint8_t i;
 
@@ -578,14 +584,14 @@ static bool fx_frame_advance(void)
             }
             break;
         }
-        default:                                 break;
+        default:
+            break;
     }
     return true;
 }
 
 #define LED_BRIGHTNESS_DEFAULT (LED_BRIGHTNESS_LEVELS - 1)
 #define LED_SPEED_DEFAULT      2
-
 
 /* ------------------------------------------------------------------- output */
 
@@ -776,7 +782,7 @@ static void fx_color(uint8_t wheel_index, uint8_t out[3])
  */
 #ifdef RF_EUART0
 
-#ifndef NO_RF_DIAG
+#    ifndef NO_RF_DIAG
 static __bit rf_diag_on;
 
 void indicators_toggle_rf_diag(void)
@@ -817,7 +823,7 @@ static bool rf_diag_paint(void)
     }
     return true;
 }
-#endif /* !NO_RF_DIAG */
+#    endif /* !NO_RF_DIAG */
 
 /* --------------------------------------------------- battery level overlay
  *
@@ -827,7 +833,7 @@ static bool rf_diag_paint(void)
  * dimmed. The sweep counter is only a safety net (~9.7 s at ~37.9 ms per
  * sweep) in case the release event is lost, e.g. Fn let go first.
  */
-#define BAT_SHOW_SWEEPS 255u
+#    define BAT_SHOW_SWEEPS 255u
 
 static volatile __xdata uint8_t bat_show_sweeps;
 
@@ -893,13 +899,13 @@ static bool bat_show_paint(void)
  * with brightness at zero and effects turned off.
  */
 #ifndef NO_AUTOTYPE
-#define MACRO_HEART_STEPS 24
+#    define MACRO_HEART_STEPS 24
 
 static const __code uint8_t macro_heart[MACRO_HEART_STEPS] = {
-    170, 140,  96,  60,  36,  24, /* systole: sharp attack, fast decay */
-    120,  92,  62,  40,  26,  18, /* diastole: softer, same profile    */
-     14,  12,  12,  12,  12,  12, /* rest: ~455 ms of dim glow         */
-     12,  12,  12,  12,  12,  12,
+    170, 140, 96, 60, 36, 24, /* systole: sharp attack, fast decay */
+    120, 92,  62, 40, 26, 18, /* diastole: softer, same profile    */
+    14,  12,  12, 12, 12, 12, /* rest: ~455 ms of dim glow         */
+    12,  12,  12, 12, 12, 12,
 };
 
 static __xdata uint8_t macro_beat;
@@ -992,8 +998,7 @@ void indicators_confirm(uint8_t row, uint8_t col)
 
 static bool confirm_paint(void)
 {
-    if (confirm_step == 0 ||
-        (confirm_row != CONFIRM_ALL && (regen_row != confirm_row || regen_col != confirm_col))) {
+    if (confirm_step == 0 || (confirm_row != CONFIRM_ALL && (regen_row != confirm_row || regen_col != confirm_col))) {
         return false;
     }
     /* Counting down 24..1: lit while bit 2 of (step - 1) is set, i.e. three
@@ -1058,18 +1063,16 @@ static void led_regen_one(void)
     }
 
 #ifdef RF_EUART0
-#ifndef NO_RF_DIAG
+#    ifndef NO_RF_DIAG
     if (rf_diag_on && rf_diag_paint()) {
         goto advance; /* cell claimed by the diagnostic overlay */
     }
-#endif
+#    endif
     if (bat_show_sweeps && bat_show_paint()) {
         goto advance; /* cell claimed by the battery overlay */
     }
-    if (rf_bt_pair_slot != 0 && user_settings.battery_indicator_on != 0 &&
-        regen_row == 1 && regen_col == rf_bt_pair_slot) {
-        const bool on = rf_bt_pair_fast ? ((pair_blink_cnt & 0x04u) == 0)
-                                        : ((pair_blink_cnt & 0x08u) == 0);
+    if (rf_bt_pair_slot != 0 && user_settings.battery_indicator_on != 0 && regen_row == 1 && regen_col == rf_bt_pair_slot) {
+        const bool on = rf_bt_pair_fast ? ((pair_blink_cnt & 0x04u) == 0) : ((pair_blink_cnt & 0x08u) == 0);
         aula_rgb_set(regen_row, regen_col, on ? 255u : 0u, on ? 255u : 0u, on ? 255u : 0u);
         goto advance;
     }
@@ -1081,10 +1084,7 @@ static void led_regen_one(void)
              * already holds the new link; the old code asked the effect
              * palette for a "mode" of col*16 + row*8, which is >= 7 for all
              * but a few cells and so always fell back to red.) */
-            aula_rgb_set(regen_row, regen_col,
-                         (prev_link_fx == RF_LINK_WIRED) ? 255u : 0u,
-                         (prev_link_fx == RF_LINK_24G) ? 255u : 0u,
-                         (prev_link_fx == RF_LINK_BT) ? 255u : 0u);
+            aula_rgb_set(regen_row, regen_col, (prev_link_fx == RF_LINK_WIRED) ? 255u : 0u, (prev_link_fx == RF_LINK_24G) ? 255u : 0u, (prev_link_fx == RF_LINK_BT) ? 255u : 0u);
         } else {
             aula_rgb_set(regen_row, regen_col, 0, 0, 0);
         }
@@ -1108,10 +1108,7 @@ static void led_regen_one(void)
 
 #ifdef SIGNALRGB_ENABLE
     if (direct_active) {
-        aula_rgb_set(regen_row, regen_col,
-                     direct_rgb[regen_row][regen_col][0],
-                     direct_rgb[regen_row][regen_col][1],
-                     direct_rgb[regen_row][regen_col][2]);
+        aula_rgb_set(regen_row, regen_col, direct_rgb[regen_row][regen_col][0], direct_rgb[regen_row][regen_col][1], direct_rgb[regen_row][regen_col][2]);
         goto advance;
     }
 #endif
@@ -1126,8 +1123,7 @@ static void led_regen_one(void)
          * pass index 15 to `led_effect_index()`, whose enum stops at 3.
          */
         aula_rgb_set(regen_row, regen_col, 0, 0, 0);
-    } else if (user_settings.led_effect >= AULA_FX_REACTIVE &&
-        user_settings.led_effect <= AULA_FX_LAKE) {
+    } else if (user_settings.led_effect >= AULA_FX_REACTIVE && user_settings.led_effect <= AULA_FX_LAKE) {
         /*
          * Wavefront check for the lake effect: is this cell at the exact
          * distance reached by one of the drops? Four comparisons, once per
@@ -1137,10 +1133,8 @@ static void led_regen_one(void)
             uint8_t i;
 
             for (i = 0; i < LAKE_DROPS; i++) {
-                if (drop_age[i] != 0 &&
-                    lake_dist(regen_col, regen_row, drop_col[i], drop_row[i]) == drop_age[i]) {
-                    spark_seed(regen_col, regen_row,
-                               (uint8_t)(drop_hue[i] + (uint8_t)(drop_age[i] * LAKE_HUE_STEP)));
+                if (drop_age[i] != 0 && lake_dist(regen_col, regen_row, drop_col[i], drop_row[i]) == drop_age[i]) {
+                    spark_seed(regen_col, regen_row, (uint8_t)(drop_hue[i] + (uint8_t)(drop_age[i] * LAKE_HUE_STEP)));
                 }
             }
         }
@@ -1155,8 +1149,7 @@ static void led_regen_one(void)
             const uint8_t k = led_scale(val, gain);
 
             fx_color(spark_hue[regen_col][regen_row], rgb);
-            aula_rgb_set(regen_row, regen_col, led_scale(rgb[0], k), led_scale(rgb[1], k),
-                         led_scale(rgb[2], k));
+            aula_rgb_set(regen_row, regen_col, led_scale(rgb[0], k), led_scale(rgb[1], k), led_scale(rgb[2], k));
             if (spark_decay_due) {
                 /*
                  * The lake decays THREE TIMES faster than the reactive engine.
@@ -1166,8 +1159,7 @@ static void led_regen_one(void)
                  * At 24, the wake is about ten frames wide -- a ring with a
                  * trailing tail. This is a deliberate CHOICE for this effect.
                  */
-                const uint8_t decay =
-                    (user_settings.led_effect == AULA_FX_LAKE) ? spark_decay_lake[user_settings.led_speed] : spark_decay_react[user_settings.led_speed];
+                const uint8_t decay = (user_settings.led_effect == AULA_FX_LAKE) ? spark_decay_lake[user_settings.led_speed] : spark_decay_react[user_settings.led_speed];
 
                 spark_val[regen_col][regen_row] = (val > decay) ? (uint8_t)(val - decay) : 0;
             }
@@ -1179,12 +1171,10 @@ static void led_regen_one(void)
          * frame. Six rows x 25 cover 150 of the 192 entries, spanning nearly a
          * full rainbow from top to bottom of the keyboard.
          */
-        const uint8_t hue = (uint8_t)((fx_phase192 + (uint8_t)(regen_row * 25u)) %
-                                      AULA_RGB_WHEEL_SIZE);
+        const uint8_t hue = (uint8_t)((fx_phase192 + (uint8_t)(regen_row * 25u)) % AULA_RGB_WHEEL_SIZE);
 
         fx_color(hue, rgb);
-        aula_rgb_set(regen_row, regen_col, led_scale(rgb[0], gain), led_scale(rgb[1], gain),
-                     led_scale(rgb[2], gain));
+        aula_rgb_set(regen_row, regen_col, led_scale(rgb[0], gain), led_scale(rgb[1], gain), led_scale(rgb[2], gain));
     } else if (user_settings.led_effect == AULA_FX_KEYWAVE) {
         /*
          * Wave over the 128-entry palette -- 0x82A5, now fully transcribed:
@@ -1207,8 +1197,7 @@ static void led_regen_one(void)
         } else {
             aula_fx_color(user_settings.ul_effect, rgb);
         }
-        aula_rgb_set(regen_row, regen_col, led_scale(rgb[0], gain), led_scale(rgb[1], gain),
-                     led_scale(rgb[2], gain));
+        aula_rgb_set(regen_row, regen_col, led_scale(rgb[0], gain), led_scale(rgb[1], gain), led_scale(rgb[2], gain));
     } else if (user_settings.led_effect == AULA_FX_GAMING) {
         /*
          * Static image from CODE 0xCAFC: Esc, W A S D, and the arrow cluster.
@@ -1221,8 +1210,7 @@ static void led_regen_one(void)
          */
         if (aula_fx_gaming(regen_col) & (uint8_t)(1u << regen_row)) {
             fx_color(fx_phase192, rgb);
-            aula_rgb_set(regen_row, regen_col, led_scale(rgb[0], gain), led_scale(rgb[1], gain),
-                         led_scale(rgb[2], gain));
+            aula_rgb_set(regen_row, regen_col, led_scale(rgb[0], gain), led_scale(rgb[1], gain), led_scale(rgb[2], gain));
         } else {
             aula_rgb_set(regen_row, regen_col, 0, 0, 0);
         }
@@ -1249,16 +1237,13 @@ static void led_regen_one(void)
             const uint16_t p = (uint16_t)aula_fx_shimmer_phase(regen_col, regen_row, 1) + fx_phase192;
 
             aula_rgb_wheel((uint8_t)(p % AULA_RGB_WHEEL_SIZE), rgb);
-            aula_rgb_set(regen_row, regen_col, led_scale(rgb[0], gain), led_scale(rgb[1], gain),
-                         led_scale(rgb[2], gain));
+            aula_rgb_set(regen_row, regen_col, led_scale(rgb[0], gain), led_scale(rgb[1], gain), led_scale(rgb[2], gain));
         } else {
             const uint16_t p = (uint16_t)aula_fx_shimmer_phase(regen_col, regen_row, 0) + fx_phase192;
             const uint8_t  k = aula_fx_breath((uint8_t)(p % AULA_FX_BREATH_SIZE));
 
             aula_fx_color(user_settings.ul_effect, rgb);
-            aula_rgb_set(regen_row, regen_col, led_scale(led_scale(rgb[0], k), gain),
-                         led_scale(led_scale(rgb[1], k), gain),
-                         led_scale(led_scale(rgb[2], k), gain));
+            aula_rgb_set(regen_row, regen_col, led_scale(led_scale(rgb[0], k), gain), led_scale(led_scale(rgb[1], k), gain), led_scale(led_scale(rgb[2], k), gain));
         }
     } else if (user_settings.led_effect == (uint8_t)FX_SOLID) {
         /*
@@ -1269,8 +1254,7 @@ static void led_regen_one(void)
          * available as mode 6.
          */
         fx_color(fx_phase192, rgb);
-        aula_rgb_set(regen_row, regen_col, led_scale(rgb[0], gain), led_scale(rgb[1], gain),
-                     led_scale(rgb[2], gain));
+        aula_rgb_set(regen_row, regen_col, led_scale(rgb[0], gain), led_scale(rgb[1], gain), led_scale(rgb[2], gain));
     } else {
         /*
          * SMK geometry, factory colors: the 0-255 index is rescaled to the 192
@@ -1287,13 +1271,10 @@ static void led_regen_one(void)
          * The ROW, on the other hand, needs no conversion: factory table B
          * (`CODE 0x2F6B`) is identical to the row index across all 126 slots.
          */
-        const uint8_t idx =
-            led_effect_index((led_effect_t)user_settings.led_effect, regen_row,
-                             aula_fx_render_col(regen_col, regen_row), led_phase);
+        const uint8_t idx = led_effect_index((led_effect_t)user_settings.led_effect, regen_row, aula_fx_render_col(regen_col, regen_row), led_phase);
 
         fx_color((uint8_t)(((uint16_t)idx * AULA_RGB_WHEEL_SIZE) >> 8), rgb);
-        aula_rgb_set(regen_row, regen_col, led_scale(rgb[0], gain), led_scale(rgb[1], gain),
-                     led_scale(rgb[2], gain));
+        aula_rgb_set(regen_row, regen_col, led_scale(rgb[0], gain), led_scale(rgb[1], gain), led_scale(rgb[2], gain));
     }
 
 advance:
@@ -1357,11 +1338,11 @@ void indicators_pre_update(void)
 static void led_react_poll(void)
 {
 #ifdef MATRIX_INTERLEAVED_SCAN
-    const uint8_t col   = react_col;
-    const uint8_t now   = matrix_get_col(col);
+    const uint8_t col = react_col;
+    const uint8_t now = matrix_get_col(col);
 #else
-    const uint8_t col   = led_col;
-    const uint8_t now   = user_matrix_pressed(col);
+    const uint8_t col = led_col;
+    const uint8_t now = user_matrix_pressed(col);
 #endif
     const uint8_t fresh = (uint8_t)(now & (uint8_t)~spark_prev[col]);
 
@@ -1406,12 +1387,12 @@ void indicators_post_update(void)
 {
     /* Called at the 400 us Bresenham sub-tick from tick_dispatch(). */
     aula_encoder_sample();
-#ifndef NO_AUTOTYPE
+#    ifndef NO_AUTOTYPE
     aula_macro_tick();
-#endif
-#ifdef RF_EUART0
+#    endif
+#    ifdef RF_EUART0
     rf_tick();
-#endif
+#    endif
     if (regen_steps_pending < (uint8_t)(LED_ROWS * LED_COLS)) {
         regen_steps_pending++;
     }
@@ -1431,7 +1412,7 @@ void indicators_render(void)
     regen_steps_pending--;
     ET2 = 1;
 
-#ifndef NO_AUTOTYPE
+#    ifndef NO_AUTOTYPE
     if (aula_macro_active()) {
         if (!macro_was_on) {
             macro_was_on = 1;
@@ -1440,10 +1421,9 @@ void indicators_render(void)
     } else {
         macro_was_on = 0;
     }
-#endif
+#    endif
 
-    if (user_settings.led_effect == AULA_FX_REACTIVE ||
-        user_settings.led_effect == AULA_FX_LAKE) {
+    if (user_settings.led_effect == AULA_FX_REACTIVE || user_settings.led_effect == AULA_FX_LAKE) {
         led_react_poll();
     }
     if (++react_col >= LED_COLS) {
@@ -1467,10 +1447,7 @@ void indicators_render(void)
         }
         prev_link_fx = keyboard_state.rf_link;
     }
-    const bool active = caps_on || aula_status_lit() || confirm_step != 0 ||
-                        bat_show_sweeps || flourish_step != 0 ||
-                        (rf_bt_pair_slot != 0 && user_settings.battery_indicator_on != 0) ||
-                        user_settings.led_effect < AULA_FX_OFF
+    const bool active = caps_on || aula_status_lit() || confirm_step != 0 || bat_show_sweeps || flourish_step != 0 || (rf_bt_pair_slot != 0 && user_settings.battery_indicator_on != 0) || user_settings.led_effect < AULA_FX_OFF
 #        ifndef NO_AUTOTYPE
                         || aula_macro_active()
 #        endif
@@ -1482,8 +1459,7 @@ void indicators_render(void)
 #        endif
         ;
 #    else
-    const bool active = caps_on || aula_status_lit() || confirm_step != 0 ||
-                        user_settings.led_effect < AULA_FX_OFF
+    const bool active = caps_on || aula_status_lit() || confirm_step != 0 || user_settings.led_effect < AULA_FX_OFF
 #        ifndef NO_AUTOTYPE
                         || aula_macro_active()
 #        endif
@@ -1501,7 +1477,7 @@ void indicators_render(void)
 #else
 bool indicators_update_step(keyboard_state_t *keyboard, uint8_t current_step)
 {
-    (void)current_step;  /* `tick.c` always passes 0 */
+    (void)current_step; /* `tick.c` always passes 0 */
 
     caps_on = (user_settings.led_color && (keyboard->led_state & HID_LED_CAPS_LOCK)) ? 1 : 0;
 
@@ -1509,11 +1485,11 @@ bool indicators_update_step(keyboard_state_t *keyboard, uint8_t current_step)
      * ~400 us -- and that is the same rate at which the factory firmware
      * samples its encoder from its PWM ISR. */
     aula_encoder_sample();
-#ifndef NO_AUTOTYPE
+#    ifndef NO_AUTOTYPE
     aula_macro_tick();
-#endif
+#    endif
 
-#ifndef NO_AUTOTYPE
+#    ifndef NO_AUTOTYPE
     if (aula_macro_active()) {
         if (!macro_was_on) {
             macro_was_on = 1;
@@ -1522,45 +1498,40 @@ bool indicators_update_step(keyboard_state_t *keyboard, uint8_t current_step)
     } else {
         macro_was_on = 0;
     }
-#endif
+#    endif
 
-    if (user_settings.led_effect == AULA_FX_REACTIVE ||
-        user_settings.led_effect == AULA_FX_LAKE) {
+    if (user_settings.led_effect == AULA_FX_REACTIVE || user_settings.led_effect == AULA_FX_LAKE) {
         led_react_poll();
     }
 
-#ifdef RF_EUART0
+#    ifdef RF_EUART0
     if (keyboard->rf_link != prev_link_fx) {
         if (prev_link_fx != 0xFF) {
             flourish_step = 1;
         }
         prev_link_fx = keyboard->rf_link;
     }
-    if (caps_on || aula_status_lit() || confirm_step != 0 ||
-        bat_show_sweeps || flourish_step != 0 ||
-        (rf_bt_pair_slot != 0 && user_settings.battery_indicator_on != 0) ||
-        user_settings.led_effect < AULA_FX_OFF
-#    ifndef NO_AUTOTYPE
+    if (caps_on || aula_status_lit() || confirm_step != 0 || bat_show_sweeps || flourish_step != 0 || (rf_bt_pair_slot != 0 && user_settings.battery_indicator_on != 0) || user_settings.led_effect < AULA_FX_OFF
+#        ifndef NO_AUTOTYPE
         || aula_macro_active()
-#    endif
-#    ifndef NO_RF_DIAG
+#        endif
+#        ifndef NO_RF_DIAG
         || rf_diag_on
-#    endif
-#    ifdef SIGNALRGB_ENABLE
+#        endif
+#        ifdef SIGNALRGB_ENABLE
         || direct_active
-#    endif
+#        endif
     ) {
-#else
-    if (caps_on || aula_status_lit() || confirm_step != 0 ||
-        user_settings.led_effect < AULA_FX_OFF
-#    ifndef NO_AUTOTYPE
+#    else
+    if (caps_on || aula_status_lit() || confirm_step != 0 || user_settings.led_effect < AULA_FX_OFF
+#        ifndef NO_AUTOTYPE
         || aula_macro_active()
-#    endif
-#    ifdef SIGNALRGB_ENABLE
+#        endif
+#        ifdef SIGNALRGB_ENABLE
         || direct_active
-#    endif
+#        endif
     ) {
-#endif
+#    endif
         led_regen_one();
 
         /* Load all eighteen duty cycles WHILE the banks are parked, then
@@ -1572,7 +1543,7 @@ bool indicators_update_step(keyboard_state_t *keyboard, uint8_t current_step)
 
     if (++led_col >= LED_COLS) {
         led_col = 0;
-#ifdef SIGNALRGB_ENABLE
+#    ifdef SIGNALRGB_ENABLE
         if (direct_active && !direct_vialrgb) {
             if (direct_timeout != 0u) {
                 direct_timeout--;
@@ -1581,7 +1552,7 @@ bool indicators_update_step(keyboard_state_t *keyboard, uint8_t current_step)
                 direct_active = false;
             }
         }
-#endif
+#    endif
         return true; /* frame complete -- this is what `sleep.c` counts */
     }
     return false;
@@ -1589,9 +1560,9 @@ bool indicators_update_step(keyboard_state_t *keyboard, uint8_t current_step)
 
 void indicators_post_update(void)
 {
-#ifdef RF_EUART0
+#    ifdef RF_EUART0
     rf_tick();
-#endif
+#    endif
 }
 #endif
 
@@ -1600,12 +1571,12 @@ void indicators_post_update(void)
 void indicators_apply_defaults(void)
 {
 #ifdef RGB_DEFAULT_OFF
-    user_settings.led_effect     = AULA_FX_OFF;  /* meson -Drgb_default_off=true */
+    user_settings.led_effect = AULA_FX_OFF; /* meson -Drgb_default_off=true */
 #else
-    user_settings.led_effect     = AULA_FX_LAKE; /* requested as default */
+    user_settings.led_effect = AULA_FX_LAKE; /* requested as default */
 #endif
-    user_settings.led_brightness = LED_BRIGHTNESS_DEFAULT;
-    user_settings.led_speed      = LED_SPEED_DEFAULT;
+    user_settings.led_brightness       = LED_BRIGHTNESS_DEFAULT;
+    user_settings.led_speed            = LED_SPEED_DEFAULT;
     user_settings.ul_effect            = AULA_FX_COLOR_WHEEL; /* rainbow, as in factory firmware */
     user_settings.ul_brightness        = 0;                   /* forward direction, bit 0x23 cleared */
     user_settings.battery_indicator_on = 1;                   /* VIA: Status Indicator (Esc/F1) */
@@ -1643,11 +1614,11 @@ void indicators_validate_settings(void)
 
 void indicators_init(void)
 {
-    led_col   = 0;
-    led_phase = 0;
+    led_col     = 0;
+    led_phase   = 0;
     fx_phase192 = 0;
-    regen_row = 0;
-    regen_col = 0;
+    regen_row   = 0;
+    regen_col   = 0;
 #ifdef MATRIX_INTERLEAVED_SCAN
     display_enabled     = 0;
     regen_steps_pending = (uint8_t)(LED_ROWS * LED_COLS);
@@ -1721,9 +1692,7 @@ static void direct_write_cell(uint8_t row, uint8_t col, uint8_t r, uint8_t g, ui
     if (row >= LED_ROWS || col >= LED_COLS) {
         return;
     }
-    if (aula_fx_key_id(col, row) == AULA_FX_NO_KEY ||
-        (row == CAPS_ROW && col == CAPS_COL) ||
-        (row == 3u && col == 12u) || (row == 4u && col == 12u) || (row == 5u && col == 10u)) {
+    if (aula_fx_key_id(col, row) == AULA_FX_NO_KEY || (row == CAPS_ROW && col == CAPS_COL) || (row == 3u && col == 12u) || (row == 4u && col == 12u) || (row == 5u && col == 10u)) {
         return;
     }
     direct_rgb[row][col][0] = r;

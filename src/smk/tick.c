@@ -133,15 +133,15 @@ void tick_dispatch(void)
 {
     settings_tick();
     timer_step();
-#ifdef DYNAMIC_KEYMAP_ENABLE
+#    ifdef DYNAMIC_KEYMAP_ENABLE
     dynamic_keymap_tick();
-#endif
-#ifdef VIA_MACRO_ENABLE
+#    endif
+#    ifdef VIA_MACRO_ENABLE
     via_macro_tick();
-#endif
-#ifdef VIAL_ENABLE
+#    endif
+#    ifdef VIAL_ENABLE
     vial_tick();
-#endif
+#    endif
     if (scan_due) {
         scan_due             = false;
         subframes_since_scan = 0;

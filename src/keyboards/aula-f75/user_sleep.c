@@ -45,11 +45,11 @@
  */
 user_sleep_mode_t user_sleep_supported(void)
 {
-#ifdef RF_EUART0
+#    ifdef RF_EUART0
     return rf_is_wireless() ? USER_SLEEP_RF : USER_SLEEP_USB;
-#else
+#    else
     return USER_SLEEP_USB;
-#endif
+#    endif
 }
 
 static void park_panel(void)
@@ -95,9 +95,9 @@ static void park_panel(void)
 
 void user_sleep_prepare(void)
 {
-#ifdef RF_EUART0
+#    ifdef RF_EUART0
     rf_sleep_prepare(); /* drains TX then disables EUART0, like 0x7D74 */
-#endif
+#    endif
     park_panel();
     extint_wake_arm(); /* IENC=0xF3, EXF0=0x40, EX4=1 -- same values as factory */
 }
@@ -110,9 +110,9 @@ void user_sleep_prepare(void)
  * as sleep is no longer due, catching the case where the user interrupts sleep
  * entry during the fade-out.
  */
-#define SLEEP_ANIM_IDLE  0
-#define SLEEP_ANIM_ARMED 1
-#define SLEEP_ANIM_DONE  2
+#    define SLEEP_ANIM_IDLE  0
+#    define SLEEP_ANIM_ARMED 1
+#    define SLEEP_ANIM_DONE  2
 
 static __xdata uint8_t sleep_anim;
 
@@ -144,7 +144,7 @@ void user_sleep_wake(void)
 
     extint_wake_disable();
     user_gpio_init();
-#ifdef RF_EUART0
+#    ifdef RF_EUART0
     /*
      * AFTER `user_gpio_init()`, not before: that function hands P7.4 and P4.5
      * back to the selector (P4CR=0x4D, P7CR=0x60 leave them as inputs with
@@ -152,7 +152,7 @@ void user_sleep_wake(void)
      * just like the factory firmware at 0x7DCB-0x7DF1.
      */
     rf_sleep_wake();
-#endif
+#    endif
 }
 
 #endif // SLEEP_ENABLE

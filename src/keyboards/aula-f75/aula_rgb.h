@@ -63,7 +63,7 @@
  * The 18 phases are staggered by one tick each; the stock firmware thus spreads
  * out the rising edges of the 18 channels instead of switching them all at once.
  */
-#define AULA_RGB_PHASE_BASE 0xB4u
+#define AULA_RGB_PHASE_BASE     0xB4u
 #define AULA_RGB_PHASE(channel) (uint16_t)(AULA_RGB_PHASE_BASE + (channel))
 
 /* Stock hue wheel (CODE 0x2B2A), 192 entries. */

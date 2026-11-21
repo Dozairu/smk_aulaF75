@@ -44,8 +44,6 @@ Combinations: Auto Shift + key override extras (~1.05 KB) or Alt Repeat table + 
 - **Stale raw HID reply**: a request whose reply is never read leaves the next tool one reply
   behind. Needs an on-device experiment: can firmware withdraw a queued EP2 IN packet on the
   SH68F90 (clear `IEP2RDY`)? Test build + script; today the workaround is replugging.
-- **Simulator test failing upstream**: `test_usb_ep0 ... test_led_report_with_wrong_length_stalls`
-  fails on the commit this work started from too (not caused by Vial).
 - **Wireless pacing numbers**: count ACK timeouts (e.g. on the Fn+R overlay in a `-Drf_diag=true`
   build) to confirm reports never wait the full 8 ms.
 

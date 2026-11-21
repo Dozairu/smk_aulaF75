@@ -31,7 +31,7 @@ keyboards += {
             'aula_encoder.c',
             'aula_macro.c',
             'aula_status.c',
-            'aula_vialrgb.c', # empty unless VIALRGB_ENABLE
+            'aula_vialrgb.c',  # empty unless VIALRGB_ENABLE
         ),
         'boot_src' : files('user_matrix.c', 'user_init.c'),
         'layouts' : {

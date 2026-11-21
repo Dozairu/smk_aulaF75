@@ -43,9 +43,7 @@ void kb_init(void)
 #endif
 }
 
-void kb_update_switches(void)
-{
-}
+void kb_update_switches(void) {}
 
 extern void indicators_init(void);
 extern void indicators_apply_defaults(void);
@@ -90,7 +88,7 @@ static void rgb_power(uint8_t how)
         how = on ? 0u : 1u;
     }
     if (how == 0u && on) {
-        rgb_saved               = user_settings.led_effect;
+        rgb_saved                = user_settings.led_effect;
         user_settings.led_effect = FX_OFF_ID;
     } else if (how == 1u && !on) {
         user_settings.led_effect = rgb_saved;
@@ -228,10 +226,8 @@ bool kb_process_record(uint16_t keycode, bool key_pressed)
             /* The VIA menu's three indicator toggles, as keys (Vial has no
              * menu): status LED, Caps Lock LED, charging / low battery. */
             if (key_pressed) {
-                uint8_t *t = (keycode == IND_STATUS) ? &user_settings.battery_indicator_on
-                           : (keycode == IND_CAPS)   ? &user_settings.led_color
-                                                     : &user_settings.ul_speed;
-                *t = *t ? 0u : 1u;
+                uint8_t *t = (keycode == IND_STATUS) ? &user_settings.battery_indicator_on : (keycode == IND_CAPS) ? &user_settings.led_color : &user_settings.ul_speed;
+                *t         = *t ? 0u : 1u;
                 settings_mark_dirty();
                 indicators_confirm(matrix_event_row, matrix_event_col);
             }
@@ -243,9 +239,9 @@ bool kb_process_record(uint16_t keycode, bool key_pressed)
             return false;
 #ifdef RF_EUART0
         case RF_DIAG:
-#ifndef NO_RF_DIAG
+#    ifndef NO_RF_DIAG
             if (key_pressed) indicators_toggle_rf_diag();
-#endif
+#    endif
             return false;
         case RF_PAIR:
             if (key_pressed) rf_request_pairing();
@@ -326,15 +322,32 @@ bool kb_process_record(uint16_t keycode, bool key_pressed)
             if (wasd_swap) {
                 uint16_t mapped = 0;
                 switch (keycode) {
-                    case KC_W:    mapped = KC_UP;   break;
-                    case KC_A:    mapped = KC_LEFT; break;
-                    case KC_S:    mapped = KC_DOWN; break;
-                    case KC_D:    mapped = KC_RGHT; break;
-                    case KC_UP:   mapped = KC_W;    break;
-                    case KC_LEFT: mapped = KC_A;    break;
-                    case KC_DOWN: mapped = KC_S;    break;
-                    case KC_RGHT: mapped = KC_D;    break;
-                    default: break;
+                    case KC_W:
+                        mapped = KC_UP;
+                        break;
+                    case KC_A:
+                        mapped = KC_LEFT;
+                        break;
+                    case KC_S:
+                        mapped = KC_DOWN;
+                        break;
+                    case KC_D:
+                        mapped = KC_RGHT;
+                        break;
+                    case KC_UP:
+                        mapped = KC_W;
+                        break;
+                    case KC_LEFT:
+                        mapped = KC_A;
+                        break;
+                    case KC_DOWN:
+                        mapped = KC_S;
+                        break;
+                    case KC_RGHT:
+                        mapped = KC_D;
+                        break;
+                    default:
+                        break;
                 }
                 if (mapped != 0) {
                     send_keycode(mapped, key_pressed);
@@ -344,11 +357,20 @@ bool kb_process_record(uint16_t keycode, bool key_pressed)
             if (os_mode >= 2) {
                 uint16_t mapped = 0;
                 switch (keycode) {
-                    case KC_LALT: mapped = KC_LGUI; break;
-                    case KC_LGUI: mapped = KC_LALT; break;
-                    case KC_RALT: mapped = KC_RGUI; break;
-                    case KC_RGUI: mapped = KC_RALT; break;
-                    default: break;
+                    case KC_LALT:
+                        mapped = KC_LGUI;
+                        break;
+                    case KC_LGUI:
+                        mapped = KC_LALT;
+                        break;
+                    case KC_RALT:
+                        mapped = KC_RGUI;
+                        break;
+                    case KC_RGUI:
+                        mapped = KC_RALT;
+                        break;
+                    default:
+                        break;
                 }
                 if (mapped != 0) {
                     send_keycode(mapped, key_pressed);

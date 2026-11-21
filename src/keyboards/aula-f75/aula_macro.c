@@ -1,12 +1,12 @@
 #include "aula_macro.h"
 
 #ifndef NO_AUTOTYPE
-#include "kbdef.h"
-#include "keycodes.h"
-#include "report.h"
-#include "sh68f90.h"
-#include "sleep.h"
-#include <stdint.h>
+#    include "kbdef.h"
+#    include "keycodes.h"
+#    include "report.h"
+#    include "sh68f90.h"
+#    include "sleep.h"
+#    include <stdint.h>
 
 /*
  * WAITING FOR FULL KEY RELEASE -- this is not a convenience feature.
@@ -26,15 +26,15 @@
  * masked to the six physical rows. Unlike the hook, it sees `Fn`: that is what
  * catches the "user presses only Fn" case while the mode is running.
  */
-#define MACRO_OFF   0
-#define MACRO_WAIT  1
-#define MACRO_RUN   2
-#define MACRO_FLUSH 3
+#    define MACRO_OFF   0
+#    define MACRO_WAIT  1
+#    define MACRO_RUN   2
+#    define MACRO_FLUSH 3
 
-#define STEP_KEY_DOWN 0
-#define STEP_KEY_UP   1
-#define STEP_BSP_DOWN 2
-#define STEP_BSP_UP   3
+#    define STEP_KEY_DOWN 0
+#    define STEP_KEY_UP   1
+#    define STEP_BSP_DOWN 2
+#    define STEP_BSP_UP   3
 
 /*
  * There is no free-running millisecond counter in this firmware. The LED
@@ -46,7 +46,7 @@
  * `uint16_t`, and a slower rate requested in the future would silently
  * overflow. One second is ~2,381 subframes, so a 16-bit counter is required.
  */
-#define MACRO_MS(ms) ((uint16_t)(((uint32_t)(ms) * 1000ul) / 420ul))
+#    define MACRO_MS(ms) ((uint16_t)(((uint32_t)(ms) * 1000ul) / 420ul))
 
 /*
  * The host polls the endpoint every millisecond (`bInterval = 1`). A press
@@ -55,10 +55,10 @@
  * lacks the natural duration of a finger on a key. Eight subframes come out to
  * ~3.4 ms, or at least three polls.
  */
-#define MACRO_HOLD 8
+#    define MACRO_HOLD 8
 
-#define MACRO_MIN  MACRO_MS(500)
-#define MACRO_SPAN MACRO_MS(1000)
+#    define MACRO_MIN  MACRO_MS(500)
+#    define MACRO_SPAN MACRO_MS(1000)
 
 /*
  * Safeguard timeout for MACRO_WAIT. A stuck key would keep `matrix_busy()`
@@ -70,7 +70,7 @@
  * loop endlessly between cancellation and restart. Accepted trade-off --
  * holding the activation combo for more than five seconds does nothing.
  */
-#define MACRO_WAIT_MAX MACRO_MS(5000)
+#    define MACRO_WAIT_MAX MACRO_MS(5000)
 
 /* Decremented by the ISR, armed by the main loop.
  *

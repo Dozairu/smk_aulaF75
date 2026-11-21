@@ -72,42 +72,102 @@ void user_matrix_col_select(uint8_t col) // active-low: drive to 0
 #endif
 
     switch (col) {
-        case 0:  KB_C0  = 0; break;
-        case 1:  KB_C1  = 0; break;
-        case 2:  KB_C2  = 0; break;
-        case 3:  KB_C3  = 0; break;
-        case 4:  KB_C4  = 0; break;
-        case 5:  KB_C5  = 0; break;
-        case 6:  KB_C6  = 0; break;
-        case 7:  KB_C7  = 0; break;
-        case 8:  KB_C8  = 0; break;
-        case 9:  KB_C9  = 0; break;
-        case 10: KB_C10 = 0; break;
-        case 11: KB_C11 = 0; break;
-        case 12: KB_C12 = 0; break;
-        case 13: KB_C13 = 0; break;
-        case 14: KB_C14 = 0; break;
+        case 0:
+            KB_C0 = 0;
+            break;
+        case 1:
+            KB_C1 = 0;
+            break;
+        case 2:
+            KB_C2 = 0;
+            break;
+        case 3:
+            KB_C3 = 0;
+            break;
+        case 4:
+            KB_C4 = 0;
+            break;
+        case 5:
+            KB_C5 = 0;
+            break;
+        case 6:
+            KB_C6 = 0;
+            break;
+        case 7:
+            KB_C7 = 0;
+            break;
+        case 8:
+            KB_C8 = 0;
+            break;
+        case 9:
+            KB_C9 = 0;
+            break;
+        case 10:
+            KB_C10 = 0;
+            break;
+        case 11:
+            KB_C11 = 0;
+            break;
+        case 12:
+            KB_C12 = 0;
+            break;
+        case 13:
+            KB_C13 = 0;
+            break;
+        case 14:
+            KB_C14 = 0;
+            break;
     }
 }
 
 void user_matrix_col_deselect(uint8_t col)
 {
     switch (col) {
-        case 0:  KB_C0  = 1; break;
-        case 1:  KB_C1  = 1; break;
-        case 2:  KB_C2  = 1; break;
-        case 3:  KB_C3  = 1; break;
-        case 4:  KB_C4  = 1; break;
-        case 5:  KB_C5  = 1; break;
-        case 6:  KB_C6  = 1; break;
-        case 7:  KB_C7  = 1; break;
-        case 8:  KB_C8  = 1; break;
-        case 9:  KB_C9  = 1; break;
-        case 10: KB_C10 = 1; break;
-        case 11: KB_C11 = 1; break;
-        case 12: KB_C12 = 1; break;
-        case 13: KB_C13 = 1; break;
-        case 14: KB_C14 = 1; break;
+        case 0:
+            KB_C0 = 1;
+            break;
+        case 1:
+            KB_C1 = 1;
+            break;
+        case 2:
+            KB_C2 = 1;
+            break;
+        case 3:
+            KB_C3 = 1;
+            break;
+        case 4:
+            KB_C4 = 1;
+            break;
+        case 5:
+            KB_C5 = 1;
+            break;
+        case 6:
+            KB_C6 = 1;
+            break;
+        case 7:
+            KB_C7 = 1;
+            break;
+        case 8:
+            KB_C8 = 1;
+            break;
+        case 9:
+            KB_C9 = 1;
+            break;
+        case 10:
+            KB_C10 = 1;
+            break;
+        case 11:
+            KB_C11 = 1;
+            break;
+        case 12:
+            KB_C12 = 1;
+            break;
+        case 13:
+            KB_C13 = 1;
+            break;
+        case 14:
+            KB_C14 = 1;
+            break;
     }
 }
 

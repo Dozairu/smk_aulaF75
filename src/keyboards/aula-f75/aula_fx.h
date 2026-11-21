@@ -35,13 +35,13 @@ void aula_fx_palette(uint8_t index, uint8_t out[3]);
  * this mode in `b1[3:0]` of its per-effect record, and latches it in XRAM
  * 0x0897.
  */
-#define AULA_FX_COLOR_MODES  8
-#define AULA_FX_COLOR_WHEEL  ((uint8_t)(AULA_FX_COLOR_MODES - 1))
+#define AULA_FX_COLOR_MODES 8
+#define AULA_FX_COLOR_WHEEL ((uint8_t)(AULA_FX_COLOR_MODES - 1))
 /* Mode 8, beyond the stock ones: an arbitrary color, aula_fx_custom[] (set by
  * VialRGB from its hue / saturation picker). Not in the cycle of the Fn key. */
 #define AULA_FX_COLOR_CUSTOM ((uint8_t)AULA_FX_COLOR_MODES)
 extern __xdata uint8_t aula_fx_custom[3];
-void aula_fx_color(uint8_t mode, uint8_t out[3]);
+void                   aula_fx_color(uint8_t mode, uint8_t out[3]);
 
 /* Concentric wave rings, CODE 0x2959: 9 groups of 13 IDs, `0xFF` = empty slot.
  * Read by engine index 1 (and index 17, which is the same engine with its

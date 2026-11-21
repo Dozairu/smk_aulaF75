@@ -9,11 +9,11 @@
 
 static __xdata uint8_t request[RAW_HID_REPORT_SIZE];
 /* Shared between the main loop and USB completion/RX interrupts. */
-static volatile bool   request_pending;
-static volatile bool   response_pending;
+static volatile bool request_pending;
+static volatile bool response_pending;
 #    ifdef ISP_ENABLE
 /* Set when VIA_ID_BOOTLOADER_JUMP is accepted; main loop waits for EP2 IN ACK. */
-static volatile bool   isp_after_response;
+static volatile bool isp_after_response;
 #    endif
 
 void raw_hid_init(void)

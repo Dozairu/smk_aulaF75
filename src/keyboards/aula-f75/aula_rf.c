@@ -124,10 +124,10 @@ _Static_assert(FREQ_SYS / 92 > 255000 && FREQ_SYS / 92 < 267000, "FREQ_SYS incom
  */
 
 /* Total lengths, checksum included. */
-#define RF_LEN_SHORT     6
-#define RF_LEN_NAME      32
-#define RF_LEN_REPORT_L  30
-#define RF_LEN_REPORT_S  13
+#define RF_LEN_SHORT    6
+#define RF_LEN_NAME     32
+#define RF_LEN_REPORT_L 30
+#define RF_LEN_REPORT_S 13
 
 /*
  * Command 0x01 flag: byte 2 on the wire. The factory firmware sends 0
@@ -147,12 +147,12 @@ _Static_assert(FREQ_SYS / 92 > 255000 && FREQ_SYS / 92 < 267000, "FREQ_SYS incom
 #define RF_LINK_SELECT  0
 #define RF_LINK_PAIRING 1
 
-static __xdata uint8_t          tx_buf[RF_TX_MAX];
-static volatile __data uint8_t  tx_len;
-static volatile __data uint8_t  tx_idx;
-static volatile __bit           tx_busy;
+static __xdata uint8_t         tx_buf[RF_TX_MAX];
+static volatile __data uint8_t tx_len;
+static volatile __data uint8_t tx_idx;
+static volatile __bit          tx_busy;
 
-static __xdata uint8_t         rx_buf[RF_RX_MAX];
+static __xdata uint8_t rx_buf[RF_RX_MAX];
 /*
  * RAW STREAM. Per-frame capture is not enough: several frames arrive between
  * two passes of `rf_task()` -- the first capture showed `02 00 01 00 00 52`
@@ -170,8 +170,8 @@ static __xdata uint8_t cap_raw_shown;
 /* Raw counters, in XDATA: internal RAM only has nineteen bytes of headroom. */
 static volatile __xdata uint8_t rx_total;
 static volatile __xdata uint8_t rx_last;
-static volatile __data uint8_t rx_idx;
-static volatile __bit          rx_pending;
+static volatile __data uint8_t  rx_idx;
+static volatile __bit           rx_pending;
 
 /*
  * Only tx_len/tx_idx/rx_idx stay in DATA: the ISR touches them on every byte.
@@ -289,12 +289,12 @@ static const __code uint8_t batt_damping[12] = {
     20, 10, 5, 2, 2, 2, 2, 2, 2, 2, 2, 2,
 };
 
-static __xdata uint8_t  batt_frames;  /* counts status frames */
-static __xdata uint8_t  batt_target;  /* target percentage */
-static __xdata uint8_t  batt_shown;   /* displayed percentage, the converging value */
-static __xdata uint8_t  batt_ticks;   /* damping counter */
-static __bit            batt_low;
-static __bit            batt_initialized;
+static __xdata uint8_t batt_frames; /* counts status frames */
+static __xdata uint8_t batt_target; /* target percentage */
+static __xdata uint8_t batt_shown;  /* displayed percentage, the converging value */
+static __xdata uint8_t batt_ticks;  /* damping counter */
+static __bit           batt_low;
+static __bit           batt_initialized;
 
 __xdata uint8_t rf_batt_pct;
 
@@ -480,8 +480,8 @@ static bool rf_send_frame(uint8_t len, uint8_t gate)
     }
     tx_buf[len - 1] = sum;
 
-    tx_len = len;
-    tx_idx = 1; /* byte 0 goes out immediately, the ISR chains the rest */
+    tx_len  = len;
+    tx_idx  = 1; /* byte 0 goes out immediately, the ISR chains the rest */
     tx_busy = 1;
 
     /*
@@ -635,8 +635,7 @@ static void rf_queue_flush(void)
 {
     while (q_count != 0 && ack_wait == 0u && rf_can_send(RF_GATE_REPORT)) {
         const __xdata uint8_t *slot = q_buf[q_tail];
-        const uint8_t          len =
-            (slot[0] == RF_CMD_REPORT_L) ? RF_LEN_REPORT_L : RF_LEN_REPORT_S;
+        const uint8_t          len  = (slot[0] == RF_CMD_REPORT_L) ? RF_LEN_REPORT_L : RF_LEN_REPORT_S;
 
         tx_buf[0] = RF_HDR;
         for (uint8_t i = 0; i < (uint8_t)(len - 2); i++) {
@@ -679,9 +678,7 @@ static bool rf_report_has_lock(const __xdata report_keyboard_t *report)
 
 static bool rf_nkro_has_lock(const __xdata report_nkro_t *report)
 {
-    return ((report->bits[KC_CAPS_LOCK >> 3] & (uint8_t)(1u << (KC_CAPS_LOCK & 7u))) != 0u) ||
-           ((report->bits[KC_SCROLL_LOCK >> 3] & (uint8_t)(1u << (KC_SCROLL_LOCK & 7u))) != 0u) ||
-           ((report->bits[KC_NUM_LOCK >> 3] & (uint8_t)(1u << (KC_NUM_LOCK & 7u))) != 0u);
+    return ((report->bits[KC_CAPS_LOCK >> 3] & (uint8_t)(1u << (KC_CAPS_LOCK & 7u))) != 0u) || ((report->bits[KC_SCROLL_LOCK >> 3] & (uint8_t)(1u << (KC_SCROLL_LOCK & 7u))) != 0u) || ((report->bits[KC_NUM_LOCK >> 3] & (uint8_t)(1u << (KC_NUM_LOCK & 7u))) != 0u);
 }
 
 static void rf_note_lock_key(bool lock_now)
@@ -835,8 +832,7 @@ static void rf_battery_sample(void)
     } else {
         /* (912-715) * 100 = 19,700: the product fits in 16 bits, no need to
          * pull in SDCC's 32-bit division helper. */
-        batt_target = (uint8_t)(((uint16_t)(raw - RF_BATT_EMPTY) * 100u) /
-                                (uint16_t)(RF_BATT_FULL - RF_BATT_EMPTY));
+        batt_target = (uint8_t)(((uint16_t)(raw - RF_BATT_EMPTY) * 100u) / (uint16_t)(RF_BATT_FULL - RF_BATT_EMPTY));
     }
 
     if (raw < RF_BATT_LOW) {
@@ -855,14 +851,12 @@ static void rf_battery_sample(void)
     /* Damped convergence: one point at a time, stepping more slowly the closer
      * we get to the target. */
     if (batt_shown != batt_target) {
-        const uint8_t gap   = (batt_shown > batt_target) ? (uint8_t)(batt_shown - batt_target)
-                                                         : (uint8_t)(batt_target - batt_shown);
+        const uint8_t gap   = (batt_shown > batt_target) ? (uint8_t)(batt_shown - batt_target) : (uint8_t)(batt_target - batt_shown);
         const uint8_t index = (gap > 110) ? 11 : (uint8_t)(gap / 10u);
 
         if (++batt_ticks >= batt_damping[index]) {
             batt_ticks = 0;
-            batt_shown = (batt_shown > batt_target) ? (uint8_t)(batt_shown - 1)
-                                                    : (uint8_t)(batt_shown + 1);
+            batt_shown = (batt_shown > batt_target) ? (uint8_t)(batt_shown - 1) : (uint8_t)(batt_shown + 1);
         }
     } else {
         batt_ticks = 0;
@@ -955,7 +949,6 @@ static void rf_status_apply(void)
 #    define RF_CAP_FRAMES 3
 #    define RF_CAP_LEN    12
 
-
 static __xdata uint8_t cap_buf[RF_CAP_FRAMES][RF_CAP_LEN];
 static __xdata uint8_t cap_len[RF_CAP_FRAMES];
 static __xdata uint8_t cap_why[RF_CAP_FRAMES];
@@ -1000,8 +993,7 @@ static void rf_cap_replay(void)
         return;
     }
     len = (cap_len[cap_shown] < RF_CAP_LEN) ? cap_len[cap_shown] : RF_CAP_LEN;
-    dprintf("rx[%u] why=%u n=%u:", (unsigned)cap_shown, (unsigned)cap_why[cap_shown],
-            (unsigned)cap_len[cap_shown]);
+    dprintf("rx[%u] why=%u n=%u:", (unsigned)cap_shown, (unsigned)cap_why[cap_shown], (unsigned)cap_len[cap_shown]);
     for (i = 0; i < len; i++) {
         dprintf(" %02x", (unsigned)cap_buf[cap_shown][i]);
     }
@@ -1029,9 +1021,12 @@ static uint8_t rf_rx_frame_len(void)
                 return RF_RX_LEN_ACK; /* wait for byte 1 before inspecting rx_buf[1] */
             }
             return (rx_buf[1] == RF_CMD_STATUS) ? RF_RX_LEN_STATUS : RF_RX_LEN_ACK;
-        case RF_RX_TYPE_ANNOUNCE: return RF_RX_LEN_ACK;
-        case RF_RX_TYPE_BULK:     return RF_RX_LEN_BULK;
-        default:                  return 0; /* unknown type: stray byte */
+        case RF_RX_TYPE_ANNOUNCE:
+            return RF_RX_LEN_ACK;
+        case RF_RX_TYPE_BULK:
+            return RF_RX_LEN_BULK;
+        default:
+            return 0; /* unknown type: stray byte */
     }
 }
 
@@ -1068,7 +1063,7 @@ static void rf_rx_consume(void)
         if (len == 0) {
             rf_rx_take(1); /* stray byte: resync rather than dropping everything */
         } else if (rx_idx < len) {
-            stop = 1;      /* incomplete frame: let the rest arrive */
+            stop = 1; /* incomplete frame: let the rest arrive */
         } else if (!rf_rx_checksum_ok((uint8_t)(len - 1))) {
             rf_rx_dump(RF_WHY_BAD02);
             rf_rx_take(1);
@@ -1115,9 +1110,9 @@ static void rf_uart_init(void)
     TI = 0;
     RI = 0;
 
-    tx_busy  = 0;
-    tx_idx   = 0;
-    tx_len   = 0;
+    tx_busy    = 0;
+    tx_idx     = 0;
+    tx_len     = 0;
     rx_idx     = 0;
     rx_pending = 0;
     rx_total   = 0;
@@ -1349,12 +1344,12 @@ static void rf_sample_selector(void)
 
 void rf_init(void)
 {
-    link_state      = RF_LINK_WIRED;
-    bt_slot         = RF_SLOT_BT1;
+    link_state        = RF_LINK_WIRED;
+    bt_slot           = RF_SLOT_BT1;
     name_stage        = 0;
     settings_restored = 0;
-    link_connected  = 0;
-    link_tx_pending = 0;
+    link_connected    = 0;
+    link_tx_pending   = 0;
     rf_probe_reset();
     batt_frames      = 0;
     batt_target      = 0;
@@ -1363,11 +1358,11 @@ void rf_init(void)
     batt_low         = 0;
     batt_initialized = 0;
     rf_batt_pct      = 0;
-    q_head          = 0;
-    q_tail          = 0;
-    q_count         = 0;
+    q_head           = 0;
+    q_tail           = 0;
+    q_count          = 0;
     deb_wired = deb_24g = deb_bt = 0;
-    ctrl_stall = 0;
+    ctrl_stall                   = 0;
 
     rf_uart_init();
     IEN1 &= (uint8_t)~_ES0; /* armed only when a wireless mode is active */
@@ -1440,8 +1435,7 @@ static void rf_probe_task(void)
         }
 
         if (probe_misses >= RF_PROBE_MISSES) {
-            dprintf("rf link lost (p47=%u txb=%u q=%u)\r\n", (unsigned)P4_7,
-                    (unsigned)tx_busy, (unsigned)q_count);
+            dprintf("rf link lost (p47=%u txb=%u q=%u)\r\n", (unsigned)P4_7, (unsigned)tx_busy, (unsigned)q_count);
             probe_misses   = 0;
             link_connected = 0;
             /* The factory firmware releases the transmit line here (0x3D5A). */
@@ -1517,8 +1511,7 @@ static void rf_diag_trace(void)
         /* The receive counters have served their purpose -- they proved that
          * the module talks. Watching them now would flood the console and
          * prevent replaying captured frames, which is what matters. */
-        if (i != RF_DIAG_QCOUNT && i != RF_DIAG_RXTOT && i != RF_DIAG_RXLAST &&
-            i != RF_DIAG_RXIDX && diag_prev[i] != rf_diag_state[i]) {
+        if (i != RF_DIAG_QCOUNT && i != RF_DIAG_RXTOT && i != RF_DIAG_RXLAST && i != RF_DIAG_RXIDX && diag_prev[i] != rf_diag_state[i]) {
             changed = true;
             break;
         }
@@ -1544,13 +1537,7 @@ static void rf_diag_trace(void)
     }
     dprintf("rf 74=%u 45=%u 47=%u link=%u pend=%u name=%u txb=%u conn=%u q=%u miss=%u "
             "rx=%u last=%02x idx=%u\r\n",
-            (unsigned)rf_diag_state[RF_DIAG_P74], (unsigned)rf_diag_state[RF_DIAG_P45],
-            (unsigned)rf_diag_state[RF_DIAG_P47], (unsigned)rf_diag_state[RF_DIAG_LINK],
-            (unsigned)rf_diag_state[RF_DIAG_TXPEND], (unsigned)rf_diag_state[RF_DIAG_NAME],
-            (unsigned)rf_diag_state[RF_DIAG_TXBUSY], (unsigned)rf_diag_state[RF_DIAG_CONN],
-            (unsigned)rf_diag_state[RF_DIAG_QCOUNT], (unsigned)rf_diag_state[RF_DIAG_MISSES],
-            (unsigned)rf_diag_state[RF_DIAG_RXTOT], (unsigned)rf_diag_state[RF_DIAG_RXLAST],
-            (unsigned)rf_diag_state[RF_DIAG_RXIDX]);
+            (unsigned)rf_diag_state[RF_DIAG_P74], (unsigned)rf_diag_state[RF_DIAG_P45], (unsigned)rf_diag_state[RF_DIAG_P47], (unsigned)rf_diag_state[RF_DIAG_LINK], (unsigned)rf_diag_state[RF_DIAG_TXPEND], (unsigned)rf_diag_state[RF_DIAG_NAME], (unsigned)rf_diag_state[RF_DIAG_TXBUSY], (unsigned)rf_diag_state[RF_DIAG_CONN], (unsigned)rf_diag_state[RF_DIAG_QCOUNT], (unsigned)rf_diag_state[RF_DIAG_MISSES], (unsigned)rf_diag_state[RF_DIAG_RXTOT], (unsigned)rf_diag_state[RF_DIAG_RXLAST], (unsigned)rf_diag_state[RF_DIAG_RXIDX]);
 }
 #else
 #    define rf_diag_trace() ((void)0)
@@ -1647,8 +1634,7 @@ void rf_task(void)
         if (link_tx_pending) {
             if (rf_send_link(rf_link_slot(), link_tx_flag)) {
                 link_tx_pending = 0;
-                dprintf("rf link sent slot=%u flag=%u\r\n", (unsigned)rf_link_slot(),
-                        (unsigned)link_tx_flag);
+                dprintf("rf link sent slot=%u flag=%u\r\n", (unsigned)rf_link_slot(), (unsigned)link_tx_flag);
             }
         } else if (name_stage < 2) {
             if (rf_send_name(name_stage, (name_stage == 0) ? rf_name_bt3 : rf_name_bt5)) {
@@ -1699,10 +1685,10 @@ void rf_task(void)
         }
         rf_batt_pct = pct;
     }
-    keyboard_state.rf_link       = (uint8_t)rf_link();
-    keyboard_state.connected     = rf_connected() ? 1 : 0;
+    keyboard_state.rf_link   = (uint8_t)rf_link();
+    keyboard_state.connected = rf_connected() ? 1 : 0;
     if (rf_batt_pct != prev_batt_pct) {
-        prev_batt_pct = rf_batt_pct;
+        prev_batt_pct                = rf_batt_pct;
         keyboard_state.battery_level = (uint8_t)(((uint16_t)rf_batt_pct * 7u + 50u) / 100u);
     }
 #ifdef AULA_FAKE_LOW_BATT
@@ -1711,17 +1697,15 @@ void rf_task(void)
          * the battery. Never define this in a firmware you keep. Read through
          * a volatile so SDCC cannot fold the branches below (error 110). */
         static volatile __xdata uint8_t fake_low = 1;
-        batt_low = fake_low ? 1 : 0;
+        batt_low                                 = fake_low ? 1 : 0;
     }
 #endif
-    keyboard_state.low_power     = batt_low ? 1 : 0;
+    keyboard_state.low_power = batt_low ? 1 : 0;
 
     /* The status LED tracks these. All edge detection lives in
      * `aula_status.c`: here we only publish the state. Low battery is only
      * reported on battery -- with the cable in, charging/full take over. */
-    aula_status_poll(keyboard_state.rf_link, link_connected,
-                     batt_low && !vbus_present, rf_charging,
-                     vbus_present && charge_known && !rf_charging);
+    aula_status_poll(keyboard_state.rf_link, link_connected, batt_low && !vbus_present, rf_charging, vbus_present && charge_known && !rf_charging);
 
 #if !defined(NO_RF_DIAG) || DEBUG == 1
     rf_diag_state[RF_DIAG_P74]    = P7_4 ? 1 : 0;
@@ -1779,8 +1763,6 @@ void rf_set_bt_slot(uint8_t slot)
         rf_queue_link(RF_LINK_SELECT);
     }
 }
-
-
 
 /*
  * Sleep. The factory firmware disables EUART0 before going to sleep

@@ -446,8 +446,14 @@ foreach keyboard, board : keyboards
             configure_file(
                 input : board['dir'] / options.get('vial_json', 'vial.json'),
                 output : prefix + 'vial_definition.h',
-                command : [py, vial_definition_gen, '@INPUT@', options['vial_uid'],
-                          options.get('vial_unlock_rows', ''), options.get('vial_unlock_cols', '')],
+                command : [
+                    py,
+                    vial_definition_gen,
+                    '@INPUT@',
+                    options['vial_uid'],
+                    options.get('vial_unlock_rows', ''),
+                    options.get('vial_unlock_cols', ''),
+                ],
                 capture : true,
             )
             cc_args += '-DVIAL_ENABLE=1'
@@ -570,8 +576,18 @@ foreach keyboard, board : keyboards
         if keep_start >= 0
             run_target(
                 flash_target_name + '_keep',
-                command : [py, flash_keep, '--sinowisp', sinowisp, '--device', keyboard,
-                           '--keep', '@0@'.format(keep_start), '@0@'.format(marker_addr), hex_smk.full_path()],
+                command : [
+                    py,
+                    flash_keep,
+                    '--sinowisp',
+                    sinowisp,
+                    '--device',
+                    keyboard,
+                    '--keep',
+                    '@0@'.format(keep_start),
+                    '@0@'.format(marker_addr),
+                    hex_smk.full_path(),
+                ],
                 depends : hex_smk,
             )
         endif
@@ -658,7 +674,16 @@ test(
         'test_action',
         ['src/smk/action.c', 'tests/host/test_action.c'],
         include_directories : include_directories('src/smk'),
-        c_args : ['-std=gnu2x', '-Wall', '-Wextra', '-Werror', '-DACTION_TAP_DANCE', '-DACTION_COMBO', '-DACTION_KEY_OVERRIDE', '-DACTION_EXTRAS'],
+        c_args : [
+            '-std=gnu2x',
+            '-Wall',
+            '-Wextra',
+            '-Werror',
+            '-DACTION_TAP_DANCE',
+            '-DACTION_COMBO',
+            '-DACTION_KEY_OVERRIDE',
+            '-DACTION_EXTRAS',
+        ],
         native : true,
         build_by_default : false,
     ),

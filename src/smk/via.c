@@ -13,35 +13,35 @@
 #    include "vialrgb.h"
 #    include <string.h>
 
-#    define VIA_ID_GET_PROTOCOL_VERSION           0x01u
-#    define VIA_ID_GET_KEYBOARD_VALUE             0x02u
-#    define VIA_ID_SET_KEYBOARD_VALUE             0x03u
-#    define VIA_ID_DYNAMIC_KEYMAP_GET_KEYCODE     0x04u
-#    define VIA_ID_DYNAMIC_KEYMAP_SET_KEYCODE     0x05u
-#    define VIA_ID_DYNAMIC_KEYMAP_RESET           0x06u
-#    define VIA_ID_CUSTOM_SET_VALUE               0x07u
-#    define VIA_ID_CUSTOM_GET_VALUE               0x08u
-#    define VIA_ID_CUSTOM_SAVE                    0x09u
-#    define VIA_ID_EEPROM_RESET                   0x0Au
-#    define VIA_ID_BOOTLOADER_JUMP                0x0Bu
-#    define VIA_ID_DYNAMIC_KEYMAP_MACRO_GET_COUNT 0x0Cu
+#    define VIA_ID_GET_PROTOCOL_VERSION                 0x01u
+#    define VIA_ID_GET_KEYBOARD_VALUE                   0x02u
+#    define VIA_ID_SET_KEYBOARD_VALUE                   0x03u
+#    define VIA_ID_DYNAMIC_KEYMAP_GET_KEYCODE           0x04u
+#    define VIA_ID_DYNAMIC_KEYMAP_SET_KEYCODE           0x05u
+#    define VIA_ID_DYNAMIC_KEYMAP_RESET                 0x06u
+#    define VIA_ID_CUSTOM_SET_VALUE                     0x07u
+#    define VIA_ID_CUSTOM_GET_VALUE                     0x08u
+#    define VIA_ID_CUSTOM_SAVE                          0x09u
+#    define VIA_ID_EEPROM_RESET                         0x0Au
+#    define VIA_ID_BOOTLOADER_JUMP                      0x0Bu
+#    define VIA_ID_DYNAMIC_KEYMAP_MACRO_GET_COUNT       0x0Cu
 #    define VIA_ID_DYNAMIC_KEYMAP_MACRO_GET_BUFFER_SIZE 0x0Du
-#    define VIA_ID_DYNAMIC_KEYMAP_MACRO_GET_BUFFER 0x0Eu
-#    define VIA_ID_DYNAMIC_KEYMAP_MACRO_SET_BUFFER 0x0Fu
-#    define VIA_ID_DYNAMIC_KEYMAP_MACRO_RESET     0x10u
-#    define VIA_ID_DYNAMIC_KEYMAP_GET_LAYER_COUNT 0x11u
-#    define VIA_ID_DYNAMIC_KEYMAP_GET_ENCODER     0x14u
-#    define VIA_ID_DYNAMIC_KEYMAP_SET_ENCODER     0x15u
-#    define VIA_ID_DYNAMIC_KEYMAP_GET_BUFFER      0x12u
-#    define VIA_ID_DYNAMIC_KEYMAP_SET_BUFFER      0x13u
-#    define VIA_ID_UNHANDLED                      0xFFu
+#    define VIA_ID_DYNAMIC_KEYMAP_MACRO_GET_BUFFER      0x0Eu
+#    define VIA_ID_DYNAMIC_KEYMAP_MACRO_SET_BUFFER      0x0Fu
+#    define VIA_ID_DYNAMIC_KEYMAP_MACRO_RESET           0x10u
+#    define VIA_ID_DYNAMIC_KEYMAP_GET_LAYER_COUNT       0x11u
+#    define VIA_ID_DYNAMIC_KEYMAP_GET_ENCODER           0x14u
+#    define VIA_ID_DYNAMIC_KEYMAP_SET_ENCODER           0x15u
+#    define VIA_ID_DYNAMIC_KEYMAP_GET_BUFFER            0x12u
+#    define VIA_ID_DYNAMIC_KEYMAP_SET_BUFFER            0x13u
+#    define VIA_ID_UNHANDLED                            0xFFu
 
-#    define VIA_KEYBOARD_VALUE_UPTIME             0x01u
-#    define VIA_KEYBOARD_VALUE_LAYOUT_OPTIONS     0x02u
+#    define VIA_KEYBOARD_VALUE_UPTIME              0x01u
+#    define VIA_KEYBOARD_VALUE_LAYOUT_OPTIONS      0x02u
 #    define VIA_KEYBOARD_VALUE_SWITCH_MATRIX_STATE 0x03u
-#    define VIA_KEYBOARD_VALUE_FIRMWARE_VERSION   0x04u
-#    define VIA_KEYBOARD_VALUE_DEVICE_INDICATION  0x05u
-#    define VIA_KEYBOARD_VALUE_KEYCODES_VERSION   0x06u
+#    define VIA_KEYBOARD_VALUE_FIRMWARE_VERSION    0x04u
+#    define VIA_KEYBOARD_VALUE_DEVICE_INDICATION   0x05u
+#    define VIA_KEYBOARD_VALUE_KEYCODES_VERSION    0x06u
 
 /* Matrix tester payload start: protocol 9 (Vial) reads the rows from data[2],
  * VIA 12+ from data[3] (data[2] is an offset there). */
@@ -120,8 +120,8 @@ bool via_process_packet(__xdata uint8_t *data)
 
         case VIA_ID_DYNAMIC_KEYMAP_GET_KEYCODE: {
             uint16_t keycode = keymap_get_keycode(data[1], data[2], data[3]);
-            data[4] = (uint8_t)(keycode >> 8);
-            data[5] = (uint8_t)keycode;
+            data[4]          = (uint8_t)(keycode >> 8);
+            data[5]          = (uint8_t)keycode;
             break;
         }
 

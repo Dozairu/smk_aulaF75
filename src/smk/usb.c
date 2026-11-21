@@ -63,7 +63,7 @@ typedef enum {
 } ep0_out_target_t;
 
 const uint8_t hid_report_desc_keyboard[] = {
-    // clang-format off
+// clang-format off
 #ifdef VIA_ENABLE
     HID_RI_USAGE_PAGE(16, 0xFF60),
     HID_RI_USAGE(8, 0x61),
@@ -130,7 +130,7 @@ const uint8_t hid_report_desc_keyboard[] = {
 };
 
 const uint8_t hid_report_desc_extra[] = {
-    // clang-format off
+// clang-format off
 #ifdef VIA_ENABLE
     HID_RI_USAGE_PAGE(8, 0x01),     // Generic Desktop Controls
     HID_RI_USAGE(8, 0x06),          // Keyboard
@@ -296,10 +296,10 @@ usb_desc_device_c usb_desc_device = {
 };
 
 usb_desc_interface_c usb_desc_interface_main = {
-    .bLength            = sizeof(struct usb_desc_interface),
-    .bDescriptorType    = USB_DESC_INTERFACE,
-    .bInterfaceNumber   = 0,
-    .bAlternateSetting  = 0,
+    .bLength           = sizeof(struct usb_desc_interface),
+    .bDescriptorType   = USB_DESC_INTERFACE,
+    .bInterfaceNumber  = 0,
+    .bAlternateSetting = 0,
 #ifdef VIA_ENABLE
     .bNumEndpoints      = 2,
     .bInterfaceClass    = USB_IFACE_CLASS_HID,
@@ -311,7 +311,7 @@ usb_desc_interface_c usb_desc_interface_main = {
     .bInterfaceSubClass = USB_IFACE_SUBCLASS_HID_BOOT,
     .bInterfaceProtocol = USB_IFACE_PROTOCOL_REPORT,
 #endif
-    .iInterface         = 0,
+    .iInterface = 0,
 };
 
 usb_desc_hid_c usb_desc_hid_main = {
@@ -325,8 +325,8 @@ usb_desc_hid_c usb_desc_hid_main = {
 };
 
 usb_desc_endpoint_c usb_desc_endpoint_main = {
-    .bLength          = sizeof(struct usb_desc_endpoint),
-    .bDescriptorType  = USB_DESC_ENDPOINT,
+    .bLength         = sizeof(struct usb_desc_endpoint),
+    .bDescriptorType = USB_DESC_ENDPOINT,
 #ifdef VIA_ENABLE
     .bEndpointAddress = 2 | USB_DIR_IN,
     .bmAttributes     = USB_XFER_INTERRUPT,
@@ -336,7 +336,7 @@ usb_desc_endpoint_c usb_desc_endpoint_main = {
     .bmAttributes     = USB_XFER_INTERRUPT,
     .wMaxPacketSize   = 16, // 16 bytes
 #endif
-    .bInterval        = 1,  // 1ms
+    .bInterval = 1, // 1ms
 };
 
 usb_desc_interface_c usb_desc_interface_extra = {
@@ -362,8 +362,8 @@ usb_desc_hid_c usb_desc_hid_extra = {
 };
 
 usb_desc_endpoint_c usb_desc_endpoint_extra = {
-    .bLength          = sizeof(struct usb_desc_endpoint),
-    .bDescriptorType  = USB_DESC_ENDPOINT,
+    .bLength         = sizeof(struct usb_desc_endpoint),
+    .bDescriptorType = USB_DESC_ENDPOINT,
 #ifdef VIA_ENABLE
     .bEndpointAddress = 1 | USB_DIR_IN,
     .bmAttributes     = USB_XFER_INTERRUPT,
@@ -373,7 +373,7 @@ usb_desc_endpoint_c usb_desc_endpoint_extra = {
     .bmAttributes     = USB_XFER_INTERRUPT,
     .wMaxPacketSize   = 64, // 64 bytes
 #endif
-    .bInterval        = 1,  // 1ms
+    .bInterval = 1, // 1ms
 };
 
 #ifdef VIA_ENABLE
@@ -772,7 +772,11 @@ static void usb_ep0_out_irq(void)
 
         switch (ep0_out_target) {
             case EP0_OUT_LED:
+#ifdef VIA_ENABLE
                 keyboard_set_led_state(ep0_out_len == 2 ? EP0_OUT_BUF[1] : EP0_OUT_BUF[0]);
+#else
+                keyboard_set_led_state(EP0_OUT_BUF[0]);
+#endif
                 break;
 
 #ifdef ISP_ENABLE
@@ -1343,7 +1347,11 @@ static void usb_hid_set_report_handler(struct usb_req_setup *req)
 
     (void)report_id;
 
+#ifdef VIA_ENABLE
     if (report_type == REPORT_TYPE_OUTPUT && (req->wLength == 1 || req->wLength == 2)) {
+#else
+    if (report_type == REPORT_TYPE_OUTPUT && iface == 0 && req->wLength == 1) {
+#endif
         ep0_receive(EP0_OUT_LED, req->wLength);
         return;
     }

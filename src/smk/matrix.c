@@ -48,8 +48,8 @@ void matrix_init()
         matrix[i]          = 0;
         matrix_previous[i] = 0;
 #ifdef MATRIX_INTERLEAVED_SCAN
-        debounce_cnt0[i]   = 0;
-        debounce_cnt1[i]   = 0;
+        debounce_cnt0[i] = 0;
+        debounce_cnt1[i] = 0;
 #endif
     }
 }

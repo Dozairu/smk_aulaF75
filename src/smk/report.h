@@ -97,9 +97,9 @@ inline void clear_keys(void)
 uint8_t get_mods(void);
 void    clear_mods(void);
 #endif
-void    add_mods(uint8_t mods);
-void    del_mods(uint8_t mods);
-void    set_mods(uint8_t mods);
+void add_mods(uint8_t mods);
+void del_mods(uint8_t mods);
+void set_mods(uint8_t mods);
 
 /* Consumer Page (0x0C)
  *

@@ -9,8 +9,8 @@
 #    include "vial.h"
 #    include <string.h>
 
-#    define DYNAMIC_KEYMAP_MAGIC0  0x56u
-#    define DYNAMIC_KEYMAP_MAGIC1  0x49u
+#    define DYNAMIC_KEYMAP_MAGIC0 0x56u
+#    define DYNAMIC_KEYMAP_MAGIC1 0x49u
 #    ifndef DYNAMIC_KEYMAP_STORAGE_VERSION
 #        ifdef VIAL_ENABLE
 /* The store gained the Vial area: a different layout, never load the old one.
@@ -35,8 +35,8 @@ _Static_assert((DYNAMIC_KEYMAP_BASE & (DYNAMIC_KEYMAP_SECTOR_SIZE - 1u)) == 0, "
 _Static_assert(DYNAMIC_KEYMAP_BASE + DYNAMIC_KEYMAP_SECTOR_COUNT * DYNAMIC_KEYMAP_SECTOR_SIZE <= FLASH_CFG_ADDR, "dynamic keymap overlaps settings or boot marker flash");
 
 /* Keymap first, macro buffer right behind it: both share the flash image. */
-static __xdata uint8_t dynamic_keymap[DYNAMIC_STORE_BYTES];
-static __xdata uint8_t io_buffer[32];
+static __xdata uint8_t   dynamic_keymap[DYNAMIC_STORE_BYTES];
+static __xdata uint8_t   io_buffer[32];
 static volatile bool     dirty;
 static volatile uint16_t save_delay;
 
@@ -69,9 +69,7 @@ static bool load_flash(void)
     for (uint8_t sector = 0; sector < DYNAMIC_KEYMAP_REQUIRED_SECTORS; sector++) {
         uint16_t base = sector_base(sector);
         flash_read_into(FLASH_CODE, base, io_buffer, DYNAMIC_KEYMAP_HEADER);
-        if (io_buffer[0] != DYNAMIC_KEYMAP_MAGIC0 || io_buffer[1] != DYNAMIC_KEYMAP_MAGIC1 ||
-            io_buffer[2] != DYNAMIC_KEYMAP_VERSION || io_buffer[3] != sector ||
-            io_buffer[4] != DYNAMIC_KEYMAP_REQUIRED_SECTORS || io_buffer[7] != DYNAMIC_KEYMAP_COMMIT) {
+        if (io_buffer[0] != DYNAMIC_KEYMAP_MAGIC0 || io_buffer[1] != DYNAMIC_KEYMAP_MAGIC1 || io_buffer[2] != DYNAMIC_KEYMAP_VERSION || io_buffer[3] != sector || io_buffer[4] != DYNAMIC_KEYMAP_REQUIRED_SECTORS || io_buffer[7] != DYNAMIC_KEYMAP_COMMIT) {
             return false;
         }
 
@@ -157,7 +155,7 @@ bool dynamic_encoder_set_keycode(uint8_t layer, uint8_t index, bool clockwise, u
     if (layer >= DYNAMIC_KEYMAP_LAYER_COUNT || index >= DYNAMIC_ENCODER_COUNT) {
         return false;
     }
-    const uint16_t o = encoder_offset(layer, index, clockwise);
+    const uint16_t o      = encoder_offset(layer, index, clockwise);
     dynamic_keymap[o]     = (uint8_t)(keycode >> 8);
     dynamic_keymap[o + 1] = (uint8_t)keycode;
     __critical

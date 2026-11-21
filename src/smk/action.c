@@ -41,9 +41,9 @@ static void q_push_back(uint8_t pos, uint8_t down, uint16_t time)
         return; /* cannot happen: the queue never holds more than WAIT_LEN + 1 */
     }
     const uint8_t i = (uint8_t)((q_head + q_count) % QUEUE_LEN);
-    q_pos[i]  = pos;
-    q_down[i] = down;
-    q_time[i] = time;
+    q_pos[i]        = pos;
+    q_down[i]       = down;
+    q_time[i]       = time;
     q_count++;
 }
 
@@ -52,7 +52,7 @@ static void q_push_front(uint8_t pos, uint8_t down, uint16_t time)
     if (q_count >= QUEUE_LEN) {
         return;
     }
-    q_head        = (uint8_t)((q_head + QUEUE_LEN - 1u) % QUEUE_LEN);
+    q_head         = (uint8_t)((q_head + QUEUE_LEN - 1u) % QUEUE_LEN);
     q_pos[q_head]  = pos;
     q_down[q_head] = down;
     q_time[q_head] = time;
@@ -70,10 +70,10 @@ static void q_push_front(uint8_t pos, uint8_t down, uint16_t time)
 
 #define SLOTS 10u
 
-static __xdata uint8_t  s_pos[SLOTS];   /* POS_NONE = free                   */
+static __xdata uint8_t  s_pos[SLOTS]; /* POS_NONE = free                   */
 static __xdata uint8_t  s_role[SLOTS];
-static __xdata uint8_t  s_intr[SLOTS];  /* another key went down meanwhile   */
-static __xdata uint8_t  s_mods[SLOTS];  /* one-shot mods riding on this key  */
+static __xdata uint8_t  s_intr[SLOTS]; /* another key went down meanwhile   */
+static __xdata uint8_t  s_mods[SLOTS]; /* one-shot mods riding on this key  */
 static __xdata uint16_t s_kc[SLOTS];
 
 static uint8_t slot_find(uint8_t pos)
@@ -124,10 +124,10 @@ static __xdata uint16_t osl_time;
 /* A fired combo is a virtual key at row 14, column = combo index: it goes
  * through the queue, slots and tap-hold logic like a real key, and resolve()
  * returns the combo's output keycode for it. */
-#    define COMBO_ROW    0x0Eu
-#    define IS_VPOS(p)   (POS_ROW(p) == COMBO_ROW)
-#    define COMBO_BUF    4u  /* presses held back while a combo may form */
-#    define COMBO_SWLEN  10u /* combo keys still down after their combo fired */
+#    define COMBO_ROW   0x0Eu
+#    define IS_VPOS(p)  (POS_ROW(p) == COMBO_ROW)
+#    define COMBO_BUF   4u                /* presses held back while a combo may form */
+#    define COMBO_SWLEN 10u               /* combo keys still down after their combo fired */
 static __xdata uint16_t ce[COMBO_FIELDS]; /* scratch: one entry */
 static __xdata uint8_t  cb_pos[COMBO_BUF];
 static __xdata uint16_t cb_kc[COMBO_BUF];
@@ -148,18 +148,18 @@ static __xdata uint8_t  ko_prev_role;    /* original slot role before override *
 #endif
 
 #ifdef ACTION_EXTRAS
-#    define ROLE_SC 6u /* Space Cadet key, held: its hold mod is down        */
-#    define MOD_SHIFT 0x22u
+#    define ROLE_SC    6u /* Space Cadet key, held: its hold mod is down        */
+#    define MOD_SHIFT  0x22u
 #    define CW_IDLE_MS 5000u
-static __xdata uint8_t  llock;          /* Layer Lock: locked layers           */
-static __xdata uint8_t  combos_off;     /* CMB_OFF                             */
-static __xdata uint8_t  cw_on;          /* Caps Word active                    */
-static __xdata uint16_t cw_time;        /* ...last key, for its idle timeout   */
-static __xdata uint16_t rep_kc;         /* Repeat: last output keycode          */
-static __xdata uint8_t  rep_mods;       /* ...and the mods held with it         */
-static __xdata uint8_t  rep_busy;       /* a Repeat / Alt Repeat is being sent  */
-static __xdata uint16_t sc_time;        /* Space Cadet: when its key went down */
-static __xdata uint8_t  osm_lock;       /* one-shot mods locked by tap toggle  */
+static __xdata uint8_t  llock;      /* Layer Lock: locked layers           */
+static __xdata uint8_t  combos_off; /* CMB_OFF                             */
+static __xdata uint8_t  cw_on;      /* Caps Word active                    */
+static __xdata uint16_t cw_time;    /* ...last key, for its idle timeout   */
+static __xdata uint16_t rep_kc;     /* Repeat: last output keycode          */
+static __xdata uint8_t  rep_mods;   /* ...and the mods held with it         */
+static __xdata uint8_t  rep_busy;   /* a Repeat / Alt Repeat is being sent  */
+static __xdata uint16_t sc_time;    /* Space Cadet: when its key went down */
+static __xdata uint8_t  osm_lock;   /* one-shot mods locked by tap toggle  */
 static __xdata uint8_t  osm_taps;
 static __xdata uint8_t  osm_tap_m;
 static __xdata uint8_t  tt_pos = POS_NONE; /* TT taps toggling the layer       */
@@ -201,10 +201,10 @@ void action_config_defaults(void)
     action_config.combo_term     = ACTION_COMBO_TERM_DEFAULT;
     action_config.flags          = 0;
 #ifdef ACTION_EXTRAS
-    action_config.magic              = ACTION_MAGIC_DEFAULT;
-    action_config.grave_esc          = 0;
-    action_config.osk_tap_toggle     = 0;
-    action_config.tapping_toggle     = ACTION_TAPPING_TOGGLE_DEF;
+    action_config.magic          = ACTION_MAGIC_DEFAULT;
+    action_config.grave_esc      = 0;
+    action_config.osk_tap_toggle = 0;
+    action_config.tapping_toggle = ACTION_TAPPING_TOGGLE_DEF;
 #endif
 }
 
@@ -229,8 +229,8 @@ void action_init(void)
 #endif
 #ifdef ACTION_EXTRAS
     llock = combos_off = cw_on = rep_busy = osm_lock = osm_taps = 0;
-    rep_kc  = KC_NO;
-    tt_pos  = POS_NONE;
+    rep_kc                                                      = KC_NO;
+    tt_pos                                                      = POS_NONE;
 #endif
 #ifdef ACTION_COMBO
     cb_n       = 0;
@@ -485,8 +485,7 @@ static bool ko_try(uint8_t slot, uint8_t pos, uint16_t kc)
             break;
         }
         const uint8_t opt = (uint8_t)(ko_e[KO_SUPPRESS] >> 8);
-        if ((opt & (KO_OPT_ENABLED | KO_OPT_ACT_TRIGGER_DOWN)) != (KO_OPT_ENABLED | KO_OPT_ACT_TRIGGER_DOWN) ||
-            ko_e[KO_TRIGGER] != kc || !(ko_e[KO_LAYERS] & layer) || !ko_mods_match()) {
+        if ((opt & (KO_OPT_ENABLED | KO_OPT_ACT_TRIGGER_DOWN)) != (KO_OPT_ENABLED | KO_OPT_ACT_TRIGGER_DOWN) || ko_e[KO_TRIGGER] != kc || !(ko_e[KO_LAYERS] & layer) || !ko_mods_match()) {
             continue;
         }
         ko_trigger   = kc;
@@ -540,20 +539,15 @@ static void ko_end(uint8_t pos, bool reregister)
 /* Magic swaps as {from, to, bits}: the first rule whose bit is set applies
  * (QMK keymap_config order); a GUI result is dropped by MAGIC_NO_GUI. */
 static const __code uint8_t magic_rules[][3] = {
-    {KC_CAPS, KC_LCTL, 0x03}, /* SWAP_CAPS_LCTL | CAPS_AS_CTRL  (low byte) */
-    {KC_LCTL, KC_CAPS, 0x01}, /* SWAP_CAPS_LCTL                            */
-    {KC_LALT, KC_LGUI, 0x04}, /* SWAP_LALT_LGUI                            */
-    {KC_RALT, KC_RGUI, 0x08}, /* SWAP_RALT_RGUI                            */
-    {KC_LGUI, KC_LALT, 0x04},
-    {KC_RGUI, KC_RALT, 0x08},
-    {KC_GRV, KC_ESC, 0x20},   /* SWAP_GRV_ESC                              */
-    {KC_ESC, KC_GRV, 0x20},
-    {KC_BSLS, KC_BSPC, 0x40}, /* SWAP_BSLS_BSPC                            */
-    {KC_BSPC, KC_BSLS, 0x40},
-    {KC_LCTL, KC_LGUI, 0x81}, /* bit 7 set: high byte -- SWAP_LCTL_LGUI    */
-    {KC_RCTL, KC_RGUI, 0x82}, /*                         SWAP_RCTL_RGUI    */
-    {KC_LGUI, KC_LCTL, 0x81},
-    {KC_RGUI, KC_RCTL, 0x82},
+    {KC_CAPS, KC_LCTL, 0x03},                                                   /* SWAP_CAPS_LCTL | CAPS_AS_CTRL  (low byte) */
+    {KC_LCTL, KC_CAPS, 0x01},                                                   /* SWAP_CAPS_LCTL                            */
+    {KC_LALT, KC_LGUI, 0x04},                                                   /* SWAP_LALT_LGUI                            */
+    {KC_RALT, KC_RGUI, 0x08},                                                   /* SWAP_RALT_RGUI                            */
+    {KC_LGUI, KC_LALT, 0x04}, {KC_RGUI, KC_RALT, 0x08}, {KC_GRV, KC_ESC, 0x20}, /* SWAP_GRV_ESC                              */
+    {KC_ESC, KC_GRV, 0x20},   {KC_BSLS, KC_BSPC, 0x40},                         /* SWAP_BSLS_BSPC                            */
+    {KC_BSPC, KC_BSLS, 0x40}, {KC_LCTL, KC_LGUI, 0x81},                         /* bit 7 set: high byte -- SWAP_LCTL_LGUI    */
+    {KC_RCTL, KC_RGUI, 0x82},                                                   /*                         SWAP_RCTL_RGUI    */
+    {KC_LGUI, KC_LCTL, 0x81}, {KC_RGUI, KC_RCTL, 0x82},
 };
 
 static uint16_t magic_remap(uint16_t kc)
@@ -581,20 +575,17 @@ static uint16_t magic_remap(uint16_t kc)
 #    define MG_CLR 0x80u
 #    define MG_TOG 0xC0u
 static const __code uint16_t magic_masks[12] = {
-    MAGIC_SWAP_CAPS_LCTL, MAGIC_CAPS_AS_CTRL,   MAGIC_SWAP_LALT_LGUI, MAGIC_SWAP_RALT_RGUI,
-    MAGIC_NO_GUI,         MAGIC_SWAP_GRV_ESC,   MAGIC_SWAP_BSLS_BSPC, MAGIC_NKRO,
-    MAGIC_SWAP_LCTL_LGUI, MAGIC_SWAP_RCTL_RGUI,
-    MAGIC_SWAP_LALT_LGUI | MAGIC_SWAP_RALT_RGUI, MAGIC_SWAP_LCTL_LGUI | MAGIC_SWAP_RCTL_RGUI,
+    MAGIC_SWAP_CAPS_LCTL, MAGIC_CAPS_AS_CTRL, MAGIC_SWAP_LALT_LGUI, MAGIC_SWAP_RALT_RGUI, MAGIC_NO_GUI, MAGIC_SWAP_GRV_ESC, MAGIC_SWAP_BSLS_BSPC, MAGIC_NKRO, MAGIC_SWAP_LCTL_LGUI, MAGIC_SWAP_RCTL_RGUI, MAGIC_SWAP_LALT_LGUI | MAGIC_SWAP_RALT_RGUI, MAGIC_SWAP_LCTL_LGUI | MAGIC_SWAP_RCTL_RGUI,
 };
 static const __code uint8_t magic_ops[30] = {
-    MG_SET | 0, MG_CLR | 0, MG_TOG | 0, MG_CLR | 1,  MG_SET | 1,  /* 00 caps/ctrl  */
-    MG_SET | 2, MG_CLR | 2, MG_SET | 3, MG_CLR | 3,               /* 05 alt/gui    */
-    MG_CLR | 4, MG_SET | 4, MG_TOG | 4,                           /* 09 no gui     */
-    MG_SET | 5, MG_CLR | 5, MG_SET | 6, MG_CLR | 6,  MG_TOG | 6,  /* 0C grv, bsls  */
-    MG_SET | 7, MG_CLR | 7, MG_TOG | 7,                           /* 11 nkro       */
-    MG_SET | 10, MG_CLR | 10, MG_TOG | 10,                        /* 14 alt/gui    */
-    MG_SET | 8, MG_CLR | 8, MG_SET | 9, MG_CLR | 9,               /* 17 ctl/gui    */
-    MG_SET | 11, MG_CLR | 11, MG_TOG | 11,                        /* 1B ctl/gui    */
+    MG_SET | 0,  MG_CLR | 0,  MG_TOG | 0,  MG_CLR | 1, MG_SET | 1, /* 00 caps/ctrl  */
+    MG_SET | 2,  MG_CLR | 2,  MG_SET | 3,  MG_CLR | 3,             /* 05 alt/gui    */
+    MG_CLR | 4,  MG_SET | 4,  MG_TOG | 4,                          /* 09 no gui     */
+    MG_SET | 5,  MG_CLR | 5,  MG_SET | 6,  MG_CLR | 6, MG_TOG | 6, /* 0C grv, bsls  */
+    MG_SET | 7,  MG_CLR | 7,  MG_TOG | 7,                          /* 11 nkro       */
+    MG_SET | 10, MG_CLR | 10, MG_TOG | 10,                         /* 14 alt/gui    */
+    MG_SET | 8,  MG_CLR | 8,  MG_SET | 9,  MG_CLR | 9,             /* 17 ctl/gui    */
+    MG_SET | 11, MG_CLR | 11, MG_TOG | 11,                         /* 1B ctl/gui    */
 };
 
 static void magic_key(uint8_t n)
@@ -620,8 +611,7 @@ static uint8_t cw_class(uint16_t kc)
     if ((kc >= KC_A && kc <= KC_Z) || kc == KC_MINS) {
         return 2;
     }
-    if ((kc >= KC_1 && kc <= KC_0) || kc == KC_BSPC || kc == KC_DEL || kc == LSFT(KC_MINS) ||
-        IS_MODIFIER_KEYCODE(kc)) {
+    if ((kc >= KC_1 && kc <= KC_0) || kc == KC_BSPC || kc == KC_DEL || kc == LSFT(KC_MINS) || IS_MODIFIER_KEYCODE(kc)) {
         return 1;
     }
     return 0;
@@ -684,8 +674,7 @@ static void press_output(uint8_t slot, uint8_t pos, uint16_t kc)
  * last key's mods carry over. (Vial's own Alt Repeat table is not offered:
  * no code space left for it.) Returns KC_NO if there is none. */
 static const __code uint8_t arep_pairs[][2] = {
-    {KC_LEFT, KC_RGHT}, {KC_UP, KC_DOWN},   {KC_HOME, KC_END},  {KC_PGUP, KC_PGDN},
-    {KC_VOLU, KC_VOLD}, {KC_MNXT, KC_MPRV}, {KC_WBAK, KC_WFWD}, {KC_BRIU, KC_BRID},
+    {KC_LEFT, KC_RGHT}, {KC_UP, KC_DOWN}, {KC_HOME, KC_END}, {KC_PGUP, KC_PGDN}, {KC_VOLU, KC_VOLD}, {KC_MNXT, KC_MPRV}, {KC_WBAK, KC_WFWD}, {KC_BRIU, KC_BRID},
 };
 
 static uint16_t arep_lookup(uint8_t *out_mods)
@@ -764,8 +753,7 @@ static bool extra_press(uint8_t slot, uint8_t pos, uint16_t kc)
             /* Escape; ` when Shift or GUI is held, unless a Grave Escape
              * override says Escape for one of the held mods. */
             const uint8_t g  = action_config.grave_esc;
-            const uint8_t om = (uint8_t)(((g & GESC_ALT) ? 0x44u : 0u) | ((g & GESC_CTRL) ? 0x11u : 0u) |
-                                         ((g & GESC_GUI) ? 0x88u : 0u) | ((g & GESC_SHIFT) ? 0x22u : 0u));
+            const uint8_t om = (uint8_t)(((g & GESC_ALT) ? 0x44u : 0u) | ((g & GESC_CTRL) ? 0x11u : 0u) | ((g & GESC_GUI) ? 0x88u : 0u) | ((g & GESC_SHIFT) ? 0x22u : 0u));
             press_output(slot, pos, ((mods & 0xAAu) && !(mods & om)) ? KC_GRV : KC_ESC);
             return true;
         }
@@ -871,8 +859,7 @@ static void release_plain(uint8_t slot, uint8_t pos, uint16_t kc)
         layer_off(kc == QK_TRI_LAYER_LOWER ? 1u : 2u);
         tri_update();
 #endif
-    } else if (IS_QK_TOGGLE_LAYER(kc) || IS_QK_TO(kc) || IS_QK_DEF_LAYER(kc) ||
-               kc == KC_NO || kc == KC_TRANSPARENT) {
+    } else if (IS_QK_TOGGLE_LAYER(kc) || IS_QK_TO(kc) || IS_QK_DEF_LAYER(kc) || kc == KC_NO || kc == KC_TRANSPARENT) {
         /* nothing on release */
     } else {
         send(pos, kc, false);
@@ -906,8 +893,7 @@ static void do_press(uint8_t pos, uint16_t time)
 
     /* One-shot layer: it applied to this key's lookup, now it is spent --
      * unless this key is itself a layer key (stack one-shots / MO). */
-    if (osl_layer != 0xFFu && kc != KC_NO && !IS_QK_ONE_SHOT_LAYER(kc) &&
-        !IS_QK_MOMENTARY(kc) && !IS_QK_ONE_SHOT_MOD(kc)) {
+    if (osl_layer != 0xFFu && kc != KC_NO && !IS_QK_ONE_SHOT_LAYER(kc) && !IS_QK_MOMENTARY(kc) && !IS_QK_ONE_SHOT_MOD(kc)) {
         layer_off(osl_layer);
         osl_layer = 0xFFu;
     }
@@ -952,7 +938,7 @@ static void slot_release(uint8_t slot)
     const uint16_t kc   = s_kc[slot];
     const uint8_t  role = s_role[slot];
     const uint8_t  intr = s_intr[slot];
-    s_pos[slot] = POS_NONE;
+    s_pos[slot]         = POS_NONE;
 
     switch (role) {
         case ROLE_PLAIN:
@@ -1200,7 +1186,7 @@ static void decide_hold(void)
 
 static void decide_tap(void)
 {
-    tapping = 0;
+    tapping         = 0;
     const uint8_t s = slot_add(tk_pos, tk_kc, ROLE_TAP);
     if (s != 0xFFu) {
         tap_press(s, tk_pos, tk_kc);
@@ -1310,7 +1296,7 @@ static void process(void)
         const uint8_t  pos  = q_pos[q_head];
         const uint8_t  down = q_down[q_head];
         const uint16_t time = q_time[q_head];
-        q_head = (uint8_t)((q_head + 1u) % QUEUE_LEN);
+        q_head              = (uint8_t)((q_head + 1u) % QUEUE_LEN);
         q_count--;
         handle(pos, down, time);
     }
@@ -1547,18 +1533,18 @@ void action_task(void)
 bool action_idle(void)
 {
     if (tapping || wb_count || osm_mods || osl_layer != 0xFFu
-#ifdef ACTION_KEY_OVERRIDE
+#    ifdef ACTION_KEY_OVERRIDE
         || ko_slot != 0xFFu
-#endif
+#    endif
     ) {
         return false;
     }
-#ifdef ACTION_TAP_DANCE
+#    ifdef ACTION_TAP_DANCE
     if (td_pos != POS_NONE) {
         return false;
     }
-#endif
-#ifdef ACTION_COMBO
+#    endif
+#    ifdef ACTION_COMBO
     if (cb_n || combo_down) {
         return false;
     }
@@ -1567,7 +1553,7 @@ bool action_idle(void)
             return false;
         }
     }
-#endif
+#    endif
     for (uint8_t i = 0; i < SLOTS; i++) {
         if (s_pos[i] != POS_NONE) {
             return false;

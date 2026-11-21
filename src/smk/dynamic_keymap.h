@@ -7,62 +7,62 @@
 
 #ifdef DYNAMIC_KEYMAP_ENABLE
 
-#ifndef DYNAMIC_KEYMAP_LAYER_COUNT
-#    define DYNAMIC_KEYMAP_LAYER_COUNT 4u
-#endif
+#    ifndef DYNAMIC_KEYMAP_LAYER_COUNT
+#        define DYNAMIC_KEYMAP_LAYER_COUNT 4u
+#    endif
 
-#define DYNAMIC_KEYMAP_BYTES ((uint16_t)DYNAMIC_KEYMAP_LAYER_COUNT * MATRIX_ROWS * MATRIX_COLS * 2u)
+#    define DYNAMIC_KEYMAP_BYTES ((uint16_t)DYNAMIC_KEYMAP_LAYER_COUNT * MATRIX_ROWS * MATRIX_COLS * 2u)
 
 /* VIA macros: DYNAMIC_MACRO_COUNT NUL-terminated strings packed back to back in one buffer that is persisted in the same flash sectors as the keymap, right after it. */
-#ifndef DYNAMIC_MACRO_COUNT
-#    define DYNAMIC_MACRO_COUNT 16u
-#endif
-#ifndef DYNAMIC_MACRO_BYTES
-#    define DYNAMIC_MACRO_BYTES 768u
-#endif
+#    ifndef DYNAMIC_MACRO_COUNT
+#        define DYNAMIC_MACRO_COUNT 16u
+#    endif
+#    ifndef DYNAMIC_MACRO_BYTES
+#        define DYNAMIC_MACRO_BYTES 768u
+#    endif
 
 /* VIA encoder map: per layer, per encoder, two keycodes (counter-clockwise, clockwise). */
-#ifndef DYNAMIC_ENCODER_COUNT
-#    define DYNAMIC_ENCODER_COUNT 1u
-#endif
-#define DYNAMIC_ENCODER_BYTES ((uint16_t)DYNAMIC_KEYMAP_LAYER_COUNT * DYNAMIC_ENCODER_COUNT * 4u)
+#    ifndef DYNAMIC_ENCODER_COUNT
+#        define DYNAMIC_ENCODER_COUNT 1u
+#    endif
+#    define DYNAMIC_ENCODER_BYTES ((uint16_t)DYNAMIC_KEYMAP_LAYER_COUNT * DYNAMIC_ENCODER_COUNT * 4u)
 
 /* Vial-owned bytes at the end of the store: 32 bytes of QMK settings, then
  * the tap dance, combo and key override entries (10 bytes each).
  * Laid out and interpreted by vial.c;
  * this file only keeps them. */
-#ifdef VIAL_ENABLE
-#    ifndef VIAL_TAP_DANCE_ENTRIES
-#        define VIAL_TAP_DANCE_ENTRIES 8u
-#    endif
-#    ifndef VIAL_COMBO_ENTRIES
-#        define VIAL_COMBO_ENTRIES 8u
-#    endif
-#    ifndef VIAL_KEY_OVERRIDE_ENTRIES
-#        define VIAL_KEY_OVERRIDE_ENTRIES 4u
-#    endif
-#    define VIAL_SETTINGS_BYTES 32u
+#    ifdef VIAL_ENABLE
+#        ifndef VIAL_TAP_DANCE_ENTRIES
+#            define VIAL_TAP_DANCE_ENTRIES 8u
+#        endif
+#        ifndef VIAL_COMBO_ENTRIES
+#            define VIAL_COMBO_ENTRIES 8u
+#        endif
+#        ifndef VIAL_KEY_OVERRIDE_ENTRIES
+#            define VIAL_KEY_OVERRIDE_ENTRIES 4u
+#        endif
+#        define VIAL_SETTINGS_BYTES 32u
 /* Inside the settings bytes, after the QMK settings: VialRGB color picker. */
-#    define VIAL_RGB_HUE        10u
-#    define VIAL_RGB_SAT        11u
-#    define VIAL_ENTRY_BYTES    10u
-#    define VIAL_TD_OFFSET      VIAL_SETTINGS_BYTES
-#    define VIAL_COMBO_OFFSET   (VIAL_TD_OFFSET + VIAL_TAP_DANCE_ENTRIES * VIAL_ENTRY_BYTES)
-#    define VIAL_KO_OFFSET      (VIAL_COMBO_OFFSET + VIAL_COMBO_ENTRIES * VIAL_ENTRY_BYTES)
-#    ifndef DYNAMIC_VIAL_BYTES
-#        define DYNAMIC_VIAL_BYTES (VIAL_KO_OFFSET + VIAL_KEY_OVERRIDE_ENTRIES * VIAL_ENTRY_BYTES)
+#        define VIAL_RGB_HUE      10u
+#        define VIAL_RGB_SAT      11u
+#        define VIAL_ENTRY_BYTES  10u
+#        define VIAL_TD_OFFSET    VIAL_SETTINGS_BYTES
+#        define VIAL_COMBO_OFFSET (VIAL_TD_OFFSET + VIAL_TAP_DANCE_ENTRIES * VIAL_ENTRY_BYTES)
+#        define VIAL_KO_OFFSET    (VIAL_COMBO_OFFSET + VIAL_COMBO_ENTRIES * VIAL_ENTRY_BYTES)
+#        ifndef DYNAMIC_VIAL_BYTES
+#            define DYNAMIC_VIAL_BYTES (VIAL_KO_OFFSET + VIAL_KEY_OVERRIDE_ENTRIES * VIAL_ENTRY_BYTES)
+#        endif
+#    else
+#        define DYNAMIC_VIAL_BYTES 0u
 #    endif
-#else
-#    define DYNAMIC_VIAL_BYTES 0u
-#endif
 
-#define DYNAMIC_STORE_BYTES ((uint16_t)(DYNAMIC_KEYMAP_BYTES + DYNAMIC_MACRO_BYTES + DYNAMIC_ENCODER_BYTES + DYNAMIC_VIAL_BYTES))
+#    define DYNAMIC_STORE_BYTES ((uint16_t)(DYNAMIC_KEYMAP_BYTES + DYNAMIC_MACRO_BYTES + DYNAMIC_ENCODER_BYTES + DYNAMIC_VIAL_BYTES))
 
-#if defined(VIAL_ENABLE)
+#    if defined(VIAL_ENABLE)
 /* The Vial area inside the XDATA mirror, and "it changed, save it soon". */
 __xdata uint8_t *dynamic_vial_store(void);
 void             dynamic_vial_mark_dirty(void);
-#endif
+#    endif
 
 void dynamic_keymap_init(void);
 void dynamic_keymap_tick(void);

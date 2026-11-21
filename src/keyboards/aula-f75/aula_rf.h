@@ -75,7 +75,6 @@ bool rf_connected(void);
 uint8_t rf_bt_slot(void);
 void    rf_set_bt_slot(uint8_t slot);
 
-
 /*
  * Reasserts the current link with the "pairing" flag of command 0x01.
  * The factory firmware does the same from its slow tick when the pairing

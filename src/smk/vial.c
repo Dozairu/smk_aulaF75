@@ -27,20 +27,20 @@
  * action engine.
  */
 
-#    define VIAL_GET_KEYBOARD_ID       0x00u
-#    define VIAL_GET_SIZE              0x01u
-#    define VIAL_GET_DEFINITION        0x02u
-#    define VIAL_GET_ENCODER           0x03u
-#    define VIAL_SET_ENCODER           0x04u
-#    define VIAL_GET_UNLOCK_STATUS     0x05u
-#    define VIAL_UNLOCK_START          0x06u
-#    define VIAL_UNLOCK_POLL           0x07u
-#    define VIAL_LOCK                  0x08u
-#    define VIAL_QMK_SETTINGS_QUERY    0x09u
-#    define VIAL_QMK_SETTINGS_GET      0x0Au
-#    define VIAL_QMK_SETTINGS_SET      0x0Bu
-#    define VIAL_QMK_SETTINGS_RESET    0x0Cu
-#    define VIAL_DYNAMIC_ENTRY_OP      0x0Du
+#    define VIAL_GET_KEYBOARD_ID    0x00u
+#    define VIAL_GET_SIZE           0x01u
+#    define VIAL_GET_DEFINITION     0x02u
+#    define VIAL_GET_ENCODER        0x03u
+#    define VIAL_SET_ENCODER        0x04u
+#    define VIAL_GET_UNLOCK_STATUS  0x05u
+#    define VIAL_UNLOCK_START       0x06u
+#    define VIAL_UNLOCK_POLL        0x07u
+#    define VIAL_LOCK               0x08u
+#    define VIAL_QMK_SETTINGS_QUERY 0x09u
+#    define VIAL_QMK_SETTINGS_GET   0x0Au
+#    define VIAL_QMK_SETTINGS_SET   0x0Bu
+#    define VIAL_QMK_SETTINGS_RESET 0x0Cu
+#    define VIAL_DYNAMIC_ENTRY_OP   0x0Du
 
 #    define DYNAMIC_VIAL_GET_NUMBER_OF_ENTRIES 0x00u
 #    define DYNAMIC_VIAL_TAP_DANCE_GET         0x01u
@@ -196,11 +196,7 @@ _Static_assert(QS_TAPPING_TOGGLE < VIAL_SETTINGS_BYTES && VIAL_RGB_SAT < QS_MAGI
 
 /* {QSID, offset, bytes}, ascending by QSID: the query pages through it. */
 static const __code uint8_t qs_map[][3] = {
-    {1, QS_GRAVE_ESC, 1},       {2, QS_COMBO_TERM, 2},
-    {5, QS_OSK_TAP_TOGGLE, 1}, {6, QS_OSK_TIMEOUT, 2},
-    {7, QS_TAPPING_TERM, 2},    {20, QS_TAPPING_TOGGLE, 1}, {21, QS_MAGIC, 2},
-    {22, 0xFF, ACTION_PERMISSIVE_HOLD}, {23, 0xFF, ACTION_HOLD_ON_OTHER_KEY_PRESS},
-    {24, 0xFF, ACTION_RETRO_TAPPING},   {25, QS_QUICK_TAP_TERM, 2},
+    {1, QS_GRAVE_ESC, 1}, {2, QS_COMBO_TERM, 2}, {5, QS_OSK_TAP_TOGGLE, 1}, {6, QS_OSK_TIMEOUT, 2}, {7, QS_TAPPING_TERM, 2}, {20, QS_TAPPING_TOGGLE, 1}, {21, QS_MAGIC, 2}, {22, 0xFF, ACTION_PERMISSIVE_HOLD}, {23, 0xFF, ACTION_HOLD_ON_OTHER_KEY_PRESS}, {24, 0xFF, ACTION_RETRO_TAPPING}, {25, QS_QUICK_TAP_TERM, 2},
 };
 #    define QS_COUNT ((uint8_t)(sizeof(qs_map) / sizeof(qs_map[0])))
 
@@ -213,8 +209,8 @@ static uint16_t qs_rd16(uint8_t off)
 static void qs_wr16(uint8_t off, uint16_t v)
 {
     __xdata uint8_t *s = dynamic_vial_store();
-    s[off]      = (uint8_t)v;
-    s[off + 1u] = (uint8_t)(v >> 8);
+    s[off]             = (uint8_t)v;
+    s[off + 1u]        = (uint8_t)(v >> 8);
 }
 
 /* ---------------------------------- tap dances, combos, key overrides
@@ -268,8 +264,7 @@ bool action_hal_key_override(uint8_t index, __xdata uint16_t *entry)
     return true;
 }
 
-_Static_assert(TD_FIELDS * 2u == VIAL_ENTRY_BYTES && COMBO_FIELDS * 2u == VIAL_ENTRY_BYTES,
-               "Vial entries are five u16");
+_Static_assert(TD_FIELDS * 2u == VIAL_ENTRY_BYTES && COMBO_FIELDS * 2u == VIAL_ENTRY_BYTES, "Vial entries are five u16");
 _Static_assert(VIAL_COMBO_ENTRIES <= COMBO_MAX, "the engine addresses at most COMBO_MAX combos");
 _Static_assert(VIAL_KEY_OVERRIDE_ENTRIES <= KO_MAX, "the engine addresses at most KO_MAX key overrides");
 
@@ -301,8 +296,8 @@ static void entries_defaults(void)
     memset(entry_ptr(VIAL_TD_OFFSET, 0), 0, DYNAMIC_VIAL_BYTES - VIAL_TD_OFFSET);
     for (uint8_t i = 0; i < VIAL_TAP_DANCE_ENTRIES; i++) {
         __xdata uint8_t *p = entry_ptr(VIAL_TD_OFFSET, i);
-        p[8] = (uint8_t)ACTION_TAPPING_TERM_DEFAULT;
-        p[9] = (uint8_t)(ACTION_TAPPING_TERM_DEFAULT >> 8);
+        p[8]               = (uint8_t)ACTION_TAPPING_TERM_DEFAULT;
+        p[9]               = (uint8_t)(ACTION_TAPPING_TERM_DEFAULT >> 8);
     }
     ko_fill_defaults();
 }
@@ -342,16 +337,16 @@ void vial_store_apply(void)
     if (ko_fill_defaults()) {
         dynamic_vial_mark_dirty();
     }
-    action_config.tapping_term       = qs_rd16(QS_TAPPING_TERM);
-    action_config.quick_tap_term     = qs_rd16(QS_QUICK_TAP_TERM);
-    action_config.osk_timeout        = qs_rd16(QS_OSK_TIMEOUT);
-    action_config.combo_term         = qs_rd16(QS_COMBO_TERM);
-    action_config.flags              = s[QS_FLAGS];
-    action_config.magic              = qs_rd16(QS_MAGIC);
-    action_config.grave_esc          = s[QS_GRAVE_ESC];
-    action_config.osk_tap_toggle     = s[QS_OSK_TAP_TOGGLE];
-    action_config.tapping_toggle     = s[QS_TAPPING_TOGGLE];
-    keymap_config.nkro               = (action_config.magic & MAGIC_NKRO) ? 1u : 0u;
+    action_config.tapping_term   = qs_rd16(QS_TAPPING_TERM);
+    action_config.quick_tap_term = qs_rd16(QS_QUICK_TAP_TERM);
+    action_config.osk_timeout    = qs_rd16(QS_OSK_TIMEOUT);
+    action_config.combo_term     = qs_rd16(QS_COMBO_TERM);
+    action_config.flags          = s[QS_FLAGS];
+    action_config.magic          = qs_rd16(QS_MAGIC);
+    action_config.grave_esc      = s[QS_GRAVE_ESC];
+    action_config.osk_tap_toggle = s[QS_OSK_TAP_TOGGLE];
+    action_config.tapping_toggle = s[QS_TAPPING_TOGGLE];
+    keymap_config.nkro           = (action_config.magic & MAGIC_NKRO) ? 1u : 0u;
 #    ifdef VIALRGB_ENABLE
     vialrgb_apply(); /* stored picker color -> lighting engine */
 #    endif
@@ -445,9 +440,9 @@ static void dynamic_entry_op(__xdata uint8_t *data)
             /* [0] tap dance, [1] combo, [2] key override, [3] alt repeat,
              * [31] feature bits (Caps Word, Layer Lock). */
             memset(data, 0, RAW_HID_REPORT_SIZE);
-            data[0] = VIAL_TAP_DANCE_ENTRIES;
-            data[1] = VIAL_COMBO_ENTRIES;
-            data[2] = VIAL_KEY_OVERRIDE_ENTRIES;
+            data[0]  = VIAL_TAP_DANCE_ENTRIES;
+            data[1]  = VIAL_COMBO_ENTRIES;
+            data[2]  = VIAL_KEY_OVERRIDE_ENTRIES;
             data[31] = 0x03u; /* Caps Word, Layer Lock (keycodes in the engine) */
             return;
         case DYNAMIC_VIAL_TAP_DANCE_GET:
@@ -529,16 +524,15 @@ void vial_process(__xdata uint8_t *data)
             /* Direction 0 = counter-clockwise, 1 = clockwise, like QMK's encoder map. */
             const uint16_t ccw = dynamic_encoder_get_keycode(data[2], data[3], false);
             const uint16_t cw  = dynamic_encoder_get_keycode(data[2], data[3], true);
-            data[0] = (uint8_t)(ccw >> 8);
-            data[1] = (uint8_t)ccw;
-            data[2] = (uint8_t)(cw >> 8);
-            data[3] = (uint8_t)cw;
+            data[0]            = (uint8_t)(ccw >> 8);
+            data[1]            = (uint8_t)ccw;
+            data[2]            = (uint8_t)(cw >> 8);
+            data[3]            = (uint8_t)cw;
             break;
         }
 
         case VIAL_SET_ENCODER:
-            dynamic_encoder_set_keycode(data[2], data[3], data[4] != 0,
-                                        vial_firewall((uint16_t)((uint16_t)data[5] << 8) | data[6]));
+            dynamic_encoder_set_keycode(data[2], data[3], data[4] != 0, vial_firewall((uint16_t)((uint16_t)data[5] << 8) | data[6]));
             break;
 
         case VIAL_GET_UNLOCK_STATUS:

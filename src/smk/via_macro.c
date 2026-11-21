@@ -27,11 +27,11 @@
  * down by `via_macro_tick()` from the tick ISR) before the next one.
  */
 
-#    define SS_QMK_PREFIX 0x01u
-#    define SS_TAP_CODE   0x01u
-#    define SS_DOWN_CODE  0x02u
-#    define SS_UP_CODE    0x03u
-#    define SS_DELAY_CODE 0x04u
+#    define SS_QMK_PREFIX  0x01u
+#    define SS_TAP_CODE    0x01u
+#    define SS_DOWN_CODE   0x02u
+#    define SS_UP_CODE     0x03u
+#    define SS_DELAY_CODE  0x04u
 #    define SS_TAP_CODE16  0x05u
 #    define SS_DOWN_CODE16 0x06u
 #    define SS_UP_CODE16   0x07u
@@ -47,7 +47,7 @@
 static volatile __xdata uint16_t macro_wait;
 static volatile bool             macro_due;
 static __xdata uint16_t          macro_pos;
-static __xdata uint16_t          macro_pending;     /* 16-bit keycode to release after a tap */
+static __xdata uint16_t          macro_pending; /* 16-bit keycode to release after a tap */
 static bool                      macro_running;
 static bool                      macro_release_due; /* a tap is in flight, release comes next */
 
@@ -145,7 +145,7 @@ static void macro_finish(void)
 
 void via_macro_play(uint8_t index)
 {
-    uint16_t pos = 0;
+    uint16_t pos  = 0;
     uint8_t  skip = index;
 
     if (macro_running || index >= DYNAMIC_MACRO_COUNT) {
@@ -229,9 +229,9 @@ void via_macro_task(void)
         case SS_TAP_CODE16:
         case SS_DOWN_CODE16:
         case SS_UP_CODE16: {
-            const uint8_t  lo = dynamic_macro_byte(macro_pos++);
-            const uint8_t  hi = dynamic_macro_byte(macro_pos++);
-            uint16_t       kc = (uint16_t)(((uint16_t)hi << 8) | lo);
+            const uint8_t lo = dynamic_macro_byte(macro_pos++);
+            const uint8_t hi = dynamic_macro_byte(macro_pos++);
+            uint16_t      kc = (uint16_t)(((uint16_t)hi << 8) | lo);
 #    ifdef VIAL_ENABLE
             /* Vial cannot store a 0 byte inside a NUL-terminated macro, so a
              * keycode with a zero low byte travels as 0xFF00 | high byte. */

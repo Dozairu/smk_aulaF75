@@ -20,16 +20,16 @@
  * engine steps in the ISR, events are posted by the main loop.
  */
 
-#define AULA_STATUS_WIRED     0 /* switch to wired           : 1 long flash    */
-#define AULA_STATUS_24G       1 /* switch to 2.4 GHz         : 2 flashes       */
-#define AULA_STATUS_BT        2 /* switch to Bluetooth       : 3 flashes       */
-#define AULA_STATUS_PAIRING   3 /* pairing in progress       : fast blink      */
-#define AULA_STATUS_LINKED    4 /* link established          : single breath   */
-#define AULA_STATUS_LOST      5 /* link lost                 : 2 long flashes  */
-#define AULA_STATUS_SLEEP_IN  6 /* entering sleep            : fade out        */
-#define AULA_STATUS_SLEEP_OUT 7 /* waking from sleep         : fade in         */
-#define AULA_STATUS_LOW_BATT  8 /* low battery (on battery)  : bright pulse    */
-#define AULA_STATUS_CHARGING  9 /* charging                  : looping breath  */
+#define AULA_STATUS_WIRED     0  /* switch to wired           : 1 long flash    */
+#define AULA_STATUS_24G       1  /* switch to 2.4 GHz         : 2 flashes       */
+#define AULA_STATUS_BT        2  /* switch to Bluetooth       : 3 flashes       */
+#define AULA_STATUS_PAIRING   3  /* pairing in progress       : fast blink      */
+#define AULA_STATUS_LINKED    4  /* link established          : single breath   */
+#define AULA_STATUS_LOST      5  /* link lost                 : 2 long flashes  */
+#define AULA_STATUS_SLEEP_IN  6  /* entering sleep            : fade out        */
+#define AULA_STATUS_SLEEP_OUT 7  /* waking from sleep         : fade in         */
+#define AULA_STATUS_LOW_BATT  8  /* low battery (on battery)  : bright pulse    */
+#define AULA_STATUS_CHARGING  9  /* charging                  : looping breath  */
 #define AULA_STATUS_FULL      10 /* USB in, charge complete  : steady glow     */
 #define AULA_STATUS_NONE      0xFF
 

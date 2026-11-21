@@ -67,7 +67,6 @@
 #define GESC_GUI   0x04u
 #define GESC_SHIFT 0x08u
 
-
 typedef struct {
     uint16_t tapping_term;   /* ms: hold decision for tap-hold keys        */
     uint16_t quick_tap_term; /* ms: re-press after a tap repeats the tap   */
@@ -75,10 +74,10 @@ typedef struct {
     uint16_t combo_term;     /* ms: all keys of a combo pressed within it  */
     uint8_t  flags;          /* ACTION_PERMISSIVE_HOLD | ...               */
 #ifdef ACTION_EXTRAS
-    uint16_t magic;              /* MAGIC_*                                 */
-    uint8_t  grave_esc;          /* GESC_*                                  */
-    uint8_t  osk_tap_toggle;     /* taps that lock a one-shot mod, 0 = off  */
-    uint8_t  tapping_toggle;     /* TT taps that toggle the layer           */
+    uint16_t magic;          /* MAGIC_*                                 */
+    uint8_t  grave_esc;      /* GESC_*                                  */
+    uint8_t  osk_tap_toggle; /* taps that lock a one-shot mod, 0 = off  */
+    uint8_t  tapping_toggle; /* TT taps that toggle the layer           */
 #endif
 } action_config_t;
 
@@ -106,7 +105,7 @@ void action_event(uint8_t row, uint8_t col, bool pressed);
 void action_task(void);
 
 /* Layer state, for indicators and the encoder. */
-uint8_t action_layer_state(void);         /* bit n = layer n on (default layer included) */
+uint8_t action_layer_state(void); /* bit n = layer n on (default layer included) */
 uint8_t action_highest_layer(void);
 void    action_set_default_layer(uint8_t layer);
 
@@ -117,9 +116,9 @@ bool action_idle(void);
 
 uint16_t action_hal_keymap(uint8_t layer, uint8_t row, uint8_t col);
 uint8_t  action_hal_layer_count(void);
-uint16_t action_hal_timer(void);                    /* free-running ms */
+uint16_t action_hal_timer(void);                          /* free-running ms */
 void     action_hal_send(uint16_t keycode, bool pressed); /* a plain, resolved keycode */
-void     action_hal_mods(uint8_t mods, bool on);     /* 8-bit HID modifier mask */
+void     action_hal_mods(uint8_t mods, bool on);          /* 8-bit HID modifier mask */
 void     action_hal_event_pos(uint8_t row, uint8_t col);
 
 #ifdef ACTION_TAP_DANCE

@@ -51,9 +51,9 @@
 /* VialRGB id (vial-qmk vialrgb_effects.inc) -> Aula effect [| RAINBOW].
  * Ascending by id: "supported" pages through it in order. */
 static const __code uint8_t effects[][2] = {
-    {0, FX_OFF_},                /* OFF                                   */
+    {0, FX_OFF_}, /* OFF                                   */
 #    ifdef SIGNALRGB_ENABLE
-    {1, FX_DIRECT},              /* DIRECT (OpenRGB / VialRGB)            */
+    {1, FX_DIRECT}, /* DIRECT (OpenRGB / VialRGB)            */
 #    endif
     {2, FX_SOLID_},              /* SOLID_COLOR                           */
     {3, FX_GAMING},              /* ALPHAS_MODS          Gaming (WASD)    */
@@ -92,22 +92,91 @@ static const __code uint8_t effects[][2] = {
 #        define LED_RC(row, col) ((uint8_t)(((col) << 3) | (row)))
 static const __code uint8_t vialrgb_leds[] = {
     /* Row 0 (13 keys) */
-    LED_RC(0, 0),  LED_RC(0, 2),  LED_RC(0, 3),  LED_RC(0, 4),  LED_RC(0, 5),  LED_RC(0, 6),  LED_RC(0, 7),
-    LED_RC(0, 8),  LED_RC(0, 9),  LED_RC(0, 10), LED_RC(0, 11), LED_RC(0, 12), LED_RC(0, 13),
+    LED_RC(0, 0),
+    LED_RC(0, 2),
+    LED_RC(0, 3),
+    LED_RC(0, 4),
+    LED_RC(0, 5),
+    LED_RC(0, 6),
+    LED_RC(0, 7),
+    LED_RC(0, 8),
+    LED_RC(0, 9),
+    LED_RC(0, 10),
+    LED_RC(0, 11),
+    LED_RC(0, 12),
+    LED_RC(0, 13),
     /* Row 1 (15 keys) */
-    LED_RC(1, 0),  LED_RC(1, 1),  LED_RC(1, 2),  LED_RC(1, 3),  LED_RC(1, 4),  LED_RC(1, 5),  LED_RC(1, 6),
-    LED_RC(1, 7),  LED_RC(1, 8),  LED_RC(1, 9),  LED_RC(1, 10), LED_RC(1, 11), LED_RC(1, 12), LED_RC(1, 13), LED_RC(1, 14),
+    LED_RC(1, 0),
+    LED_RC(1, 1),
+    LED_RC(1, 2),
+    LED_RC(1, 3),
+    LED_RC(1, 4),
+    LED_RC(1, 5),
+    LED_RC(1, 6),
+    LED_RC(1, 7),
+    LED_RC(1, 8),
+    LED_RC(1, 9),
+    LED_RC(1, 10),
+    LED_RC(1, 11),
+    LED_RC(1, 12),
+    LED_RC(1, 13),
+    LED_RC(1, 14),
     /* Row 2 (15 keys) */
-    LED_RC(2, 0),  LED_RC(2, 1),  LED_RC(2, 2),  LED_RC(2, 3),  LED_RC(2, 4),  LED_RC(2, 5),  LED_RC(2, 6),
-    LED_RC(2, 7),  LED_RC(2, 8),  LED_RC(2, 9),  LED_RC(2, 10), LED_RC(2, 11), LED_RC(2, 12), LED_RC(2, 13), LED_RC(2, 14),
+    LED_RC(2, 0),
+    LED_RC(2, 1),
+    LED_RC(2, 2),
+    LED_RC(2, 3),
+    LED_RC(2, 4),
+    LED_RC(2, 5),
+    LED_RC(2, 6),
+    LED_RC(2, 7),
+    LED_RC(2, 8),
+    LED_RC(2, 9),
+    LED_RC(2, 10),
+    LED_RC(2, 11),
+    LED_RC(2, 12),
+    LED_RC(2, 13),
+    LED_RC(2, 14),
     /* Row 3 (14 keys) */
-    LED_RC(3, 0),  LED_RC(3, 1),  LED_RC(3, 2),  LED_RC(3, 3),  LED_RC(3, 4),  LED_RC(3, 5),  LED_RC(3, 6),
-    LED_RC(3, 7),  LED_RC(3, 8),  LED_RC(3, 9),  LED_RC(3, 10), LED_RC(3, 11), LED_RC(3, 13), LED_RC(3, 14),
+    LED_RC(3, 0),
+    LED_RC(3, 1),
+    LED_RC(3, 2),
+    LED_RC(3, 3),
+    LED_RC(3, 4),
+    LED_RC(3, 5),
+    LED_RC(3, 6),
+    LED_RC(3, 7),
+    LED_RC(3, 8),
+    LED_RC(3, 9),
+    LED_RC(3, 10),
+    LED_RC(3, 11),
+    LED_RC(3, 13),
+    LED_RC(3, 14),
     /* Row 4 (14 keys) */
-    LED_RC(4, 0),  LED_RC(4, 1),  LED_RC(4, 2),  LED_RC(4, 3),  LED_RC(4, 4),  LED_RC(4, 5),  LED_RC(4, 6),
-    LED_RC(4, 7),  LED_RC(4, 8),  LED_RC(4, 9),  LED_RC(4, 10), LED_RC(4, 11), LED_RC(4, 13), LED_RC(4, 14),
+    LED_RC(4, 0),
+    LED_RC(4, 1),
+    LED_RC(4, 2),
+    LED_RC(4, 3),
+    LED_RC(4, 4),
+    LED_RC(4, 5),
+    LED_RC(4, 6),
+    LED_RC(4, 7),
+    LED_RC(4, 8),
+    LED_RC(4, 9),
+    LED_RC(4, 10),
+    LED_RC(4, 11),
+    LED_RC(4, 13),
+    LED_RC(4, 14),
     /* Row 5 (9 keys) */
-    LED_RC(5, 0),  LED_RC(5, 1),  LED_RC(5, 2),  LED_RC(5, 5),  LED_RC(5, 8),  LED_RC(5, 9),  LED_RC(5, 12), LED_RC(5, 13), LED_RC(5, 14),
+    LED_RC(5, 0),
+    LED_RC(5, 1),
+    LED_RC(5, 2),
+    LED_RC(5, 5),
+    LED_RC(5, 8),
+    LED_RC(5, 9),
+    LED_RC(5, 12),
+    LED_RC(5, 13),
+    LED_RC(5, 14),
 };
 #        define VIALRGB_NUM_LEDS ((uint8_t)(sizeof(vialrgb_leds) / sizeof(vialrgb_leds[0])))
 _Static_assert(VIALRGB_NUM_LEDS == 80u, "AULA F75 has 80 backlit keys");
@@ -242,11 +311,11 @@ void vialrgb_get_value(__xdata uint8_t *data)
                 const uint8_t rc  = vialrgb_leds[(uint8_t)idx];
                 const uint8_t row = (uint8_t)(rc & 7u);
                 const uint8_t col = (uint8_t)(rc >> 3);
-                args[0] = (uint8_t)(col * 16u); /* spatial X in 0..224 */
-                args[1] = (uint8_t)(row * 12u); /* spatial Y in 0..60  */
-                args[2] = 0x04u;                /* LED_FLAG_KEYLIGHT   */
-                args[3] = row;
-                args[4] = col;
+                args[0]           = (uint8_t)(col * 16u); /* spatial X in 0..224 */
+                args[1]           = (uint8_t)(row * 12u); /* spatial Y in 0..60  */
+                args[2]           = 0x04u;                /* LED_FLAG_KEYLIGHT   */
+                args[3]           = row;
+                args[4]           = col;
             }
             break;
         }
@@ -287,10 +356,7 @@ void vialrgb_set_value(__xdata uint8_t *data)
                 indicators_direct_vialrgb_set(row, col, rgb[0], rgb[1], rgb[2]);
             } else {
                 const uint16_t v1 = (uint16_t)v + 1u;
-                indicators_direct_vialrgb_set(row, col,
-                                              (uint8_t)(((uint16_t)rgb[0] * v1) >> 8),
-                                              (uint8_t)(((uint16_t)rgb[1] * v1) >> 8),
-                                              (uint8_t)(((uint16_t)rgb[2] * v1) >> 8));
+                indicators_direct_vialrgb_set(row, col, (uint8_t)(((uint16_t)rgb[0] * v1) >> 8), (uint8_t)(((uint16_t)rgb[1] * v1) >> 8), (uint8_t)(((uint16_t)rgb[2] * v1) >> 8));
             }
         }
         return;
