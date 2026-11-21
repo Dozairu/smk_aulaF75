@@ -31,7 +31,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-REPO = 'mathaimp/aula-f75-vial'
+REPO = 'Dozairu/smk_aulaF75'
 DEVICE = 'aula-f75'
 
 # The flasher version this script was written and tested against.

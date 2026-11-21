@@ -9,8 +9,11 @@ definition.
 ![The AULA F75 in Vial (vial.rocks)](docs/images/vial-keymap.png)
 
 This is a downstream of **[SMK](https://github.com/karstx/smk)** (Small Mechanical Keyboard firmware,
-for SinoWealth 8051 keyboards) and its AULA F75 port ([Thaolia](https://github.com/Thaolia/smk_aulaF75), continued in [Dozairu's fork](https://github.com/Dozairu/smk_aulaF75)): it adds
-a Vial layer and a QMK-style key engine on top. All the groundwork is theirs — see [Credits](#credits).
+for SinoWealth 8051 keyboards) and its AULA F75 port (started by
+[Thaolia](https://github.com/Thaolia/smk_aulaF75) and continued here in
+[Dozairu/smk_aulaF75](https://github.com/Dozairu/smk_aulaF75)), with a Vial layer and a QMK-style
+key engine ported back from **[mathaimp](https://github.com/mathaimp)**'s fork
+([aula-f75-vial](https://github.com/mathaimp/aula-f75-vial)) — see [Credits](#credits).
 
 ## What it adds
 
@@ -64,11 +67,11 @@ install) downloads the latest release and the flasher, checks the image against 
 before it writes anything, and flashes. Download that one file:
 
 ```sh
-curl -LO https://raw.githubusercontent.com/mathaimp/aula-f75-vial/main/tools/flash.py
-# or: wget https://raw.githubusercontent.com/mathaimp/aula-f75-vial/main/tools/flash.py
+curl -LO https://raw.githubusercontent.com/Dozairu/smk_aulaF75/aulaF75/tools/flash.py
+# or: wget https://raw.githubusercontent.com/Dozairu/smk_aulaF75/aulaF75/tools/flash.py
 ```
 
-(Windows PowerShell: `curl.exe -LO https://raw.githubusercontent.com/mathaimp/aula-f75-vial/main/tools/flash.py`.)
+(Windows PowerShell: `curl.exe -LO https://raw.githubusercontent.com/Dozairu/smk_aulaF75/aulaF75/tools/flash.py`.)
 Read it, then run it with the cable in and the mode switch on wired:
 
 ```sh
@@ -132,7 +135,7 @@ that bootloader can be reached, the keyboard can always be flashed again, includ
 
 1. **Back up the stock firmware** (above). Do this first; it is your way back.
 
-2. **Download the firmware** from the [latest release](https://github.com/mathaimp/aula-f75-vial/releases/latest):
+2. **Download the firmware** from the [latest release](https://github.com/Dozairu/smk_aulaF75/releases/latest):
    `aula-f75-vial-<version>.hex` (recommended) and `SHA256SUMS`. The `-full.hex` image also has the
    Fn+Space auto-type mode and Fn+R radio diagnostics, with much less code space to spare. Check the
    download against `SHA256SUMS` (`sha256sum`, `shasum -a 256` or `certutil -hashfile <file> SHA256`).
@@ -163,8 +166,8 @@ that bootloader can be reached, the keyboard can always be flashed again, includ
    flakes enabled): `nix develop` gives SDCC, meson, `sinowisp` and the rest.
 
    ```sh
-   git clone -b main https://github.com/mathaimp/aula-f75-vial.git
-   cd aula-f75-vial
+   git clone -b aulaF75 https://github.com/Dozairu/smk_aulaF75.git
+   cd smk_aulaF75
    nix develop
    ```
 
@@ -262,10 +265,15 @@ for the [SH68F90 / SH68F90A](docs/platforms/sh68f90.md), [SH68F881](docs/platfor
   [sinowisp](https://github.com/karstx/sinowisp) and [sinodude](https://github.com/karstx/sinodude)
   flashing tools. VIA / dynamic keymap support was started by aierm.
   [SMK on Discord](https://discord.gg/SZFBDBuxrK).
-- **[smk_aulaF75](https://github.com/Thaolia/smk_aulaF75)** by **[Thaolia](https://github.com/Thaolia)**,
-  continued in **[Dozairu](https://github.com/Dozairu)**'s
-  [fork](https://github.com/Dozairu/smk_aulaF75) (with commits from james and others) — the AULA F75
-  port, reverse-engineered from a stock firmware dump: wireless (2.4 GHz / Bluetooth), the RGB engine
-  and effects, encoder, battery, indicators, VIA menus. This repository is forked from Dozairu's.
+- **[aula-f75-vial](https://github.com/mathaimp/aula-f75-vial)** by **Mathai Mathew ([mathaimp](https://github.com/mathaimp))** —
+  forked from this repository and ported back here: the Vial protocol 6 implementation and VialRGB,
+  the QMK-style key action engine (layers, tap-hold, tap dance, combos, key overrides, QMK settings,
+  quantum keycodes) and its host test suite, wireless ACK pacing and frame healing, `flash_keep` and
+  [`tools/flash.py`](tools/flash.py), the hold-to-view Fn+B battery bar, and transport-coloured
+  mode-switch feedback.
+- **[smk_aulaF75](https://github.com/Thaolia/smk_aulaF75)** by **[Thaolia](https://github.com/Thaolia)**
+  (with commits from james and others) — the initial AULA F75 port that this repository is forked from,
+  reverse-engineered from a stock firmware dump: wireless (2.4 GHz / Bluetooth), the RGB engine and
+  effects, encoder, battery, indicators.
 - **[Vial](https://get.vial.today/)** and **[QMK](https://qmk.fm/)** — the protocol, GUI and the key
   behaviours this firmware follows, so layouts stay portable.

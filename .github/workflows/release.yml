@@ -73,7 +73,7 @@ jobs:
         cat > notes.md <<'EOF'
         Firmware for the **Epomaker x AULA F75** (SH68F90A) with Vial support.
 
-        **Read the [README](https://github.com/mathaimp/aula-f75-vial#readme) before flashing.**
+        **Read the [README](https://github.com/Dozairu/smk_aulaF75#readme) before flashing.**
         Flashing replaces the keyboard's firmware: back up the stock firmware first, and keep
         the backup. Tested only on the author's own board.
 

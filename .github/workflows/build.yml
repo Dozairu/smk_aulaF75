@@ -2,9 +2,9 @@ name: Build
 
 on:
   push:
-    branches: [master]
+    branches: [aulaF75]
   pull_request:
-    branches: [master]
+    branches: [aulaF75]
 
 jobs:
   build:
