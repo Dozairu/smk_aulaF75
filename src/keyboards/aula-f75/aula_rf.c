@@ -506,6 +506,19 @@ static void rf_frame_begin(uint8_t cmd)
 
 static bool rf_send_short(uint8_t cmd, uint8_t p0, uint8_t p1, uint8_t gate)
 {
+    /*
+     * `tx_buf` is the buffer the ISR is still clocking out while a burst is in
+     * flight, so it must not be rebuilt before `tx_busy` is checked.
+     * `rf_task()` runs `rf_probe_task()` right after `rf_queue_flush()` and the
+     * heal resend: whenever the 100 ms status probe fell due in the same pass
+     * as a report, `rf_frame_begin()` zeroed the tail of the frame being sent.
+     * The module discarded the corrupted frame and the queue slot was already
+     * consumed -- a lost press or release over 2.4 GHz and Bluetooth, never
+     * over USB.
+     */
+    if (tx_busy) {
+        return false;
+    }
     rf_frame_begin(cmd);
     tx_buf[2] = p0;
     tx_buf[3] = p1;
@@ -563,6 +576,9 @@ static const __code char rf_name_bt5[RF_NAME_LEN] = {
 
 static bool rf_send_name(uint8_t profile, const __code char *name)
 {
+    if (tx_busy) {
+        return false; /* same reason as rf_send_short(): never rebuild a frame in flight */
+    }
     rf_frame_begin(RF_CMD_NAME);
     tx_buf[2] = profile;
     tx_buf[3] = RF_NAME_LEN;
